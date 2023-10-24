@@ -1,0 +1,13 @@
+[package]
+name = "evenio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ahash = "0.8.3"
+bumpalo = "3.14.0"
+evenio_macros = { path = "evenio_macros" }
+slab = "0.4.9"
+
+[workspace]
+members = ["evenio_macros"]
