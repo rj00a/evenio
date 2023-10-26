@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::mem;
 use std::ptr::NonNull;
 
@@ -6,8 +7,9 @@ use bumpalo::Bump;
 use crate::archetype::Archetypes;
 use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 use crate::{
-    Component, ComponentId, Components, Event, EventId, EventInfo, EventQueueItem, Events, System,
-    SystemId, SystemListEntry, Systems,
+    Component, ComponentId, Components, Event, EventId, EventInfo, EventQueueItem, Events,
+    InitSystem, InvalidEventId, MissingEvent, System, SystemId, SystemInfo, SystemInitArgs,
+    SystemListEntry, SystemRunArgs, Systems,
 };
 
 #[derive(Debug)]
@@ -46,21 +48,39 @@ impl World {
         self.eval_event_queue()
     }
 
-    // TODO: add_system.
+    pub fn add_system<S, M>(&mut self, mut system: S) -> Result<SystemId, Box<dyn Error>>
+    where
+        S: InitSystem<M>,
+    {
+        let mut args = SystemInitArgs::new(self);
 
-    // pub fn add_system<S: InitSystem>(&mut self, system: S) -> Result<SystemId,
-    // S::Error> {     let info = system.init_system(self)?;
+        let system = system.init_system(&mut args)?;
 
-    //     todo!()
-    // }
+        let event_id = args.event_id.ok_or_else(|| Box::new(MissingEvent))?;
+
+        if args.world.events.event(event_id).is_none() {
+            return Err(Box::new(InvalidEventId(event_id)));
+        }
+
+        let info = SystemInfo {
+            priority: args.priority,
+            event_id,
+            event_access: args.event_access,
+            system_id: SystemId::NULL, // Filled in later.
+        };
+
+        Ok(self.systems.add_system(Box::new(system), info))
+    }
 
     fn eval_event_queue(&mut self) {
-        handle_events(0, self);
+        unsafe {
+            handle_events(0, self);
+        }
 
         debug_assert!(self.event_queue.is_empty());
         self.event_bump.reset();
 
-        fn handle_events(event_start_idx: usize, world: &mut World) {
+        unsafe fn handle_events(event_start_idx: usize, world: &mut World) {
             debug_assert!(event_start_idx < world.event_queue.len());
 
             'next_event: for event_idx in event_start_idx..world.event_queue.len() {
@@ -89,11 +109,14 @@ impl World {
                     {
                         let entry = unsafe { (*system_slice).get_debug_checked_mut(system_idx) };
 
-                        let mut moved_event = false;
+                        let mut args = SystemRunArgs {
+                            event_ptr: Some(event_ptr),
+                            system_info: &entry.info,
+                        };
 
-                        unsafe { entry.system.run(event_ptr, &mut moved_event) }
+                        unsafe { entry.system.run(&mut args) }
 
-                        if moved_event {
+                        if args.event_ptr.is_none() {
                             // The system consumed the event. No other systems get to run.
                             continue 'next_event;
                         }
@@ -141,11 +164,6 @@ impl Default for World {
     }
 }
 
-// #[derive(Copy, Clone)]
-// pub struct UnsafeWorldView<'w> {
-
-// }
-
 pub trait FromWorld {
     fn from_world(world: &mut World) -> Self;
 }
@@ -157,58 +175,4 @@ impl<T: Default> FromWorld for T {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::UnsafeCell;
-    use std::marker::PhantomData;
-
-    #[test]
-    fn miri_test_1() {
-        struct FakeWorld {
-            foo: i32,
-            bar: String,
-            baz: Vec<u32>,
-            quux: Option<char>,
-        }
-
-        struct UnsafeFakeWorld<'w> {
-            world: *mut FakeWorld,
-            _marker: PhantomData<(&'w FakeWorld, &'w UnsafeCell<FakeWorld>)>,
-        }
-
-        impl<'w> UnsafeFakeWorld<'w> {
-            pub fn new_mutable(world: &'w mut FakeWorld) -> Self {
-                Self {
-                    world,
-                    _marker: PhantomData,
-                }
-            }
-
-            pub fn foo(&self) -> &i32 {
-                unsafe { &(*self.world).foo }
-            }
-
-            pub fn foo_mut(&self) -> &mut i32 {
-                unsafe { &mut (*self.world).foo }
-            }
-
-            pub fn bar(&self) -> &String {
-                unsafe { &(*self.world).bar }
-            }
-        }
-
-        let mut world = FakeWorld {
-            foo: 123,
-            bar: "ajklwdjkawd".into(),
-            baz: vec![1, 2, 3],
-            quux: Some('g'),
-        };
-
-        let unsafe_world = UnsafeFakeWorld::new_mutable(&mut world);
-
-        let foo_mut = unsafe_world.foo_mut();
-
-        let bar = unsafe_world.bar();
-
-        println!("{foo_mut} {bar}");
-    }
-}
+mod tests {}

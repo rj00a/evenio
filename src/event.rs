@@ -1,15 +1,15 @@
 use std::alloc::Layout;
 use std::any::TypeId;
 use std::collections::hash_map::Entry;
-use std::mem::{self, MaybeUninit};
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::{alloc, fmt, ptr};
+use std::{fmt, mem, ptr};
 
-use bumpalo::Bump;
+use evenio_macros::all_tuples;
 use slab::Slab;
 
-use crate::util::{TypeIdMap, UnwrapDebugChecked};
+use crate::util::TypeIdMap;
 
 pub trait Event: Send + Sync + 'static {}
 
@@ -99,10 +99,6 @@ impl EventId {
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits as u32)
     }
-
-    pub(crate) const fn index(self) -> u32 {
-        self.0
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -151,3 +147,49 @@ where
         f.debug_struct("Take").field("event", self.deref()).finish()
     }
 }
+
+pub struct Sender<E: EventSet = ()> {
+    _marker: PhantomData<fn(E)>,
+}
+
+impl<E: EventSet> fmt::Debug for Sender<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sender").finish()
+    }
+}
+
+pub trait EventSet {
+    type State;
+
+    fn event_id_of<E: Event>(state: &Self::State) -> Option<EventId>;
+}
+
+impl<E: Event> EventSet for E {
+    type State = EventId;
+
+    #[inline]
+    fn event_id_of<EE: Event>(state: &Self::State) -> Option<EventId> {
+        (TypeId::of::<EE>() == TypeId::of::<E>()).then_some(*state)
+    }
+}
+
+macro_rules! impl_event_set_tuple {
+    ($(($E:ident, $e:ident)),*) => {
+        impl<$($E: EventSet),*> EventSet for ($($E,)*) {
+            type State = ($($E::State,)*);
+
+            #[inline]
+            fn event_id_of<EE: Event>(($($e,)*): &Self::State) -> Option<EventId> {
+                $(
+                    if let Some(id) = $E::event_id_of::<EE>($e) {
+                        return Some(id);
+                    }
+                )*
+
+                None
+            }
+        }
+    };
+}
+
+all_tuples!(impl_event_set_tuple, 0, 15, E, e);

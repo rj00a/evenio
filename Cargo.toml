@@ -8,6 +8,7 @@ ahash = "0.8.3"
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros" }
 slab = "0.4.9"
+#TODO: rayon
 
 [workspace]
 members = ["evenio_macros"]

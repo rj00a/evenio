@@ -2,28 +2,29 @@ use std::marker::PhantomData;
 
 use crate::SystemParam;
 
-pub trait WorldQuery {
+pub trait Query {
     type State;
 }
 
-pub struct Query<Q: WorldQuery> {
+pub struct Select<Q: Query> {
     _marker: PhantomData<Q>, // TODO
 }
 
-impl<Q: WorldQuery> SystemParam for Query<Q> {
-    type State = QueryState<Q>;
+/*
+impl<Q: Query> SystemParam for Select<Q> {
+    type State = SelectState<Q>;
 
-    type Item<'a> = QueryState<Q>;
+    type Item<'a> = SelectState<Q>;
 
-    unsafe fn init(world: &mut crate::World, access: &mut crate::SystemAccess) -> Self::State {
+    unsafe fn new_state(args: &mut crate::SystemInitArgs) -> Self::State {
         todo!()
     }
 
-    unsafe fn get_param<'a>(state: &'a mut Self::State) -> Self::Item<'a> {
+    unsafe fn get_param<'a>(state: &'a mut Self::State) -> Option<Self::Item<'a>> {
         todo!()
     }
-}
+}*/
 
-pub struct QueryState<Q: WorldQuery> {
+pub struct SelectState<Q: Query> {
     _marker: PhantomData<Q>,
 }
