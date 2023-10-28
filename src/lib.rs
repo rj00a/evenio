@@ -32,8 +32,8 @@ mod util;
 pub mod world;
 
 pub mod prelude {
-    pub use crate::world::World;
-    pub use crate::event::{Event, Take};
     pub use crate::component::Component;
     pub use crate::entity::EntityId;
+    pub use crate::event::{Event, Take};
+    pub use crate::world::World;
 }

@@ -1,9 +1,9 @@
 use std::alloc::Layout;
 use std::any::TypeId;
-use std::collections::hash_map::Entry;
 use std::mem::needs_drop;
 use std::ptr::{drop_in_place, NonNull};
 
+pub use evenio_macros::Component;
 use slab::Slab;
 
 use crate::util::TypeIdMap;
@@ -64,11 +64,7 @@ impl ComponentInfo {
         Self {
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
-            drop: needs_drop::<C>().then_some(|ptr| unsafe {
-                // SAFETY: Caller guarantees pointer is valid.
-                // Can't use `drop_in_place` since ptr may be unaligned.
-                let _ = (ptr.as_ptr() as *mut C).read_unaligned();
-            }),
+            drop: needs_drop::<C>().then_some(|ptr| unsafe { drop_in_place(ptr.as_ptr()) }),
         }
     }
 

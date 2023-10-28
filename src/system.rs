@@ -6,7 +6,9 @@ use std::fmt;
 use evenio_macros::all_tuples;
 use slab::Slab;
 
-use crate::{util::{GetDebugChecked, UnwrapDebugChecked}, event::{EventId, Event, Take}, world::{SystemRunArgs, World}};
+use crate::event::{Event, EventId, Take};
+use crate::util::{GetDebugChecked, UnwrapDebugChecked};
+use crate::world::{SystemRunArgs, World};
 
 #[derive(Debug)]
 pub(crate) struct Systems {

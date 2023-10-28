@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::archetype::Archetypes;
@@ -102,6 +103,7 @@ impl World {
                             event_ptr: &mut event_ptr,
                             system_info: &entry.info,
                             world,
+                            _marker: PhantomData,
                         };
 
                         unsafe { entry.system.run(args) }
@@ -169,6 +171,7 @@ pub struct SystemRunArgs<'a> {
     event_ptr: *mut Option<NonNull<u8>>,
     system_info: &'a SystemInfo,
     world: *mut World,
+    _marker: PhantomData<&'a mut World>,
 }
 
 impl<'a> SystemRunArgs<'a> {

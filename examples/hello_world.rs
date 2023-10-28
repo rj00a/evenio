@@ -1,8 +1,7 @@
 use evenio::prelude::*;
 
+#[derive(Event)]
 pub struct MyEvent;
-
-impl Event for MyEvent {}
 
 pub fn main() {
     let mut world = World::new();

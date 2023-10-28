@@ -10,6 +10,7 @@ use std::{fmt, mem, ptr};
 
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
+pub use evenio_macros::Event;
 use slab::Slab;
 
 use crate::system::{
