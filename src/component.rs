@@ -30,6 +30,8 @@ impl Components {
     }
 
     pub(crate) fn init_component<C: Component>(&mut self) -> ComponentId {
+        // TODO
+
         self.typeid_to_id
             .get(&TypeId::of::<C>())
             .copied()
@@ -87,11 +89,19 @@ impl ComponentInfo {
 pub struct ComponentId(u32);
 
 impl ComponentId {
+    pub const NULL: Self = Self(u32::MAX);
+
     pub const fn to_bits(self) -> u32 {
         self.0
     }
 
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
+    }
+}
+
+impl Default for ComponentId {
+    fn default() -> Self {
+        Self::NULL
     }
 }

@@ -21,18 +21,19 @@
     clippy::undocumented_unsafe_blocks
 )]
 
-mod archetype;
-mod component;
-mod entity;
+pub mod archetype;
+pub mod component;
+pub mod entity;
 mod erased_vec;
-mod event;
-mod query;
-mod system;
+pub mod event;
+pub mod query;
+pub mod system;
 mod util;
-mod world;
+pub mod world;
 
-pub use component::*;
-pub use entity::*;
-pub use event::*;
-pub use system::*;
-pub use world::*;
+pub mod prelude {
+    pub use crate::world::World;
+    pub use crate::event::{Event, Take};
+    pub use crate::component::Component;
+    pub use crate::entity::EntityId;
+}
