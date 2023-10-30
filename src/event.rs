@@ -13,21 +13,20 @@ use evenio_macros::all_tuples;
 pub use evenio_macros::Event;
 use slab::Slab;
 
-use crate::system::{
-    Access, ConflictingEventAccess, ConflictingEventType, SystemInitArgs, SystemParam,
-};
+use crate::prelude::World;
+use crate::system::{Access, SystemInitArgs, SystemInitError, SystemParam};
 use crate::util::{GetDebugChecked, TypeIdMap, UnwrapDebugChecked};
 use crate::world::SystemRunArgs;
 
 pub trait Event: Send + Sync + 'static {}
 
 #[derive(Debug)]
-pub(crate) struct Events {
+pub(crate) struct EventRegistry {
     infos: Slab<EventInfo>,
     typeid_to_id: TypeIdMap<EventId>,
 }
 
-impl Events {
+impl EventRegistry {
     pub(crate) fn new() -> Self {
         Self {
             infos: Slab::new(),
@@ -122,7 +121,7 @@ impl Default for EventId {
 }
 
 #[derive(Debug)]
-pub(crate) struct EventQueue {
+pub struct EventQueue {
     items: Vec<EventQueueItem>,
     bump: Bump,
 }
@@ -141,7 +140,7 @@ impl EventQueue {
     ///
     /// `event_id` must be correct for the given event type. Otherwise,
     /// undefined behavior may occur down the road.
-    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, event_id: EventId) {
+    pub unsafe fn push<E: Event>(&mut self, event: E, event_id: EventId) {
         let event_ptr = NonNull::from(self.bump.alloc(event)).cast::<u8>();
 
         self.items.push(EventQueueItem {
@@ -176,6 +175,10 @@ impl EventQueue {
     }
 }
 
+// SAFETY: The bump allocator is only accessed behind an exclusive reference to
+// the event queue.
+unsafe impl Sync for EventQueue {}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct EventQueueItem {
     /// Type of this event.
@@ -188,11 +191,11 @@ impl<E: Event> SystemParam for &'_ E {
     type State = ();
     type Item<'s, 'a> = &'a E;
 
-    fn init(args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>> {
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
         match args.event_access {
             Some(Access::Read) => {}
             None => args.event_access = Some(Access::Read),
-            _ => return Err(Box::new(ConflictingEventAccess)),
+            _ => return Err(Box::new(SystemInitError::ConflictingEventAccess)),
         }
 
         let this_id = args.world.init_event::<E>();
@@ -200,7 +203,7 @@ impl<E: Event> SystemParam for &'_ E {
         if args.event_id == EventId::NULL {
             args.event_id = this_id;
         } else if args.event_id != this_id {
-            return Err(Box::new(ConflictingEventType));
+            return Err(Box::new(SystemInitError::ConflictingEventType));
         }
 
         Ok(())
@@ -225,9 +228,9 @@ impl<E: Event> SystemParam for &'_ mut E {
     type State = ();
     type Item<'s, 'a> = &'a mut E;
 
-    fn init(args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>> {
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
         if let Some(Access::Read | Access::ReadWrite) = args.event_access {
-            return Err(Box::new(ConflictingEventAccess));
+            return Err(Box::new(SystemInitError::ConflictingEventAccess));
         }
 
         args.event_access = Some(Access::ReadWrite);
@@ -237,7 +240,7 @@ impl<E: Event> SystemParam for &'_ mut E {
         if args.event_id == EventId::NULL {
             args.event_id = this_id;
         } else if args.event_id != this_id {
-            return Err(Box::new(ConflictingEventType));
+            return Err(Box::new(SystemInitError::ConflictingEventType));
         }
 
         Ok(())
@@ -271,27 +274,19 @@ impl<'a, E: Event> Take<'a, E> {
 
         unsafe { ptr::read(ptr.as_ptr()) }
     }
-
-    pub fn get(&self) -> &'a E {
-        unsafe { &*self.event_ptr.unwrap_debug_checked().cast::<E>().as_ref() }
-    }
-
-    pub fn get_mut(&mut self) -> &'a mut E {
-        unsafe { &mut *self.event_ptr.unwrap_debug_checked().cast::<E>().as_mut() }
-    }
 }
 
 impl<E: Event> Deref for Take<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        self.get()
+        unsafe { &*self.event_ptr.unwrap_debug_checked().cast::<E>().as_ref() }
     }
 }
 
 impl<E: Event> DerefMut for Take<'_, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.get_mut()
+        unsafe { &mut *self.event_ptr.unwrap_debug_checked().cast::<E>().as_mut() }
     }
 }
 
@@ -299,7 +294,7 @@ impl<E> fmt::Debug for Take<'_, E>
 where
     E: Event + fmt::Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Take").field("event", &*self).finish()
     }
 }
@@ -309,7 +304,8 @@ impl<E: Event> SystemParam for Take<'_, E> {
 
     type Item<'s, 'a> = Take<'a, E>;
 
-    fn init(args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>> {
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        // TODO: register accessed things.
         Ok(())
     }
 
@@ -321,24 +317,78 @@ impl<E: Event> SystemParam for Take<'_, E> {
     }
 }
 
-pub struct Sender<E: EventSet = ()> {
-    _marker: PhantomData<fn(E)>,
+pub struct Sender<'s, 'a, Es: EventSet> {
+    state: &'s Es::State,
+    event_queue: &'a mut EventQueue,
 }
 
-impl<E: EventSet> fmt::Debug for Sender<E> {
+impl<Es: EventSet> Sender<'_, '_, Es> {
+    /// # Panics
+    ///
+    /// Panics if the given event type `E` is not in the `EventSet` of this
+    /// sender. This may become a compile time error in the future.
+    pub fn send<E: Event>(&mut self, event: E) {
+        // The event type and event set are all compile time known, so the compiler
+        // should be able to optimize this away.
+        let event_id = Es::event_id_of::<E>(self.state).unwrap_or_else(|| {
+            panic!(
+                "event {} is not in the EventSet of this Sender",
+                any::type_name::<E>()
+            )
+        });
+
+        unsafe {
+            self.event_queue.push(event, event_id);
+        }
+    }
+
+    // TODO: unsafe fn send_raw or similar.
+}
+
+impl<Es: EventSet> fmt::Debug for Sender<'_, '_, Es> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sender").finish()
     }
 }
 
+impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
+    type State = Es::State;
+
+    type Item<'s, 'a> = Sender<'s, 'a, Es>;
+
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        if let Some(Access::Read | Access::ReadWrite) = args.event_queue_access {
+            return Err(Box::new(SystemInitError::ConflictingEventQueueAccess));
+        }
+
+        Ok(Es::new_state(args.world))
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        args: SystemRunArgs<'a>,
+    ) -> Option<Self::Item<'s, 'a>> {
+        Some(Sender {
+            state,
+            event_queue: unsafe { args.event_queue_mut() },
+        })
+    }
+}
+
 pub trait EventSet {
-    type State;
+    type State: Send + Sync + 'static;
+
+    fn new_state(world: &mut World) -> Self::State;
 
     fn event_id_of<E: Event>(state: &Self::State) -> Option<EventId>;
 }
 
 impl<E: Event> EventSet for E {
     type State = EventId;
+
+    fn new_state(world: &mut World) -> Self::State {
+        world.init_event::<E>()
+    }
 
     #[inline]
     fn event_id_of<EE: Event>(state: &Self::State) -> Option<EventId> {
@@ -351,10 +401,18 @@ macro_rules! impl_event_set_tuple {
         impl<$($E: EventSet),*> EventSet for ($($E,)*) {
             type State = ($($E::State,)*);
 
+            fn new_state(_world: &mut World) -> Self::State {
+                (
+                    $(
+                        $E::new_state(_world),
+                    )*
+                )
+            }
+
             #[inline]
-            fn event_id_of<EE: Event>(($($e,)*): &Self::State) -> Option<EventId> {
+            fn event_id_of<E: Event>(($($e,)*): &Self::State) -> Option<EventId> {
                 $(
-                    if let Some(id) = $E::event_id_of::<EE>($e) {
+                    if let Some(id) = $E::event_id_of::<E>($e) {
                         return Some(id);
                     }
                 )*

@@ -2,23 +2,26 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Mutex, RwLock};
 
 use evenio_macros::all_tuples;
 use slab::Slab;
 
-use crate::event::{Event, EventId, Take};
-use crate::util::{GetDebugChecked, UnwrapDebugChecked};
-use crate::world::{SystemRunArgs, World};
+use crate::event::EventId;
+use crate::exclusive::Exclusive;
+use crate::util::GetDebugChecked;
+use crate::world::{FromWorld, SystemRunArgs, World};
 
 #[derive(Debug)]
-pub(crate) struct Systems {
+pub(crate) struct SystemRegistry {
     /// Maps event IDs to the list of all systems that handle the event.
     event_to_systems: Vec<SystemList>,
     /// Maps [`SystemId`]s to the system's location in `event_to_systems`.
     locations: Slab<SystemLocation>,
 }
 
-impl Systems {
+impl SystemRegistry {
     #[track_caller]
     pub(crate) fn add_system(&mut self, system: Box<dyn System>, mut info: SystemInfo) -> SystemId {
         if self.locations.len() >= (SystemId::NULL.0 - 1) as usize {
@@ -32,15 +35,9 @@ impl Systems {
 
         info.system_id = system_id;
 
-        let event_idx = info.event_id.0 as usize;
+        self.init_event(info.event_id);
 
-        if event_idx >= self.event_to_systems.len() {
-            self.event_to_systems.extend(
-                (0..event_idx - self.event_to_systems.len() + 1).map(|_| Default::default()),
-            );
-        }
-
-        let list = &mut self.event_to_systems[event_idx];
+        let list = &mut self.event_to_systems[info.event_id.0 as usize];
 
         let entry = SystemListEntry {
             system,
@@ -71,6 +68,17 @@ impl Systems {
         }
 
         system_id
+    }
+
+    /// Ensures `event_id` is registered in the `event_to_systems` map.
+    pub(crate) fn init_event(&mut self, event_id: EventId) {
+        let event_idx = event_id.0 as usize;
+
+        if event_idx >= self.event_to_systems.len() {
+            self.event_to_systems.extend(
+                (0..event_idx - self.event_to_systems.len() + 1).map(|_| Default::default()),
+            );
+        }
     }
 
     pub(crate) fn remove_system(&mut self, id: SystemId) -> Option<(Box<dyn System>, SystemInfo)> {
@@ -158,7 +166,7 @@ impl Systems {
     }
 }
 
-impl Systems {
+impl SystemRegistry {
     pub(crate) fn new() -> Self {
         Self {
             event_to_systems: vec![],
@@ -232,11 +240,11 @@ impl Default for SystemId {
 pub trait InitSystem<Marker> {
     type System: System;
 
-    fn init_system(self, args: &mut SystemInitArgs) -> Result<Self::System, Box<dyn Error>>;
+    fn init_system(self, args: &mut SystemInitArgs<'_>) -> Result<Self::System, Box<dyn Error>>;
 }
 
 pub trait System: Send + Sync + Any + fmt::Debug {
-    unsafe fn run(&mut self, args: SystemRunArgs);
+    unsafe fn run(&mut self, args: SystemRunArgs<'_>);
 }
 
 #[derive(Debug)]
@@ -247,6 +255,7 @@ pub struct SystemInitArgs<'a> {
     pub priority: SystemPriority,
     pub event_id: EventId,
     pub event_access: Option<Access>,
+    pub event_queue_access: Option<Access>,
 }
 
 impl<'a> SystemInitArgs<'a> {
@@ -257,6 +266,7 @@ impl<'a> SystemInitArgs<'a> {
             priority: Default::default(),
             event_id: Default::default(),
             event_access: Default::default(),
+            event_queue_access: Default::default(),
         }
     }
 }
@@ -267,20 +277,40 @@ pub enum Access {
     ReadWrite,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct InvalidEventId(pub EventId);
+#[derive(Clone, Debug)]
+pub enum SystemInitError {
+    InvalidEventId(EventId),
+    ConflictingEventType,
+    ConflictingEventAccess,
+    ConflictingEventQueueAccess,
+}
 
-impl fmt::Display for InvalidEventId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.0 == EventId::NULL {
-            write!(f, "system did not specify an event to handle")
-        } else {
-            write!(f, "system specified an invalid event ID")
-        }
+impl fmt::Display for SystemInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let msg = match self {
+            SystemInitError::InvalidEventId(id) => {
+                if *id == EventId::NULL {
+                    "system did not specify an event to handle"
+                } else {
+                    "system specified an invalid event ID to handle"
+                }
+            }
+            SystemInitError::ConflictingEventType => {
+                "system parameters specify differing event types"
+            }
+            SystemInitError::ConflictingEventAccess => {
+                "system parameters have conflicting access to the handled event"
+            }
+            SystemInitError::ConflictingEventQueueAccess => {
+                "system parameters have conflicting access to the event queue"
+            }
+        };
+
+        write!(f, "{msg}")
     }
 }
 
-impl Error for InvalidEventId {}
+impl Error for SystemInitError {}
 
 /// Describes when a system will run relative to other systems that handle the
 /// same event.
@@ -296,7 +326,7 @@ pub trait SystemParam {
     type State: Send + Sync + 'static;
     type Item<'s, 'a>: SystemParam<State = Self::State>;
 
-    fn init(args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>>;
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>>;
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
@@ -312,7 +342,7 @@ macro_rules! impl_system_param_tuple {
             type Item<'s, 'a> = ($($P::Item<'s, 'a>,)*);
 
             #[inline]
-            fn init(_args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>> {
+            fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
                 Ok((
                     $(
                         $P::init(_args)?,
@@ -345,7 +375,7 @@ where
 {
     type System = FunctionSystem<Marker, F>;
 
-    fn init_system(self, args: &mut SystemInitArgs) -> Result<Self::System, Box<dyn Error>> {
+    fn init_system(self, args: &mut SystemInitArgs<'_>) -> Result<Self::System, Box<dyn Error>> {
         Ok(FunctionSystem {
             func: self,
             state: <F::Param as SystemParam>::init(args)?,
@@ -358,13 +388,22 @@ pub struct FunctionSystem<Marker, F: SystemParamFunction<Marker>> {
     state: <F::Param as SystemParam>::State,
 }
 
+impl<Marker, F> FunctionSystem<Marker, F>
+where
+    F: SystemParamFunction<Marker>,
+{
+    pub fn into_inner(self) -> (F, <F::Param as SystemParam>::State) {
+        (self.func, self.state)
+    }
+}
+
 impl<Marker, F> System for FunctionSystem<Marker, F>
 where
     F: SystemParamFunction<Marker>,
     <F::Param as SystemParam>::State: fmt::Debug,
     Marker: 'static,
 {
-    unsafe fn run(&mut self, args: SystemRunArgs) {
+    unsafe fn run(&mut self, args: SystemRunArgs<'_>) {
         if let Some(param) = <F::Param as SystemParam>::get_param(&mut self.state, args) {
             self.func.run(param);
         }
@@ -412,34 +451,53 @@ macro_rules! impl_system_param_function {
 
 all_tuples!(impl_system_param_function, 0, 15, P, p);
 
-#[derive(Copy, Clone, Debug)]
-pub struct ConflictingEventType;
+#[derive(Debug)]
+pub struct Local<'s, T>
+where
+    T: FromWorld + Send + 'static,
+{
+    state: &'s mut T,
+}
 
-impl fmt::Display for ConflictingEventType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "system params specify differing event types")
+impl<T: FromWorld + Send + 'static> SystemParam for Local<'_, T> {
+    type State = Exclusive<T>;
+
+    type Item<'s, 'a> = Local<'s, T>;
+
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        Ok(Exclusive::new(T::from_world(args.world)))
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        _args: SystemRunArgs<'a>,
+    ) -> Option<Self::Item<'s, 'a>> {
+        Some(Local {
+            state: state.get_mut(),
+        })
     }
 }
 
-impl Error for ConflictingEventType {}
+impl<T: FromWorld + Send + 'static> Deref for Local<'_, T> {
+    type Target = T;
 
-#[derive(Copy, Clone, Debug)]
-pub struct ConflictingEventAccess;
-
-impl fmt::Display for ConflictingEventAccess {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "system parameters have conflicting access to event")
+    fn deref(&self) -> &Self::Target {
+        self.state
     }
 }
 
-impl Error for ConflictingEventAccess {}
+impl<T: FromWorld + Send + 'static> DerefMut for Local<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
 
 impl SystemParam for SystemId {
     type State = ();
 
     type Item<'s, 'a> = SystemId;
 
-    fn init(_args: &mut SystemInitArgs) -> Result<Self::State, Box<dyn Error>> {
+    fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
         Ok(())
     }
 
@@ -451,6 +509,57 @@ impl SystemParam for SystemId {
     }
 }
 
+impl SystemParam for &'_ SystemInfo {
+    type State = ();
+
+    type Item<'s, 'a> = &'a SystemInfo;
+
+    fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        _state: &'s mut Self::State,
+        args: SystemRunArgs<'a>,
+    ) -> Option<Self::Item<'s, 'a>> {
+        Some(args.system_info())
+    }
+}
+
+impl<P: SystemParam> SystemParam for Mutex<P> {
+    type State = P::State;
+
+    type Item<'s, 'a> = Mutex<P::Item<'s, 'a>>;
+
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        P::init(args)
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        args: SystemRunArgs<'a>,
+    ) -> Option<Self::Item<'s, 'a>> {
+        P::get_param(state, args).map(Mutex::new)
+    }
+}
+
+impl<P: SystemParam> SystemParam for RwLock<P> {
+    type State = P::State;
+
+    type Item<'s, 'a> = RwLock<P::Item<'s, 'a>>;
+
+    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+        P::init(args)
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        args: SystemRunArgs<'a>,
+    ) -> Option<Self::Item<'s, 'a>> {
+        P::get_param(state, args).map(RwLock::new)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,12 +568,12 @@ mod tests {
     struct FakeSystem;
 
     impl System for FakeSystem {
-        unsafe fn run(&mut self, _args: SystemRunArgs) {}
+        unsafe fn run(&mut self, _args: SystemRunArgs<'_>) {}
     }
 
     #[test]
     fn add_remove_system() {
-        let mut systems = Systems::new();
+        let mut systems = SystemRegistry::new();
         let event_id = EventId(1);
 
         let mut info_1 = SystemInfo::new();

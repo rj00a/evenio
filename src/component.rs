@@ -11,12 +11,12 @@ use crate::util::TypeIdMap;
 pub trait Component: Send + Sync + 'static {}
 
 #[derive(Debug)]
-pub(crate) struct Components {
+pub(crate) struct ComponentRegistry {
     infos: Slab<ComponentInfo>,
     typeid_to_id: TypeIdMap<ComponentId>,
 }
 
-impl Components {
+impl ComponentRegistry {
     pub(crate) fn new() -> Self {
         Self {
             infos: Slab::new(),

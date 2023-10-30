@@ -1,32 +1,34 @@
 use std::error::Error;
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr::NonNull;
 
 use crate::archetype::Archetypes;
-use crate::component::{Component, ComponentId, Components};
-use crate::event::{Event, EventId, EventQueue, EventQueueItem, Events};
+use crate::component::{Component, ComponentId, ComponentRegistry};
+use crate::event::{Event, EventId, EventQueue, EventQueueItem, EventRegistry};
 use crate::system::{
-    InitSystem, InvalidEventId, SystemId, SystemInfo, SystemInitArgs, SystemListEntry, Systems,
+    InitSystem, SystemId, SystemInfo, SystemInitArgs, SystemInitError, SystemListEntry,
+    SystemRegistry,
 };
 use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
 pub struct World {
-    components: Components,
+    components: ComponentRegistry,
     archetypes: Archetypes,
-    events: Events,
+    events: EventRegistry,
     event_queue: EventQueue,
-    systems: Systems,
+    systems: SystemRegistry,
 }
 
 impl World {
     pub fn new() -> Self {
         Self {
-            components: Components::new(),
+            components: ComponentRegistry::new(),
             archetypes: Archetypes::new(),
-            events: Events::new(),
+            events: EventRegistry::new(),
             event_queue: EventQueue::new(),
-            systems: Systems::new(),
+            systems: SystemRegistry::new(),
         }
     }
 
@@ -49,7 +51,7 @@ impl World {
         let system = system.init_system(&mut args)?;
 
         if args.world.events.event(args.event_id).is_none() {
-            return Err(Box::new(InvalidEventId(args.event_id)));
+            return Err(Box::new(SystemInitError::InvalidEventId(args.event_id)));
         }
 
         let info = SystemInfo {
@@ -142,7 +144,9 @@ impl World {
     }
 
     pub fn init_event<E: Event>(&mut self) -> EventId {
-        self.events.init_event::<E>()
+        let id = self.events.init_event::<E>();
+        self.systems.init_event(id);
+        id
     }
 
     pub fn init_component<C: Component>(&mut self) -> ComponentId {
@@ -176,19 +180,30 @@ pub struct SystemRunArgs<'a> {
 
 impl<'a> SystemRunArgs<'a> {
     pub unsafe fn event_ptr(&self) -> Option<NonNull<u8>> {
-        unsafe { *self.event_ptr }
+        *self.event_ptr
     }
 
     pub unsafe fn event_ptr_mut(&self) -> &'a mut Option<NonNull<u8>> {
-        unsafe { &mut *self.event_ptr }
+        &mut *self.event_ptr
     }
 
-    pub fn system_info(&self) -> &SystemInfo {
+    pub fn system_info(&self) -> &'a SystemInfo {
         self.system_info
     }
 
-    // TODO: world methods.
+    pub unsafe fn event_queue(&self) -> &'a EventQueue {
+        &(*self.world).event_queue
+    }
+
+    pub unsafe fn event_queue_mut(&self) -> &'a mut EventQueue {
+        &mut (*self.world).event_queue
+    }
+
+    // TODO: more world methods.
 }
 
-#[cfg(test)]
-mod tests {}
+unsafe impl Send for World {}
+unsafe impl Sync for World {}
+
+impl UnwindSafe for World {}
+impl RefUnwindSafe for World {}

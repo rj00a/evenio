@@ -2,7 +2,7 @@ use std::alloc::{self, Layout};
 use std::mem;
 use std::ptr::{self, NonNull};
 
-use crate::component::{ComponentId, Components};
+use crate::component::{ComponentId, ComponentRegistry};
 use crate::entity::EntityId;
 use crate::erased_vec::ErasedVec;
 
@@ -26,7 +26,10 @@ pub(crate) struct Archetype {
 }
 
 impl Archetype {
-    pub(crate) fn new(ids: impl IntoIterator<Item = ComponentId>, comps: &Components) -> Self {
+    pub(crate) fn new(
+        ids: impl IntoIterator<Item = ComponentId>,
+        comps: &ComponentRegistry,
+    ) -> Self {
         Self {
             ids: vec![],
             columns: ids
@@ -53,7 +56,7 @@ impl Archetype {
     /// # Safety
     ///
     /// - `comps` must contain the correct components for this archetype.
-    pub(crate) unsafe fn alloc(&mut self, id: EntityId, comps: &Components) -> u32 {
+    pub(crate) unsafe fn alloc(&mut self, id: EntityId, comps: &ComponentRegistry) -> u32 {
         todo!()
     }
 
@@ -66,7 +69,11 @@ impl Archetype {
     ///
     /// - `index` must be in bounds.
     /// - `comps` must contain the correct components for this archetype.
-    pub(crate) unsafe fn remove(&mut self, index: u32, comps: &Components) -> Option<EntityId> {
+    pub(crate) unsafe fn remove(
+        &mut self,
+        index: u32,
+        comps: &ComponentRegistry,
+    ) -> Option<EntityId> {
         todo!()
     }
 
@@ -74,7 +81,7 @@ impl Archetype {
     /// # Safety
     ///
     /// - All components must be initialized.
-    pub(crate) unsafe fn drop(self, comps: &Components) {
+    pub(crate) unsafe fn drop(self, comps: &ComponentRegistry) {
         todo!()
     }
 
