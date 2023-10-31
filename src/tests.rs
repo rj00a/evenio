@@ -1,7 +1,10 @@
 use std::panic;
 use std::sync::Arc;
 
+use ahash::HashSet;
+
 use crate::prelude::*;
+use crate::util::Label;
 
 #[test]
 fn world_drops_events_on_panic() {
@@ -51,7 +54,19 @@ fn conflicting_sender_params() {
 
     fn system(_: &A, _: Sender<A>, _: Sender<A>) {}
 
-    // assert!(world.add_system(system).is_err());
+    assert!(world.add_system(system).is_err());
 
     world.send_event(A(123));
+}
+
+#[test]
+fn label_container() {
+    let mut labels = HashSet::<Box<dyn Label>>::default();
+
+    assert!(labels.insert(Box::new("foobar")));
+    assert!(labels.insert(Box::new(String::from("foobar"))));
+
+    let key: &dyn Label = &"foobar";
+
+    assert!(labels.contains(key));
 }

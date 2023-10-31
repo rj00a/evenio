@@ -40,7 +40,7 @@ pub mod query;
 pub mod system;
 #[cfg(test)]
 mod tests;
-mod util;
+pub mod util;
 pub mod world;
 
 pub mod prelude {

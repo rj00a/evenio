@@ -120,7 +120,7 @@ impl World {
 
                     if events_before < events_after {
                         // Eagerly handle any events produced by the system we just ran.
-                        unsafe { handle_events(events_before, world) };
+                        handle_events(events_before, world);
                     }
 
                     debug_assert_eq!(world.event_queue.len(), events_before);

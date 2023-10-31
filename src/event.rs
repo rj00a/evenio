@@ -361,6 +361,8 @@ impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
             return Err(Box::new(SystemInitError::ConflictingEventQueueAccess));
         }
 
+        args.event_queue_access = Some(Access::ReadWrite);
+
         Ok(Es::new_state(args.world))
     }
 
