@@ -1,42 +1,48 @@
 use std::fmt;
-use std::num::NonZeroU32;
 
+use crate::archetype::ArchetypeId;
+use crate::id::{Ident, Storage};
+
+#[derive(Debug)]
 pub(crate) struct Entities {
-    entities: Vec<EntityLocation>,
-    /// Indices of slots in `entities` that are vacant.
-    freelist: Vec<u32>,
+    locations: Storage<EntityLocation>,
 }
 
+impl Entities {
+    pub(crate) fn new() -> Self {
+        Self {
+            locations: Storage::new(),
+        }
+    }
+
+    pub(crate) fn add(&mut self, loc: EntityLocation) -> EntityId {
+        EntityId(self.locations.add(loc))
+    }
+
+    pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
+        self.locations.remove(id.0)
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct EntityLocation {
-    /// Generation of this entity.
-    pub(crate) generation: NonZeroU32,
     /// The archetype that this entity is located in.
-    pub(crate) archetype_index: u32,
+    pub(crate) archetype_id: ArchetypeId,
     /// The specific row within the archetype containing this entity.
     pub(crate) row: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EntityId {
-    index: u32,
-    generation: NonZeroU32,
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct EntityId(Ident);
 
 impl EntityId {
-    pub const NULL: Self = Self {
-        index: u32::MAX,
-        generation: NonZeroU32::MAX,
-    };
-}
+    pub const NULL: Self = Self(Ident::NULL);
 
-impl Default for EntityId {
-    fn default() -> Self {
-        Self::NULL
+    pub fn to_bits(self) -> u64 {
+        self.0.to_bits()
     }
-}
 
-impl fmt::Debug for EntityId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}v{}", self.index, self.generation.get())
+    pub fn from_bits(bits: u64) -> Option<Self> {
+        Ident::from_bits(bits).map(Self)
     }
 }

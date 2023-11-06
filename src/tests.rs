@@ -1,21 +1,94 @@
 use std::panic;
 use std::sync::Arc;
 
-use ahash::HashSet;
-
 use crate::prelude::*;
-use crate::util::Label;
+
+#[test]
+fn world_drops_events() {
+    #[derive(Event)]
+    struct A(Arc<()>);
+
+    impl Drop for A {
+        fn drop(&mut self) {
+            eprintln!("calling A destructor");
+        }
+    }
+
+    #[derive(Event)]
+    struct B(Arc<()>);
+
+    impl Drop for B {
+        fn drop(&mut self) {
+            eprintln!("calling B destructor");
+        }
+    }
+
+    #[derive(Event)]
+    struct C(Arc<()>);
+
+    impl Drop for C {
+        fn drop(&mut self) {
+            eprintln!("calling C destructor");
+        }
+    }
+
+    let mut world = World::new();
+
+    world
+        .add_system(|a: &A, mut sender: Sender<B>| {
+            sender.send(B(a.0.clone()));
+            sender.send(B(a.0.clone()));
+        })
+        .unwrap();
+
+    world
+        .add_system(|b: &B, mut sender: Sender<C>| {
+            sender.send(C(b.0.clone()));
+            sender.send(C(b.0.clone()));
+        })
+        .unwrap();
+
+    world
+        .add_system(|c: &C| println!("got C {:?}", Arc::as_ptr(&c.0)))
+        .unwrap();
+
+    let arc = Arc::new(());
+
+    world.send_event(A(arc.clone()));
+
+    drop(world);
+
+    assert_eq!(Arc::strong_count(&arc), 1);
+}
 
 #[test]
 fn world_drops_events_on_panic() {
     #[derive(Event)]
     struct A(Arc<()>);
 
+    impl Drop for A {
+        fn drop(&mut self) {
+            eprintln!("calling A destructor");
+        }
+    }
+
     #[derive(Event)]
     struct B(Arc<()>);
 
+    impl Drop for B {
+        fn drop(&mut self) {
+            eprintln!("calling B destructor");
+        }
+    }
+
     #[derive(Event)]
     struct C(Arc<()>);
+
+    impl Drop for C {
+        fn drop(&mut self) {
+            eprintln!("calling C destructor");
+        }
+    }
 
     let mut world = World::new();
 
@@ -57,16 +130,4 @@ fn conflicting_sender_params() {
     assert!(world.add_system(system).is_err());
 
     world.send_event(A(123));
-}
-
-#[test]
-fn label_container() {
-    let mut labels = HashSet::<Box<dyn Label>>::default();
-
-    assert!(labels.insert(Box::new("foobar")));
-    assert!(labels.insert(Box::new(String::from("foobar"))));
-
-    let key: &dyn Label = &"foobar";
-
-    assert!(labels.contains(key));
 }

@@ -6,38 +6,41 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, RwLock};
 
 use evenio_macros::all_tuples;
-use slab::Slab;
 
 use crate::event::EventId;
 use crate::exclusive::Exclusive;
+use crate::id::{Ident, Storage};
 use crate::util::GetDebugChecked;
 use crate::world::{FromWorld, SystemRunArgs, World};
 
 #[derive(Debug)]
-pub(crate) struct SystemRegistry {
-    /// Maps event IDs to the list of all systems that handle the event.
+pub(crate) struct Systems {
+    /// Maps event indices to the list of all systems that handle the event.
     event_to_systems: Vec<SystemList>,
     /// Maps [`SystemId`]s to the system's location in `event_to_systems`.
-    locations: Slab<SystemLocation>,
+    locations: Storage<SystemLocation>,
 }
 
-impl SystemRegistry {
-    #[track_caller]
-    pub(crate) fn add_system(&mut self, system: Box<dyn System>, mut info: SystemInfo) -> SystemId {
-        if self.locations.len() >= (SystemId::NULL.0 - 1) as usize {
-            panic!("too many systems added");
+impl Systems {
+    pub(crate) fn new() -> Self {
+        Self {
+            event_to_systems: vec![],
+            locations: Storage::new(),
         }
+    }
 
-        let system_id = SystemId(self.locations.insert(SystemLocation {
-            event_id: info.event_id,
-            index: u32::MAX,
-        }) as u32);
+    #[track_caller]
+    pub(crate) fn add(&mut self, system: Box<dyn System>, mut info: SystemInfo) -> SystemId {
+        let system_id = SystemId(self.locations.add(SystemLocation {
+            event_idx: info.event_id.index(),
+            list_idx: u32::MAX,
+        }));
 
         info.system_id = system_id;
 
         self.init_event(info.event_id);
 
-        let list = &mut self.event_to_systems[info.event_id.0 as usize];
+        let list = &mut self.event_to_systems[info.event_id.index() as usize];
 
         let entry = SystemListEntry {
             system,
@@ -63,8 +66,8 @@ impl SystemRegistry {
         };
 
         for list_idx in update_locations_start..list.entries.len() {
-            let location_idx = list.entries[list_idx].info.system_id.0 as usize;
-            self.locations[location_idx].index = list_idx as u32;
+            let location_idx = list.entries[list_idx].info.system_id.0;
+            self.locations.get_mut(location_idx).unwrap().list_idx = list_idx as u32;
         }
 
         system_id
@@ -72,20 +75,20 @@ impl SystemRegistry {
 
     /// Ensures `event_id` is registered in the `event_to_systems` map.
     pub(crate) fn init_event(&mut self, event_id: EventId) {
-        let event_idx = event_id.0 as usize;
+        let event_idx = event_id.index() as usize;
 
         if event_idx >= self.event_to_systems.len() {
             self.event_to_systems.extend(
-                (0..event_idx - self.event_to_systems.len() + 1).map(|_| Default::default()),
+                (0..event_idx - self.event_to_systems.len() + 1).map(|_| SystemList::default()),
             );
         }
     }
 
-    pub(crate) fn remove_system(&mut self, id: SystemId) -> Option<(Box<dyn System>, SystemInfo)> {
-        self.locations.try_remove(id.0 as usize).map(|loc| {
-            let list = &mut self.event_to_systems[loc.event_id.0 as usize];
+    pub(crate) fn remove(&mut self, id: SystemId) -> Option<(Box<dyn System>, SystemInfo)> {
+        self.locations.remove(id.0).map(|loc| {
+            let list = &mut self.event_to_systems[loc.event_idx as usize];
 
-            let entry = list.entries.remove(loc.index as usize);
+            let entry = list.entries.remove(loc.list_idx as usize);
 
             match entry.info.priority {
                 SystemPriority::Before => {
@@ -98,19 +101,23 @@ impl SystemRegistry {
                 SystemPriority::After => {}
             }
 
-            for entry in &mut list.entries[loc.index as usize..] {
-                self.locations[entry.info.system_id.0 as usize].index -= 1;
+            for entry in &mut list.entries[loc.list_idx as usize..] {
+                self.locations
+                    .get_mut(entry.info.system_id.0)
+                    .unwrap()
+                    .list_idx -= 1;
             }
 
             (entry.system, *entry.info)
         })
     }
 
+    /*
     pub(crate) fn systems_for_event(
         &self,
         event_id: EventId,
     ) -> impl Iterator<Item = (&dyn System, &SystemInfo)> {
-        let it = match self.event_to_systems.get(event_id.0 as usize) {
+        let it = match self.event_to_systems.get(event_id.index() as usize) {
             Some(list) => list.entries.iter(),
             None => Default::default(),
         };
@@ -128,50 +135,42 @@ impl SystemRegistry {
         };
 
         it.map(|entry| (entry.system.as_mut(), entry.info.as_ref()))
-    }
+    }*/
 
     #[inline]
     pub(crate) unsafe fn systems_for_event_unchecked_mut(
         &mut self,
-        event_id: EventId,
+        event_idx: u32,
     ) -> &mut [SystemListEntry] {
         &mut self
             .event_to_systems
-            .get_debug_checked_mut(event_id.0 as usize)
+            .get_debug_checked_mut(event_idx as usize)
             .entries
     }
 
     #[inline]
-    pub(crate) fn system(&self, system_id: SystemId) -> Option<(&dyn System, &SystemInfo)> {
-        self.locations.get(system_id.0 as usize).map(|loc| {
-            let entry = &self.event_to_systems[loc.event_id.0 as usize].entries[loc.index as usize];
+    pub(crate) fn get(&self, system_id: SystemId) -> Option<(&dyn System, &SystemInfo)> {
+        self.locations.get(system_id.0).map(|loc| {
+            let entry =
+                &self.event_to_systems[loc.event_idx as usize].entries[loc.list_idx as usize];
             (entry.system.as_ref(), entry.info.as_ref())
         })
     }
 
     #[inline]
-    pub(crate) fn system_mut(
+    pub(crate) fn get_mut(
         &mut self,
         system_id: SystemId,
     ) -> Option<(&mut dyn System, &SystemInfo)> {
-        self.locations.get_mut(system_id.0 as usize).map(|loc| {
+        self.locations.get_mut(system_id.0).map(|loc| {
             let entry =
-                &mut self.event_to_systems[loc.event_id.0 as usize].entries[loc.index as usize];
+                &mut self.event_to_systems[loc.event_idx as usize].entries[loc.list_idx as usize];
             (entry.system.as_mut(), entry.info.as_ref())
         })
     }
 
     pub(crate) fn len(&self) -> usize {
         self.locations.len()
-    }
-}
-
-impl SystemRegistry {
-    pub(crate) fn new() -> Self {
-        Self {
-            event_to_systems: vec![],
-            locations: Slab::new(),
-        }
     }
 }
 
@@ -211,29 +210,26 @@ impl SystemInfo {
 /// The location of a system in [`Systems::event_to_systems`].
 #[derive(Debug)]
 struct SystemLocation {
-    event_id: EventId,
+    event_idx: u32,
     /// Index into the [`SystemList`].
-    index: u32,
+    list_idx: u32,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct SystemId(u32);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct SystemId(Ident);
 
 impl SystemId {
-    pub const NULL: Self = Self(u32::MAX);
+    pub const NULL: Self = Self(Ident::NULL);
 
-    pub fn to_bits(self) -> u64 {
-        self.0 as u64
+    pub const fn to_bits(self) -> u64 {
+        self.0.to_bits()
     }
 
-    pub fn from_bits(bits: u64) -> Self {
-        Self(bits as u32)
-    }
-}
-
-impl Default for SystemId {
-    fn default() -> Self {
-        Self::NULL
+    pub const fn from_bits(bits: u64) -> Option<Self> {
+        match Ident::from_bits(bits) {
+            Some(id) => Some(Self(id)),
+            None => None,
+        }
     }
 }
 
@@ -245,6 +241,8 @@ pub trait InitSystem<Marker> {
 
 pub trait System: Send + Sync + Any + fmt::Debug {
     unsafe fn run(&mut self, args: SystemRunArgs<'_>);
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 #[derive(Debug)]
@@ -408,6 +406,14 @@ where
             self.func.run(param);
         }
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 impl<Marker, F> fmt::Debug for FunctionSystem<Marker, F>
@@ -569,58 +575,74 @@ mod tests {
 
     impl System for FakeSystem {
         unsafe fn run(&mut self, _args: SystemRunArgs<'_>) {}
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     #[test]
     fn add_remove_system() {
-        let mut systems = SystemRegistry::new();
-        let event_id = EventId(1);
+        let mut systems = Systems::new();
+        let event_id = EventId::from_bits(1).unwrap();
 
         let mut info_1 = SystemInfo::new();
         info_1.event_id = event_id;
-        let id_1 = systems.add_system(Box::new(FakeSystem), info_1);
+        let id_1 = systems.add(Box::new(FakeSystem), info_1);
 
         let mut info_2 = SystemInfo::new();
         info_2.event_id = event_id;
         info_2.priority = SystemPriority::After;
-        let id_2 = systems.add_system(Box::new(FakeSystem), info_2);
+        let id_2 = systems.add(Box::new(FakeSystem), info_2);
 
         let mut info_3 = SystemInfo::new();
         info_3.event_id = event_id;
         info_3.priority = SystemPriority::Before;
-        let id_3 = systems.add_system(Box::new(FakeSystem), info_3);
+        let id_3 = systems.add(Box::new(FakeSystem), info_3);
 
-        let mut it = systems
-            .systems_for_event(event_id)
-            .map(|(_, info)| info.system_id);
+        /*
+        let mut it = unsafe { systems
+            .systems_for_event_unchecked_mut(event_id.index()) }.into_iter()
+            .map(|entry| entry.system_id);
+        */
+
+        let mut it = unsafe {
+            systems
+                .systems_for_event_unchecked_mut(event_id.index())
+                .into_iter()
+                .map(|entry| entry.info.system_id)
+        };
+
         assert_eq!(it.next(), Some(id_3));
         assert_eq!(it.next(), Some(id_1));
         assert_eq!(it.next(), Some(id_2));
 
         assert_eq!(
-            systems.system(id_2).map(|(_, info)| info.system_id),
+            systems.get(id_2).map(|(_, info)| info.system_id),
             Some(id_2)
         );
 
-        drop(it);
-
         assert_eq!(
-            systems.remove_system(id_3).map(|(_, info)| info.system_id),
+            systems.remove(id_3).map(|(_, info)| info.system_id),
             Some(id_3)
         );
-        assert!(systems.remove_system(id_3).is_none());
+        assert!(systems.remove(id_3).is_none());
 
         assert_eq!(
-            systems.remove_system(id_1).map(|(_, info)| info.system_id),
+            systems.remove(id_1).map(|(_, info)| info.system_id),
             Some(id_1)
         );
-        assert!(systems.remove_system(id_1).is_none());
+        assert!(systems.remove(id_1).is_none());
 
         assert_eq!(
-            systems.remove_system(id_2).map(|(_, info)| info.system_id),
+            systems.remove(id_2).map(|(_, info)| info.system_id),
             Some(id_2)
         );
-        assert!(systems.remove_system(id_2).is_none());
+        assert!(systems.remove(id_2).is_none());
 
         assert_eq!(systems.len(), 0);
     }

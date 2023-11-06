@@ -1,6 +1,6 @@
-use std::alloc;
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::{alloc, ptr};
 
 use crate::util::{capacity_overflow, UnwrapDebugChecked};
 
@@ -33,6 +33,17 @@ impl ErasedVec {
             data: NonNull::dangling(),
             drop,
         }
+    }
+
+    pub(crate) unsafe fn push(&mut self, ptr: NonNull<u8>) {
+        self.reserve(1);
+
+        // Where the new element will be placed.
+        let slot = self.data.as_ptr().add(self.len * self.elem_layout.size());
+
+        ptr::copy_nonoverlapping(ptr.as_ptr(), slot, self.elem_layout.size());
+
+        self.len += 1;
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -87,13 +98,15 @@ impl ErasedVec {
     }
 
     pub(crate) fn clear(&mut self) {
-        // Set length to zero first in case `drop` unwinds.
+        // Set length to zero first in case `drop` unwinds. Otherwise, we could end up
+        // calling the destructor more than once.
+        let len = self.len;
         self.len = 0;
 
         if let Some(drop) = self.drop {
             let elem_size = self.elem_layout.size();
 
-            for i in 0..self.len {
+            for i in 0..len {
                 let elem = unsafe { self.data.as_ptr().add(i * elem_size) };
                 // SAFETY:
                 // - `elem` points to a valid element.
@@ -221,4 +234,41 @@ const fn pad_to_align(layout: &Layout) -> Layout {
 
     // SAFETY: padded size is guaranteed to not exceed `isize::MAX`.
     unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::{mem, ptr};
+
+    use super::*;
+
+    #[test]
+    fn erased_vec() {
+        type T = Rc<()>;
+
+        let elem = T::new(());
+
+        let mut vec = {
+            let layout = Layout::new::<T>();
+            let drop = |ptr: NonNull<u8>| unsafe { ptr::drop_in_place(ptr.cast::<T>().as_ptr()) };
+
+            unsafe { ErasedVec::new(layout, Some(drop)) }
+        };
+
+        for _ in 0..5 {
+            let mut elem = elem.clone();
+
+            unsafe {
+                vec.push(NonNull::from(&mut elem).cast::<u8>());
+            }
+
+            // Ownership moved to the vector. Don't call the destructor twice.
+            mem::forget(elem);
+        }
+
+        drop(vec);
+
+        assert_eq!(Rc::strong_count(&elem), 1);
+    }
 }

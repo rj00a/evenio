@@ -25,23 +25,31 @@
 // Warned by `future_incompatible`.
 #![allow(elided_lifetimes_in_paths)]
 
+const _: () = if std::mem::size_of::<usize>() <= 2 {
+    panic!("unsupported target")
+} else {
+    ()
+};
+
 // Lets us use our own proc macros internally.
-#[cfg(test)]
 extern crate self as evenio;
 
 pub mod archetype;
+pub mod command;
 pub mod component;
 pub mod entity;
 mod erased_vec;
 pub mod event;
 #[doc(hidden)]
 pub mod exclusive;
+pub mod label;
 pub mod query;
 pub mod system;
 #[cfg(test)]
 mod tests;
-pub mod util;
+mod util;
 pub mod world;
+mod id;
 
 pub mod prelude {
     pub use crate::component::Component;

@@ -11,35 +11,44 @@ use std::{fmt, mem, ptr};
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
 pub use evenio_macros::Event;
-use slab::Slab;
 
-use crate::prelude::World;
-use crate::system::{Access, SystemInitArgs, SystemInitError, SystemParam};
+use crate::component::ComponentId;
+use crate::entity::EntityId;
+use crate::id::{Ident, Storage};
+use crate::prelude::{Component, World};
+use crate::system::{Access, SystemInitArgs, SystemInitError, SystemListEntry, SystemParam};
 use crate::util::{GetDebugChecked, TypeIdMap, UnwrapDebugChecked};
 use crate::world::SystemRunArgs;
 
-pub trait Event: Send + Sync + 'static {}
+pub unsafe trait Event: Send + Sync + 'static {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::Other
+    }
+}
 
 #[derive(Debug)]
-pub(crate) struct EventRegistry {
-    infos: Slab<EventInfo>,
+pub(crate) struct Events {
+    infos: Storage<EventInfo>,
     typeid_to_id: TypeIdMap<EventId>,
 }
 
-impl EventRegistry {
+impl Events {
     pub(crate) fn new() -> Self {
         Self {
-            infos: Slab::new(),
+            infos: Storage::new(),
             typeid_to_id: Default::default(),
         }
     }
 
     #[track_caller]
-    pub(crate) fn init_event<E: Event>(&mut self) -> EventId {
+    pub(crate) unsafe fn init<E: Event>(&mut self, kind: EventKind) -> EventId {
         match self.typeid_to_id.entry(TypeId::of::<E>()) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(_) => {
-                let id = self.add_event(EventInfo::new::<E>());
+                let mut info = EventInfo::new::<E>();
+                info.kind = kind;
+
+                let id = self.add(info);
                 self.typeid_to_id.insert(TypeId::of::<E>(), id);
                 id
             }
@@ -47,17 +56,18 @@ impl EventRegistry {
     }
 
     #[track_caller]
-    pub(crate) fn add_event(&mut self, info: EventInfo) -> EventId {
-        if self.infos.len() >= EventId::NULL.0 as usize - 1 {
-            panic!("too many events added")
-        }
-
-        EventId(self.infos.insert(info) as u32)
+    pub(crate) unsafe fn add(&mut self, info: EventInfo) -> EventId {
+        EventId(self.infos.add(info))
     }
 
     #[inline]
-    pub(crate) fn event(&self, id: EventId) -> Option<&EventInfo> {
-        self.infos.get(id.0 as usize)
+    pub(crate) fn get(&self, id: EventId) -> Option<&EventInfo> {
+        self.infos.get(id.0)
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_unchecked(&self, id: EventId) -> &EventInfo {
+        self.infos.get_unchecked(id.0)
     }
 }
 
@@ -67,6 +77,7 @@ pub struct EventInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: Option<unsafe fn(NonNull<u8>)>,
+    kind: EventKind,
 }
 
 impl EventInfo {
@@ -76,7 +87,8 @@ impl EventInfo {
             type_id: Some(TypeId::of::<E>()),
             layout: Layout::new::<E>(),
             drop: mem::needs_drop::<E>()
-                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr()) }),
+                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<E>()) }),
+            kind: EventKind::Other,
         }
     }
 
@@ -95,28 +107,33 @@ impl EventInfo {
     pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
         self.drop
     }
+
+    pub fn kind(&self) -> EventKind {
+        self.kind
+    }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EventId(pub(crate) u32);
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct EventId(Ident);
 
 impl EventId {
-    pub const NULL: Self = Self(u32::MAX);
+    pub const NULL: Self = Self(Ident::NULL);
+
+    pub(crate) fn index(&self) -> u32 {
+        self.0.index
+    }
 
     #[inline]
     pub const fn to_bits(self) -> u64 {
-        self.0 as u64
+        self.0.to_bits()
     }
 
     #[inline]
-    pub const fn from_bits(bits: u64) -> Self {
-        Self(bits as u32)
-    }
-}
-
-impl Default for EventId {
-    fn default() -> Self {
-        Self::NULL
+    pub const fn from_bits(bits: u64) -> Option<Self> {
+        match Ident::from_bits(bits) {
+            Some(id) => Some(Self(id)),
+            None => None,
+        }
     }
 }
 
@@ -145,13 +162,14 @@ impl EventQueue {
 
         self.items.push(EventQueueItem {
             event_id,
-            event_ptr,
+            event_ptr: Some(event_ptr),
+            system_slice: &mut [],
+            system_idx: 0,
         });
     }
 
-    #[track_caller]
-    pub(crate) unsafe fn get_unchecked(&self, idx: usize) -> EventQueueItem {
-        *self.items.get_debug_checked(idx)
+    pub(crate) unsafe fn get_unchecked_mut(&mut self, idx: usize) -> &mut EventQueueItem {
+        self.items.get_debug_checked_mut(idx)
     }
 
     /// Clears the event queue and resets the internal bump allocator.
@@ -173,6 +191,10 @@ impl EventQueue {
     pub(crate) unsafe fn set_len(&mut self, new_len: usize) {
         self.items.set_len(new_len)
     }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> + '_ {
+        self.items.iter()
+    }
 }
 
 // SAFETY: The bump allocator is only accessed behind an exclusive reference to
@@ -183,8 +205,13 @@ unsafe impl Sync for EventQueue {}
 pub(crate) struct EventQueueItem {
     /// Type of this event.
     pub(crate) event_id: EventId,
-    /// Type-erased pointer to this event.
-    pub(crate) event_ptr: NonNull<u8>,
+    /// Type-erased pointer to this event. When `None`, ownership of the event
+    /// has been transferred and no destructor needs to run.
+    pub(crate) event_ptr: Option<NonNull<u8>>,
+    /// Slice of systems that handle this event.
+    pub(crate) system_slice: *mut [SystemListEntry],
+    /// Current index into the system slice.
+    pub(crate) system_idx: u32,
 }
 
 impl<E: Event> SystemParam for &'_ E {
@@ -426,3 +453,82 @@ macro_rules! impl_event_set_tuple {
 }
 
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Spawn(pub EntityId);
+
+unsafe impl Event for Spawn {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::Spawn
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Insert<C> {
+    pub component: C,
+    pub entity: EntityId,
+}
+
+impl<C> Insert<C> {
+    pub const fn new(component: C, entity: EntityId) -> Self {
+        Self { component, entity }
+    }
+}
+
+unsafe impl<C: Component> Event for Insert<C> {
+    fn init(world: &mut World) -> EventKind {
+        let id = world.init_component::<C>();
+        EventKind::InsertComponent(id)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Remove<C> {
+    pub entity: EntityId,
+    _marker: PhantomData<fn(C)>,
+}
+
+impl<C> Remove<C> {
+    pub const fn new(entity: EntityId) -> Self {
+        Self {
+            entity,
+            _marker: PhantomData,
+        }
+    }
+}
+
+unsafe impl<C: Component> Event for Remove<C> {
+    fn init(world: &mut World) -> EventKind {
+        let id = world.init_component::<C>();
+        EventKind::RemoveComponent(id)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Despawn(pub EntityId);
+
+unsafe impl Event for Despawn {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::Despawn
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Flush;
+
+unsafe impl Event for Flush {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::FlushCommands
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub enum EventKind {
+    #[default]
+    Other,
+    Spawn,
+    InsertComponent(ComponentId),
+    RemoveComponent(ComponentId),
+    Despawn,
+    FlushCommands,
+}
