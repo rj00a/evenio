@@ -12,7 +12,6 @@
     missing_debug_implementations,
     // missing_docs, // TODO
     unreachable_pub,
-    trivial_casts,
     trivial_numeric_casts,
     unused_lifetimes,
     unused_import_braces,
@@ -27,8 +26,6 @@
 
 const _: () = if std::mem::size_of::<usize>() <= 2 {
     panic!("unsupported target")
-} else {
-    ()
 };
 
 // Lets us use our own proc macros internally.
@@ -49,11 +46,10 @@ pub mod system;
 mod tests;
 mod util;
 pub mod world;
-mod id;
 
 pub mod prelude {
-    pub use crate::component::Component;
+    pub use crate::component::{Component, ComponentSet};
     pub use crate::entity::EntityId;
-    pub use crate::event::{Event, Sender, Take};
+    pub use crate::event::{Despawn, Event, EventSet, Insert, Sender, Spawn, Take};
     pub use crate::world::World;
 }

@@ -54,7 +54,7 @@ fn world_drops_events() {
 
     let arc = Arc::new(());
 
-    world.send_event(A(arc.clone()));
+    world.send(A(arc.clone()));
 
     drop(world);
 
@@ -111,7 +111,7 @@ fn world_drops_events_on_panic() {
     let arc = Arc::new(());
     let arc_cloned = arc.clone();
 
-    let res = panic::catch_unwind(move || world.send_event(A(arc_cloned)));
+    let res = panic::catch_unwind(move || world.send(A(arc_cloned)));
 
     assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
@@ -129,5 +129,5 @@ fn conflicting_sender_params() {
 
     assert!(world.add_system(system).is_err());
 
-    world.send_event(A(123));
+    world.send(A(123));
 }

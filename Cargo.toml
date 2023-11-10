@@ -10,8 +10,8 @@ members = ["evenio_macros"]
 ahash = "0.8.3"
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros" }
+rayon = { version = "1.8.0", optional = true }
 slab = "0.4.9"
-#TODO: rayon
 
 [dev-dependencies]
 divan = "0.1.2"

@@ -3,9 +3,12 @@ use std::any::TypeId;
 use std::mem::needs_drop;
 use std::ptr::{drop_in_place, NonNull};
 
+use evenio_macros::all_tuples;
 pub use evenio_macros::Component;
 use slab::Slab;
 
+use crate::entity::EntityId;
+use crate::event::{EventSet, Insert};
 use crate::util::TypeIdMap;
 
 pub trait Component: Send + Sync + 'static {}
@@ -64,7 +67,8 @@ impl ComponentInfo {
         Self {
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
-            drop: needs_drop::<C>().then_some(|ptr| unsafe { drop_in_place(ptr.as_ptr()) }),
+            drop: needs_drop::<C>()
+                .then_some(|ptr| unsafe { drop_in_place(ptr.cast::<C>().as_ptr()) }),
         }
     }
 
@@ -101,3 +105,37 @@ impl Default for ComponentId {
         Self::NULL
     }
 }
+
+pub trait ComponentSet {
+    type InsertEvents: EventSet;
+
+    fn into_insert_events(self, entity: EntityId) -> Self::InsertEvents;
+}
+
+impl<C: Component> ComponentSet for C {
+    type InsertEvents = Insert<C>;
+
+    fn into_insert_events(self, entity: EntityId) -> Self::InsertEvents {
+        Insert::new(self, entity)
+    }
+}
+
+macro_rules! impl_component_set_tuple {
+    ($(($C:ident, $c:ident)),*) => {
+        impl<$($C: ComponentSet),*> ComponentSet for ($($C,)*) {
+            type InsertEvents = ($($C::InsertEvents,)*);
+
+            fn into_insert_events(self, _entity: EntityId) -> Self::InsertEvents {
+                let ($($c,)*) = self;
+
+                (
+                    $(
+                        $c.into_insert_events(_entity),
+                    )*
+                )
+            }
+        }
+    }
+}
+
+all_tuples!(impl_component_set_tuple, 0, 15, C, c);

@@ -11,14 +11,16 @@ use std::{fmt, mem, ptr};
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
 pub use evenio_macros::Event;
+use slab::Slab;
 
-use crate::component::ComponentId;
-use crate::entity::EntityId;
-use crate::id::{Ident, Storage};
+use crate::component::{ComponentId, ComponentSet};
+use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::prelude::{Component, World};
-use crate::system::{Access, SystemInitArgs, SystemInitError, SystemListEntry, SystemParam};
+use crate::system::{
+    Access, SystemInfo, SystemInitArgs, SystemInitError, SystemListEntry, SystemParam,
+};
 use crate::util::{GetDebugChecked, TypeIdMap, UnwrapDebugChecked};
-use crate::world::SystemRunArgs;
+use crate::world::UnsafeWorldCell;
 
 pub unsafe trait Event: Send + Sync + 'static {
     fn init(_world: &mut World) -> EventKind {
@@ -28,14 +30,14 @@ pub unsafe trait Event: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub(crate) struct Events {
-    infos: Storage<EventInfo>,
+    infos: Slab<EventInfo>,
     typeid_to_id: TypeIdMap<EventId>,
 }
 
 impl Events {
     pub(crate) fn new() -> Self {
         Self {
-            infos: Storage::new(),
+            infos: Slab::new(),
             typeid_to_id: Default::default(),
         }
     }
@@ -57,17 +59,23 @@ impl Events {
 
     #[track_caller]
     pub(crate) unsafe fn add(&mut self, info: EventInfo) -> EventId {
-        EventId(self.infos.add(info))
+        let id = self.infos.insert(info);
+
+        if id >= EventId::NULL.0 as usize {
+            panic!("too many events added")
+        }
+
+        EventId(id as u32)
     }
 
     #[inline]
     pub(crate) fn get(&self, id: EventId) -> Option<&EventInfo> {
-        self.infos.get(id.0)
+        self.infos.get(id.0 as usize)
     }
 
     #[inline]
     pub(crate) unsafe fn get_unchecked(&self, id: EventId) -> &EventInfo {
-        self.infos.get_unchecked(id.0)
+        self.infos.get_debug_checked(id.0 as usize)
     }
 }
 
@@ -113,27 +121,34 @@ impl EventInfo {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct EventId(Ident);
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct EventId(u32);
 
 impl EventId {
-    pub const NULL: Self = Self(Ident::NULL);
+    pub const NULL: Self = Self(u32::MAX);
 
     pub(crate) fn index(&self) -> u32 {
-        self.0.index
+        self.0
     }
 
     #[inline]
     pub const fn to_bits(self) -> u64 {
-        self.0.to_bits()
+        self.0 as u64
     }
 
     #[inline]
     pub const fn from_bits(bits: u64) -> Option<Self> {
-        match Ident::from_bits(bits) {
-            Some(id) => Some(Self(id)),
-            None => None,
+        if bits <= u32::MAX as u64 {
+            Some(Self(bits as u32))
+        } else {
+            None
         }
+    }
+}
+
+impl Default for EventId {
+    fn default() -> Self {
+        Self::NULL
     }
 }
 
@@ -175,7 +190,7 @@ impl EventQueue {
     /// Clears the event queue and resets the internal bump allocator.
     ///
     /// Any remaining event pointers are invalidated.
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.items.clear();
         self.bump.reset();
     }
@@ -214,6 +229,29 @@ pub(crate) struct EventQueueItem {
     pub(crate) system_idx: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct EventPtr<'a> {
+    ptr: NonNull<Option<NonNull<u8>>>,
+    _marker: PhantomData<&'a mut u8>,
+}
+
+impl<'a> EventPtr<'a> {
+    pub(crate) fn new(ptr: &'a mut Option<NonNull<u8>>) -> Self {
+        Self {
+            ptr: NonNull::from(ptr),
+            _marker: PhantomData,
+        }
+    }
+
+    pub unsafe fn get(self) -> &'a Option<NonNull<u8>> {
+        &*self.ptr.as_ptr()
+    }
+
+    pub unsafe fn get_mut(self) -> &'a mut Option<NonNull<u8>> {
+        &mut *self.ptr.as_ptr()
+    }
+}
+
 impl<E: Event> SystemParam for &'_ E {
     type State = ();
     type Item<'s, 'a> = &'a E;
@@ -239,15 +277,17 @@ impl<E: Event> SystemParam for &'_ E {
     #[inline]
     unsafe fn get_param<'s, 'a>(
         _state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
         // SAFETY:
         // - Access to event pointer is shared.
         // - Event pointer is initialized as Some, so unwrap will not fail.
-        let ptr = args.event_ptr().unwrap_debug_checked().cast::<E>();
+        let ptr = event_ptr.get().unwrap_debug_checked().cast::<E>();
 
         // SAFETY: Caller guarantees pointer is valid and properly aligned.
-        Some(&*ptr.as_ref())
+        &*ptr.as_ref()
     }
 }
 
@@ -275,11 +315,13 @@ impl<E: Event> SystemParam for &'_ mut E {
 
     unsafe fn get_param<'s, 'a>(
         _state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        let mut ptr = args.event_ptr_mut().unwrap_debug_checked().cast::<E>();
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        let mut ptr = event_ptr.get_mut().unwrap_debug_checked().cast::<E>();
 
-        Some(&mut *ptr.as_mut())
+        &mut *ptr.as_mut()
     }
 }
 
@@ -338,15 +380,18 @@ impl<E: Event> SystemParam for Take<'_, E> {
 
     unsafe fn get_param<'s, 'a>(
         _state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        Some(Self::Item::new(args.event_ptr_mut()))
+        _system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        _world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Self::Item::new(event_ptr.get_mut())
     }
 }
 
 pub struct Sender<'s, 'a, Es: EventSet> {
     state: &'s Es::State,
     event_queue: &'a mut EventQueue,
+    world: UnsafeWorldCell<'a>,
 }
 
 impl<Es: EventSet> Sender<'_, '_, Es> {
@@ -354,6 +399,7 @@ impl<Es: EventSet> Sender<'_, '_, Es> {
     ///
     /// Panics if the given event type `E` is not in the `EventSet` of this
     /// sender. This may become a compile time error in the future.
+    #[track_caller]
     pub fn send<E: Event>(&mut self, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
@@ -368,6 +414,21 @@ impl<Es: EventSet> Sender<'_, '_, Es> {
             self.event_queue.push(event, event_id);
         }
     }
+
+    #[track_caller]
+    pub fn spawn(&mut self) -> EntityId {
+        unsafe { self.world.reserve_entity() }
+    }
+
+    /*
+    #[track_caller]
+    pub fn spawn<Cs: ComponentSet>(&mut self, components: Cs) -> EntityId {
+        let entity = self.entities.reserve(self.reserved_entities);
+
+        components.into_insert_events(entity).send(self);
+
+        entity
+    }*/
 
     // TODO: unsafe fn send_raw or similar.
 }
@@ -395,12 +456,15 @@ impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        Some(Sender {
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Sender {
             state,
-            event_queue: unsafe { args.event_queue_mut() },
-        })
+            event_queue: unsafe { world.event_queue_mut() },
+            world,
+        }
     }
 }
 
@@ -410,6 +474,9 @@ pub trait EventSet {
     fn new_state(world: &mut World) -> Self::State;
 
     fn event_id_of<E: Event>(state: &Self::State) -> Option<EventId>;
+
+    #[track_caller]
+    fn send<Es: EventSet>(self, sender: &mut Sender<Es>);
 }
 
 impl<E: Event> EventSet for E {
@@ -422,6 +489,10 @@ impl<E: Event> EventSet for E {
     #[inline]
     fn event_id_of<EE: Event>(state: &Self::State) -> Option<EventId> {
         (TypeId::of::<EE>() == TypeId::of::<E>()).then_some(*state)
+    }
+
+    fn send<Es: EventSet>(self, sender: &mut Sender<Es>) {
+        sender.send(self)
     }
 }
 
@@ -448,20 +519,19 @@ macro_rules! impl_event_set_tuple {
 
                 None
             }
+
+            fn send<Es: EventSet>(self, _sender: &mut Sender<Es>) {
+                let ($($e,)*) = self;
+
+                $(
+                    $e.send(_sender);
+                )*
+            }
         }
     };
 }
 
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Spawn(pub EntityId);
-
-unsafe impl Event for Spawn {
-    fn init(_world: &mut World) -> EventKind {
-        EventKind::Spawn
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Insert<C> {
@@ -482,7 +552,7 @@ unsafe impl<C: Component> Event for Insert<C> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Remove<C> {
     pub entity: EntityId,
     _marker: PhantomData<fn(C)>,
@@ -504,6 +574,15 @@ unsafe impl<C: Component> Event for Remove<C> {
     }
 }
 
+impl<C> Default for Remove<C> {
+    fn default() -> Self {
+        Self {
+            entity: Default::default(),
+            _marker: Default::default(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Despawn(pub EntityId);
 
@@ -513,12 +592,14 @@ unsafe impl Event for Despawn {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Flush;
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Spawn {
+    pub entity: EntityId,
+}
 
-unsafe impl Event for Flush {
-    fn init(_world: &mut World) -> EventKind {
-        EventKind::FlushCommands
+impl Spawn {
+    pub const fn new(entity: EntityId) -> Self {
+        Self { entity }
     }
 }
 
@@ -526,9 +607,7 @@ unsafe impl Event for Flush {
 pub enum EventKind {
     #[default]
     Other,
-    Spawn,
     InsertComponent(ComponentId),
     RemoveComponent(ComponentId),
     Despawn,
-    FlushCommands,
 }

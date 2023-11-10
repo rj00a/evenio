@@ -35,15 +35,34 @@ impl ErasedVec {
         }
     }
 
-    pub(crate) unsafe fn push(&mut self, ptr: NonNull<u8>) {
+    pub(crate) unsafe fn push(&mut self) -> NonNull<u8> {
         self.reserve(1);
 
-        // Where the new element will be placed.
-        let slot = self.data.as_ptr().add(self.len * self.elem_layout.size());
-
-        ptr::copy_nonoverlapping(ptr.as_ptr(), slot, self.elem_layout.size());
+        let slot = self.data.as_ptr().add(self.elem_layout.size() * self.len);
 
         self.len += 1;
+
+        NonNull::new_unchecked(slot)
+    }
+
+    pub(crate) unsafe fn swap_remove(&mut self, idx: usize) {
+        debug_assert!(idx < self.len, "index out of bounds");
+
+        let src = self
+            .data
+            .as_ptr()
+            .add(self.elem_layout.size() * (self.len - 1));
+        let dst = self.data.as_ptr().add(self.elem_layout.size() * idx);
+
+        if let Some(drop) = self.drop {
+            drop(NonNull::new_unchecked(dst));
+        }
+
+        self.len -= 1;
+
+        if src != dst {
+            ptr::copy_nonoverlapping(src, dst, self.elem_layout.size());
+        }
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -125,6 +144,10 @@ impl ErasedVec {
                 .expect_debug_checked("current capacity layout should be valid")
                 .0
         }
+    }
+
+    pub(crate) fn as_ptr(&self) -> NonNull<u8> {
+        self.data
     }
 }
 
@@ -243,32 +266,65 @@ mod tests {
 
     use super::*;
 
+    fn new_erased_vec<T>() -> ErasedVec {
+        unsafe {
+            ErasedVec::new(
+                Layout::new::<T>(),
+                mem::needs_drop::<T>()
+                    .then_some(|ptr| ptr::drop_in_place(ptr.cast::<T>().as_ptr())),
+            )
+        }
+    }
+
     #[test]
-    fn erased_vec() {
+    fn calls_drop_on_elements() {
         type T = Rc<()>;
 
         let elem = T::new(());
 
-        let mut vec = {
-            let layout = Layout::new::<T>();
-            let drop = |ptr: NonNull<u8>| unsafe { ptr::drop_in_place(ptr.cast::<T>().as_ptr()) };
-
-            unsafe { ErasedVec::new(layout, Some(drop)) }
-        };
+        let mut vec = new_erased_vec::<T>();
 
         for _ in 0..5 {
-            let mut elem = elem.clone();
-
             unsafe {
-                vec.push(NonNull::from(&mut elem).cast::<u8>());
+                let ptr = vec.push().as_ptr().cast::<T>();
+                ptr.write(elem.clone());
             }
-
-            // Ownership moved to the vector. Don't call the destructor twice.
-            mem::forget(elem);
         }
 
         drop(vec);
 
         assert_eq!(Rc::strong_count(&elem), 1);
+    }
+
+    #[test]
+    fn swap_remove() {
+        let mut vec = new_erased_vec::<String>();
+
+        let strings = ["aaa", "bbb", "ccc", "ddd"];
+
+        for s in strings {
+            unsafe {
+                vec.push().as_ptr().cast::<String>().write(s.into());
+            }
+        }
+
+        let ptr = vec.as_ptr().cast::<String>().as_ptr();
+
+        unsafe {
+            vec.swap_remove(1);
+
+            assert_eq!(*ptr.add(1), "ddd");
+
+            vec.swap_remove(2);
+
+            assert_eq!(*ptr.add(1), "ddd");
+
+            vec.swap_remove(0);
+
+            assert_eq!(*ptr, "ddd");
+
+            vec.swap_remove(0);
+            assert_eq!(vec.len, 0);
+        }
     }
 }

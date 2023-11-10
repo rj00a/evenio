@@ -6,35 +6,41 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, RwLock};
 
 use evenio_macros::all_tuples;
+use slab::Slab;
 
-use crate::event::EventId;
+use crate::event::{EventId, EventPtr};
 use crate::exclusive::Exclusive;
-use crate::id::{Ident, Storage};
 use crate::util::GetDebugChecked;
-use crate::world::{FromWorld, SystemRunArgs, World};
+use crate::world::{FromWorld, UnsafeWorldCell, World};
 
 #[derive(Debug)]
 pub(crate) struct Systems {
     /// Maps event indices to the list of all systems that handle the event.
     event_to_systems: Vec<SystemList>,
     /// Maps [`SystemId`]s to the system's location in `event_to_systems`.
-    locations: Storage<SystemLocation>,
+    locations: Slab<SystemLocation>,
 }
 
 impl Systems {
     pub(crate) fn new() -> Self {
         Self {
             event_to_systems: vec![],
-            locations: Storage::new(),
+            locations: Slab::new(),
         }
     }
 
     #[track_caller]
     pub(crate) fn add(&mut self, system: Box<dyn System>, mut info: SystemInfo) -> SystemId {
-        let system_id = SystemId(self.locations.add(SystemLocation {
-            event_idx: info.event_id.index(),
+        let id = self.locations.insert(SystemLocation {
+            event: info.event_id,
             list_idx: u32::MAX,
-        }));
+        });
+
+        if id >= SystemId::NULL.0 as usize {
+            panic!("too many systems added");
+        }
+
+        let system_id = SystemId(id as u32);
 
         info.system_id = system_id;
 
@@ -67,7 +73,10 @@ impl Systems {
 
         for list_idx in update_locations_start..list.entries.len() {
             let location_idx = list.entries[list_idx].info.system_id.0;
-            self.locations.get_mut(location_idx).unwrap().list_idx = list_idx as u32;
+            self.locations
+                .get_mut(location_idx as usize)
+                .unwrap()
+                .list_idx = list_idx as u32;
         }
 
         system_id
@@ -85,8 +94,8 @@ impl Systems {
     }
 
     pub(crate) fn remove(&mut self, id: SystemId) -> Option<(Box<dyn System>, SystemInfo)> {
-        self.locations.remove(id.0).map(|loc| {
-            let list = &mut self.event_to_systems[loc.event_idx as usize];
+        self.locations.try_remove(id.0 as usize).map(|loc| {
+            let list = &mut self.event_to_systems[loc.event.index() as usize];
 
             let entry = list.entries.remove(loc.list_idx as usize);
 
@@ -103,7 +112,7 @@ impl Systems {
 
             for entry in &mut list.entries[loc.list_idx as usize..] {
                 self.locations
-                    .get_mut(entry.info.system_id.0)
+                    .get_mut(entry.info.system_id.0 as usize)
                     .unwrap()
                     .list_idx -= 1;
             }
@@ -112,47 +121,22 @@ impl Systems {
         })
     }
 
-    /*
-    pub(crate) fn systems_for_event(
-        &self,
-        event_id: EventId,
-    ) -> impl Iterator<Item = (&dyn System, &SystemInfo)> {
-        let it = match self.event_to_systems.get(event_id.index() as usize) {
-            Some(list) => list.entries.iter(),
-            None => Default::default(),
-        };
-
-        it.map(|entry| (entry.system.as_ref(), entry.info.as_ref()))
-    }
-
-    pub(crate) fn systems_for_event_mut(
-        &mut self,
-        event_id: EventId,
-    ) -> impl Iterator<Item = (&mut dyn System, &SystemInfo)> {
-        let it = match self.event_to_systems.get_mut(event_id.0 as usize) {
-            Some(list) => list.entries.iter_mut(),
-            None => Default::default(),
-        };
-
-        it.map(|entry| (entry.system.as_mut(), entry.info.as_ref()))
-    }*/
-
     #[inline]
     pub(crate) unsafe fn systems_for_event_unchecked_mut(
         &mut self,
-        event_idx: u32,
+        event_id: EventId,
     ) -> &mut [SystemListEntry] {
         &mut self
             .event_to_systems
-            .get_debug_checked_mut(event_idx as usize)
+            .get_debug_checked_mut(event_id.index() as usize)
             .entries
     }
 
     #[inline]
     pub(crate) fn get(&self, system_id: SystemId) -> Option<(&dyn System, &SystemInfo)> {
-        self.locations.get(system_id.0).map(|loc| {
+        self.locations.get(system_id.0 as usize).map(|loc| {
             let entry =
-                &self.event_to_systems[loc.event_idx as usize].entries[loc.list_idx as usize];
+                &self.event_to_systems[loc.event.index() as usize].entries[loc.list_idx as usize];
             (entry.system.as_ref(), entry.info.as_ref())
         })
     }
@@ -162,9 +146,9 @@ impl Systems {
         &mut self,
         system_id: SystemId,
     ) -> Option<(&mut dyn System, &SystemInfo)> {
-        self.locations.get_mut(system_id.0).map(|loc| {
-            let entry =
-                &mut self.event_to_systems[loc.event_idx as usize].entries[loc.list_idx as usize];
+        self.locations.get_mut(system_id.0 as usize).map(|loc| {
+            let entry = &mut self.event_to_systems[loc.event.index() as usize].entries
+                [loc.list_idx as usize];
             (entry.system.as_mut(), entry.info.as_ref())
         })
     }
@@ -210,26 +194,35 @@ impl SystemInfo {
 /// The location of a system in [`Systems::event_to_systems`].
 #[derive(Debug)]
 struct SystemLocation {
-    event_idx: u32,
+    /// The event handled by this system. This is an index into
+    /// [`Systems::event_to_systems`].
+    event: EventId,
     /// Index into the [`SystemList`].
     list_idx: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct SystemId(Ident);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SystemId(u32);
 
 impl SystemId {
-    pub const NULL: Self = Self(Ident::NULL);
+    pub const NULL: Self = Self(u32::MAX);
 
     pub const fn to_bits(self) -> u64 {
-        self.0.to_bits()
+        self.0 as u64
     }
 
     pub const fn from_bits(bits: u64) -> Option<Self> {
-        match Ident::from_bits(bits) {
-            Some(id) => Some(Self(id)),
-            None => None,
+        if bits <= u32::MAX as u64 {
+            Some(Self(bits as u32))
+        } else {
+            None
         }
+    }
+}
+
+impl Default for SystemId {
+    fn default() -> Self {
+        Self::NULL
     }
 }
 
@@ -240,7 +233,8 @@ pub trait InitSystem<Marker> {
 }
 
 pub trait System: Send + Sync + Any + fmt::Debug {
-    unsafe fn run(&mut self, args: SystemRunArgs<'_>);
+    unsafe fn run(&mut self, system_info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
+
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -328,8 +322,10 @@ pub trait SystemParam {
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>>;
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a>;
 }
 
 macro_rules! impl_system_param_tuple {
@@ -351,13 +347,15 @@ macro_rules! impl_system_param_tuple {
             #[inline]
             unsafe fn get_param<'s, 'a>(
                 ($($s,)*): &'s mut Self::State,
-                _args: SystemRunArgs<'a>,
-            ) -> Option<Self::Item<'s, 'a>> {
-                Some((
+                _system_info: &'a SystemInfo,
+                _event_ptr: EventPtr<'a>,
+                _world: UnsafeWorldCell<'a>,
+            ) -> Self::Item<'s, 'a> {
+                (
                     $(
-                        $P::get_param($s, _args)?,
+                        $P::get_param($s, _system_info, _event_ptr, _world),
                     )*
-                ))
+                )
             }
         }
     }
@@ -401,10 +399,15 @@ where
     <F::Param as SystemParam>::State: fmt::Debug,
     Marker: 'static,
 {
-    unsafe fn run(&mut self, args: SystemRunArgs<'_>) {
-        if let Some(param) = <F::Param as SystemParam>::get_param(&mut self.state, args) {
-            self.func.run(param);
-        }
+    unsafe fn run(
+        &mut self,
+        system_info: &SystemInfo,
+        event_ptr: EventPtr,
+        world: UnsafeWorldCell,
+    ) {
+        let param =
+            <F::Param as SystemParam>::get_param(&mut self.state, system_info, event_ptr, world);
+        self.func.run(param);
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -476,11 +479,13 @@ impl<T: FromWorld + Send + 'static> SystemParam for Local<'_, T> {
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
-        _args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        Some(Local {
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Local {
             state: state.get_mut(),
-        })
+        }
     }
 }
 
@@ -509,9 +514,11 @@ impl SystemParam for SystemId {
 
     unsafe fn get_param<'s, 'a>(
         _state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        Some(args.system_info().system_id)
+        system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        _world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        system_info.system_id
     }
 }
 
@@ -526,9 +533,11 @@ impl SystemParam for &'_ SystemInfo {
 
     unsafe fn get_param<'s, 'a>(
         _state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        Some(args.system_info())
+        system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        _world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        system_info
     }
 }
 
@@ -543,9 +552,11 @@ impl<P: SystemParam> SystemParam for Mutex<P> {
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        P::get_param(state, args).map(Mutex::new)
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Mutex::new(P::get_param(state, system_info, event_ptr, world))
     }
 }
 
@@ -560,9 +571,11 @@ impl<P: SystemParam> SystemParam for RwLock<P> {
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
-        args: SystemRunArgs<'a>,
-    ) -> Option<Self::Item<'s, 'a>> {
-        P::get_param(state, args).map(RwLock::new)
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        RwLock::new(P::get_param(state, system_info, event_ptr, world))
     }
 }
 
@@ -574,7 +587,13 @@ mod tests {
     struct FakeSystem;
 
     impl System for FakeSystem {
-        unsafe fn run(&mut self, _args: SystemRunArgs<'_>) {}
+        unsafe fn run(
+            &mut self,
+            _system_info: &SystemInfo,
+            _event_ptr: EventPtr,
+            _world: UnsafeWorldCell,
+        ) {
+        }
 
         fn as_any(&self) -> &dyn Any {
             self
@@ -604,15 +623,9 @@ mod tests {
         info_3.priority = SystemPriority::Before;
         let id_3 = systems.add(Box::new(FakeSystem), info_3);
 
-        /*
-        let mut it = unsafe { systems
-            .systems_for_event_unchecked_mut(event_id.index()) }.into_iter()
-            .map(|entry| entry.system_id);
-        */
-
         let mut it = unsafe {
             systems
-                .systems_for_event_unchecked_mut(event_id.index())
+                .systems_for_event_unchecked_mut(event_id)
                 .into_iter()
                 .map(|entry| entry.info.system_id)
         };

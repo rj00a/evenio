@@ -1,11 +1,11 @@
-use std::num::NonZeroU32;
+use std::ptr::NonNull;
 
 use ahash::HashMap;
 
 use crate::component::{ComponentId, Components};
 use crate::entity::EntityId;
 use crate::erased_vec::ErasedVec;
-use crate::util::UnwrapDebugChecked;
+use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
 pub(crate) struct Archetypes {
@@ -16,9 +16,13 @@ pub(crate) struct Archetypes {
 impl Archetypes {
     pub(crate) fn new() -> Self {
         Self {
-            archetypes: vec![],
+            archetypes: vec![Archetype::empty()],
             by_components: HashMap::default(),
         }
+    }
+
+    pub(crate) fn empty_mut(&mut self) -> &mut Archetype {
+        unsafe { self.archetypes.get_debug_checked_mut(0) }
     }
 
     /*
@@ -47,16 +51,18 @@ impl Archetypes {
     }*/
 }
 
-// Using nonzero here so we can get a niche optimization for
-// `EntityLocation`. Ideally this would be a `NonMaxU32`.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct ArchetypeId(NonZeroU32);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct ArchetypeId(pub(crate) u32);
 
 impl ArchetypeId {
-    pub(crate) fn get(self) -> u32 {
-        self.0.get()
-    }
+    /// ID of the archetype with no components.
+    pub const EMPTY: Self = Self(0);
+    /// Marker used for nonexistent entities.
+    pub const NULL: Self = Self(u32::MAX);
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct ArchetypeRow(pub(crate) u32);
 
 #[derive(Debug)]
 pub(crate) struct Archetype {
@@ -68,6 +74,13 @@ pub(crate) struct Archetype {
 }
 
 impl Archetype {
+    fn empty() -> Self {
+        Self {
+            ids: vec![],
+            columns: Box::new([]),
+        }
+    }
+
     pub(crate) fn new(ids: impl IntoIterator<Item = ComponentId>, comps: &Components) -> Self {
         Self {
             ids: vec![],
@@ -84,6 +97,32 @@ impl Archetype {
                 })
                 .collect(),
         }
+    }
+
+    /// Add an entity to this archetype.
+    pub(crate) unsafe fn add(
+        &mut self,
+        id: EntityId,
+    ) -> (ArchetypeRow, impl Iterator<Item = NonNull<u8>> + '_) {
+        debug_assert!(self.ids.len() <= u32::MAX as usize);
+
+        let row = ArchetypeRow(self.ids.len() as u32);
+        self.ids.push(id);
+
+        let iter = self.columns.iter_mut().map(|col| col.data.push());
+
+        (row, iter)
+    }
+
+    pub(crate) unsafe fn swap_remove(&mut self, row: ArchetypeRow) -> Option<EntityId> {
+        debug_assert!(row.0 < self.ids.len() as u32);
+
+        for col in self.columns.iter_mut() {
+            col.data.swap_remove(row.0 as usize);
+        }
+
+        self.ids.swap_remove(row.0 as usize);
+        self.ids.get(row.0 as usize).copied()
     }
 
     /// Allocates space for one entity and returns its index in this archetype.
@@ -138,6 +177,14 @@ struct Column {
 // SAFETY: Component types are guaranteed Send and Sync.
 unsafe impl Send for Column {}
 unsafe impl Sync for Column {}
+
+pub(crate) struct ArchetypeSwapRemoveResult {
+    /// ID of the entity that was moved to fill the space left by the removed
+    /// entity.
+    pub(crate) moved_entity: EntityId,
+    /// Where the moved entity ended up.
+    pub(crate) dest_row: ArchetypeRow,
+}
 
 #[cfg(test)]
 mod tests {

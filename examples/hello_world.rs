@@ -8,7 +8,7 @@ pub fn main() {
     world.add_system(get_c).unwrap();
 
     println!("sending A!");
-    world.send_event(A);
+    world.send(A);
 }
 
 #[derive(Event)]

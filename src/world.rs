@@ -1,22 +1,21 @@
+use std::cell::UnsafeCell;
 use std::error::Error;
 use std::marker::PhantomData;
 use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr::NonNull;
 
-use crate::archetype::Archetypes;
+use crate::archetype::{ArchetypeId, Archetypes};
 use crate::component::{Component, ComponentId, Components};
-use crate::entity::{Entities, EntityId};
-use crate::event::{Event, EventId, EventKind, EventQueue, EventQueueItem, Events};
-use crate::system::{
-    InitSystem, SystemId, SystemInfo, SystemInitArgs, SystemInitError, SystemListEntry,
-    Systems,
-};
+use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
+use crate::event::{Event, EventId, EventKind, EventPtr, EventQueue, Events};
+use crate::system::{InitSystem, SystemId, SystemInfo, SystemInitArgs, SystemInitError, Systems};
 use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
 pub struct World {
     entities: Entities,
+    reserved_entities: ReservedEntities,
     components: Components,
     systems: Systems,
     archetypes: Archetypes,
@@ -28,22 +27,13 @@ impl World {
     pub fn new() -> Self {
         Self {
             entities: Entities::new(),
+            reserved_entities: ReservedEntities::new(),
             components: Components::new(),
             systems: Systems::new(),
             archetypes: Archetypes::new(),
             events: Events::new(),
             event_queue: EventQueue::new(),
         }
-    }
-
-    pub fn send_event<E: Event>(&mut self, event: E) {
-        let event_id = self.init_event::<E>();
-
-        unsafe {
-            self.event_queue.push(event, event_id);
-        }
-
-        self.eval_event_queue()
     }
 
     pub fn add_system<S, M>(&mut self, system: S) -> Result<SystemId, Box<dyn Error>>
@@ -68,11 +58,25 @@ impl World {
         Ok(self.systems.add(Box::new(system), info))
     }
 
-    fn eval_event_queue(&mut self) {
-        handle_events(0, self);
+    pub fn send<E: Event>(&mut self, event: E) {
+        let event_id = self.init_event::<E>();
 
-        debug_assert!(self.event_queue.is_empty());
-        self.event_queue.clear();
+        let event_count = self.event_queue.len();
+
+        unsafe {
+            self.event_queue.push(event, event_id);
+        }
+
+        self.eval_event_queue(event_count)
+    }
+
+    fn eval_event_queue(&mut self, event_start_idx: usize) {
+        handle_events(event_start_idx, self);
+
+        if self.event_queue.is_empty() {
+            // Resets the bump allocator.
+            self.event_queue.reset();
+        }
 
         fn handle_events(event_start_idx: usize, world: &mut World) {
             debug_assert!(event_start_idx < world.event_queue.len());
@@ -86,6 +90,9 @@ impl World {
 
                 let event_kind = event_info.kind();
 
+                // In case System::run or handle_events unwinds, we need to drop the event we're
+                // holding on the stack. The other events in the event queue will be handled by
+                // World's Drop impl.
                 struct EventDropper {
                     ptr: Option<NonNull<u8>>,
                     drop: Option<unsafe fn(NonNull<u8>)>,
@@ -102,16 +109,17 @@ impl World {
                 }
 
                 let mut event_dropper = EventDropper {
+                    // take() marks this pointer so we'll avoid dropping the event in World's Drop
+                    // impl.
                     ptr: item.event_ptr.take(),
                     drop: event_info.drop(),
                 };
 
+                debug_assert!(event_dropper.ptr.is_some());
+
                 // Initialize the system slice.
-                item.system_slice = unsafe {
-                    world
-                        .systems
-                        .systems_for_event_unchecked_mut(event_id.index())
-                };
+                item.system_slice =
+                    unsafe { world.systems.systems_for_event_unchecked_mut(event_id) };
 
                 loop {
                     let events_before = world.event_queue.len();
@@ -128,84 +136,59 @@ impl World {
 
                     item.system_idx += 1;
 
-                    let args = SystemRunArgs {
-                        event_ptr: &mut event_dropper.ptr,
-                        system_info: &entry.info,
-                        world,
-                        _marker: PhantomData,
-                    };
+                    unsafe {
+                        entry.system.run(
+                            &entry.info,
+                            EventPtr::new(&mut event_dropper.ptr),
+                            UnsafeWorldCell::new(world),
+                        )
+                    }
 
-                    unsafe { entry.system.run(args) }
+                    let empty = world.archetypes.empty_mut();
+
+                    // Spawn any entities reserved by the system.
+                    world
+                        .entities
+                        .flush_reserved(&mut world.reserved_entities, |id| {
+                            let (row, _) = unsafe { empty.add(id) };
+                            EntityLocation {
+                                archetype: ArchetypeId::EMPTY,
+                                row,
+                            }
+                        });
 
                     let events_after = world.event_queue.len();
 
                     if events_before < events_after {
-                        // Eagerly handle any events produced by the system we just ran.
+                        // Eagerly handle any events produced by the system.
                         handle_events(events_before, world);
                     }
 
                     debug_assert_eq!(world.event_queue.len(), events_before);
 
+                    // Did the system take ownership of the event?
                     if event_dropper.ptr.is_none() {
-                        // The system consumed the event. No other systems get to run.
-                        // No need to run event_dropper `Drop` impl because ownership of the event
-                        // has changed.
+                        // No need to run event_dropper Drop because it wouldn't do anything.
                         mem::forget(event_dropper);
                         continue 'next_event;
                     }
                 }
 
-                /*
-                while item.system_idx < unsafe { (*item.system_slice).len() as u32 } {
-                    let events_before = world.event_queue.len();
-
-                    {
-                        let entry = unsafe {
-                            (*item.system_slice).get_debug_checked_mut(item.system_idx as usize)
-                        };
-
-                        let args = SystemRunArgs {
-                            event_ptr: &mut event_ptr,
-                            system_info: &entry.info,
-                            world,
-                            _marker: PhantomData,
-                        };
-
-                        unsafe { entry.system.run(args) }
-
-                        if event_ptr.is_none() {
-                            // The system consumed the event. No other systems get to run.
-                            continue 'next_event;
-                        }
-                    }
-
-                    let events_after = world.event_queue.len();
-
-                    if events_before < events_after {
-                        // Eagerly handle any events produced by the system we just ran.
-                        handle_events(events_before, world);
-                    }
-
-                    debug_assert_eq!(world.event_queue.len(), events_before);
-                }*/
+                // SAFETY: `None` check was done at the end of the loop above.
+                let event_ptr = unsafe { event_dropper.ptr.unwrap_debug_checked() };
+                let drop_event = event_dropper.drop;
+                mem::forget(event_dropper);
 
                 match event_kind {
-                    EventKind::Other => {}
-                    EventKind::Spawn => todo!(),
+                    EventKind::Other => {
+                        if let Some(drop) = drop_event {
+                            unsafe { drop(event_ptr) }
+                        }
+                    }
                     EventKind::InsertComponent(component_id) => todo!(),
                     EventKind::RemoveComponent(component_id) => todo!(),
                     EventKind::Despawn => todo!(),
-                    EventKind::FlushCommands => todo!(),
                 }
-
-                /*
-                // None of the systems consumed the event, so it is our responsibility to call
-                // the destructor.
-                if let Some(drop) = event_info.drop() {
-                    unsafe {
-                        drop(event_ptr);
-                    }
-                }*/
             }
 
             // All events in this slice have been handled.
@@ -214,6 +197,8 @@ impl World {
             }
         }
     }
+
+    fn flush_reserved_entities(&mut self) {}
 
     pub fn init_event<E: Event>(&mut self) -> EventId {
         let kind = E::init(self);
@@ -226,11 +211,8 @@ impl World {
         self.components.init_component::<C>()
     }
 
-    // TODO: temp
-    pub fn spawn_entity_with_one_component<C: Component>(&mut self, component: C) -> EntityId {
-        self.init_component::<C>();
-
-        todo!()
+    pub fn entities(&self) -> &Entities {
+        &self.entities
     }
 }
 
@@ -239,7 +221,6 @@ impl Default for World {
         Self::new()
     }
 }
-
 
 impl Drop for World {
     fn drop(&mut self) {
@@ -275,33 +256,43 @@ impl<T: Default> FromWorld for T {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SystemRunArgs<'a> {
-    event_ptr: *mut Option<NonNull<u8>>,
-    system_info: &'a SystemInfo,
+pub struct UnsafeWorldCell<'a> {
     world: *mut World,
-    _marker: PhantomData<&'a mut World>,
+    _marker: PhantomData<(&'a World, &'a UnsafeCell<World>)>,
 }
 
-impl<'a> SystemRunArgs<'a> {
-    pub unsafe fn event_ptr(&self) -> Option<NonNull<u8>> {
-        *self.event_ptr
+// SAFETY: `&World` and `&mut World` are both `Send`
+unsafe impl Send for UnsafeWorldCell<'_> {}
+// SAFETY: `&World` and `&mut World` are both `Sync`
+unsafe impl Sync for UnsafeWorldCell<'_> {}
+
+impl<'a> UnsafeWorldCell<'a> {
+    pub(crate) fn new(world: &'a mut World) -> Self {
+        Self {
+            world,
+            _marker: PhantomData,
+        }
     }
 
-    pub unsafe fn event_ptr_mut(&self) -> &'a mut Option<NonNull<u8>> {
-        &mut *self.event_ptr
+    pub fn entities(self) -> &'a Entities {
+        unsafe { &(*self.world).entities }
     }
 
-    pub fn system_info(&self) -> &'a SystemInfo {
-        self.system_info
-    }
-
-    pub unsafe fn event_queue(&self) -> &'a EventQueue {
+    pub unsafe fn event_queue(self) -> &'a EventQueue {
         &(*self.world).event_queue
     }
 
-    pub unsafe fn event_queue_mut(&self) -> &'a mut EventQueue {
+    pub unsafe fn event_queue_mut(self) -> &'a mut EventQueue {
         &mut (*self.world).event_queue
     }
 
-    // TODO: more world methods.
+    /// # Safety
+    ///
+    /// Must have write permission to reserve entities.
+    ///
+    /// # Panics
+    pub unsafe fn reserve_entity(self) -> EntityId {
+        let reserved_entities = &mut (*self.world).reserved_entities;
+        self.entities().reserve(reserved_entities)
+    }
 }
