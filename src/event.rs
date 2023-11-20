@@ -171,7 +171,7 @@ impl EventQueue {
     /// # Safety
     ///
     /// `event_id` must be correct for the given event type. Otherwise,
-    /// undefined behavior may occur down the road.
+    /// undefined behavior may occur.
     pub unsafe fn push<E: Event>(&mut self, event: E, event_id: EventId) {
         let event_ptr = NonNull::from(self.bump.alloc(event)).cast::<u8>();
 
@@ -548,7 +548,7 @@ impl<C> Insert<C> {
 unsafe impl<C: Component> Event for Insert<C> {
     fn init(world: &mut World) -> EventKind {
         let id = world.init_component::<C>();
-        EventKind::InsertComponent(id)
+        EventKind::Insert(id)
     }
 }
 
@@ -570,7 +570,7 @@ impl<C> Remove<C> {
 unsafe impl<C: Component> Event for Remove<C> {
     fn init(world: &mut World) -> EventKind {
         let id = world.init_component::<C>();
-        EventKind::RemoveComponent(id)
+        EventKind::Remove(id)
     }
 }
 
@@ -584,15 +584,6 @@ impl<C> Default for Remove<C> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Despawn(pub EntityId);
-
-unsafe impl Event for Despawn {
-    fn init(_world: &mut World) -> EventKind {
-        EventKind::Despawn
-    }
-}
-
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Spawn {
     pub entity: EntityId,
 }
@@ -603,11 +594,66 @@ impl Spawn {
     }
 }
 
+unsafe impl Event for Spawn {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::Spawn
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Despawn(pub EntityId);
+
+unsafe impl Event for Despawn {
+    fn init(_world: &mut World) -> EventKind {
+        EventKind::Despawn
+    }
+}
+
+/// An [`Event`] used to send an event to a specific system. Only the system
+/// specified will receive the inner event.
+///
+/// A few scenarios where this could be useful:
+/// - A function-like system needs to "return" a value to a "caller".
+/// - An event sender has ahead-of-time knowledge about which systems are
+///   interested in the event, and would like to choose which systems receive
+///   the event for performance reasons.
+/// - Interacting with code outside the user's control in a hacky way.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct SendTo<E: Event> {
+    /// Identifier of the system that will receive the inner event. If the
+    /// identifier is invalid, then no system will receive the inner event.
+    pub system: EntityId,
+    /// The inner event to send to the system.
+    pub event: E,
+}
+
+impl<E: Event> SendTo<E> {
+    pub const fn new(system: EntityId, event: E) -> Self {
+        Self { system, event }
+    }
+}
+
+unsafe impl<E: Event> Event for SendTo<E> {
+    fn init(world: &mut World) -> EventKind {
+        EventKind::SendTo(world.init_event::<E>())
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub enum EventKind {
+    /// An event not covered by one of the other variants.
     #[default]
     Other,
-    InsertComponent(ComponentId),
-    RemoveComponent(ComponentId),
+    /// The [`Insert`] event. Contains the [`ComponentId`] of the component to
+    /// insert.
+    Insert(ComponentId),
+    /// The [`Remove`] event. Contains the [`ComponentId`] of the component to
+    /// remove.
+    Remove(ComponentId),
+    /// The [`Spawn`] event.
+    Spawn,
+    /// The [`Despawn`] event.
     Despawn,
+    /// The [`SendTo`] event. Contains the [`EventId`] of the event to send.
+    SendTo(EventId),
 }

@@ -7,6 +7,7 @@ use evenio_macros::all_tuples;
 pub use evenio_macros::Component;
 use slab::Slab;
 
+use crate::bit_set::BitSetIndex;
 use crate::entity::EntityId;
 use crate::event::{EventSet, Insert};
 use crate::util::TypeIdMap;
@@ -103,6 +104,16 @@ impl ComponentId {
 impl Default for ComponentId {
     fn default() -> Self {
         Self::NULL
+    }
+}
+
+impl BitSetIndex for ComponentId {
+    fn bit_set_index(self) -> usize {
+        self.0 as usize
+    }
+
+    fn from_bit_set_index(idx: usize) -> Self {
+        Self(idx as u32)
     }
 }
 

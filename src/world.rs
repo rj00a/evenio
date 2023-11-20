@@ -185,9 +185,11 @@ impl World {
                             unsafe { drop(event_ptr) }
                         }
                     }
-                    EventKind::InsertComponent(component_id) => todo!(),
-                    EventKind::RemoveComponent(component_id) => todo!(),
+                    EventKind::Insert(component_id) => todo!(),
+                    EventKind::Remove(component_id) => todo!(),
+                    EventKind::Spawn => todo!(),
                     EventKind::Despawn => todo!(),
+                    EventKind::SendTo(_) => todo!(),
                 }
             }
 

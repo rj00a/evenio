@@ -12,7 +12,7 @@
     missing_debug_implementations,
     // missing_docs, // TODO
     unreachable_pub,
-    trivial_numeric_casts,
+    // trivial_numeric_casts,
     unused_lifetimes,
     unused_import_braces,
     rust_2018_idioms,
@@ -28,7 +28,7 @@ const _: () = if std::mem::size_of::<usize>() <= 2 {
     panic!("unsupported target")
 };
 
-// Lets us use our own proc macros internally.
+// Lets us use our own derive macros internally.
 extern crate self as evenio;
 
 pub mod archetype;
@@ -46,6 +46,8 @@ pub mod system;
 mod tests;
 mod util;
 pub mod world;
+mod bit_set;
+mod access;
 
 pub mod prelude {
     pub use crate::component::{Component, ComponentSet};

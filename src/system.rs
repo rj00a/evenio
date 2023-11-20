@@ -6,8 +6,10 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, RwLock};
 
 use evenio_macros::all_tuples;
+use fixedbitset::FixedBitSet;
 use slab::Slab;
 
+use crate::bit_set::BitSetIndex;
 use crate::event::{EventId, EventPtr};
 use crate::exclusive::Exclusive;
 use crate::util::GetDebugChecked;
@@ -226,6 +228,16 @@ impl Default for SystemId {
     }
 }
 
+impl BitSetIndex for SystemId {
+    fn bit_set_index(self) -> usize {
+        self.0 as usize
+    }
+
+    fn from_bit_set_index(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+}
+
 pub trait InitSystem<Marker> {
     type System: System;
 
@@ -261,6 +273,17 @@ impl<'a> SystemInitArgs<'a> {
             event_queue_access: Default::default(),
         }
     }
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct SystemConfig {
+    priority: SystemPriority,
+    received_event_id: Option<EventId>,
+    received_event_access: Option<Access>,
+    sent_events: FixedBitSet,
+    event_queue_access: Option<Access>,
+    archetype_components_r: FixedBitSet,
+    archetype_components_rw: FixedBitSet,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
