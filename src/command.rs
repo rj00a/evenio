@@ -3,10 +3,6 @@ pub(crate) struct CommandQueue {
 }
 
 pub enum Command {
-    Insert {
-        
-    },
-    Remove {
-
-    }
+    Insert {},
+    Remove {},
 }

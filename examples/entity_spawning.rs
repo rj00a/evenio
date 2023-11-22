@@ -21,4 +21,3 @@ fn spawn_some_entities(_: &Foo, mut sender: Sender<Spawn>) {
     sender.spawn();
     sender.spawn();
 }
-

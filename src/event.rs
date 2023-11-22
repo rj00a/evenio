@@ -13,12 +13,12 @@ use evenio_macros::all_tuples;
 pub use evenio_macros::Event;
 use slab::Slab;
 
-use crate::component::{ComponentId, ComponentSet};
-use crate::entity::{Entities, EntityId, ReservedEntities};
+use crate::access::Access;
+use crate::bit_set::BitSetIndex;
+use crate::component::ComponentId;
+use crate::entity::EntityId;
 use crate::prelude::{Component, World};
-use crate::system::{
-    Access, SystemInfo, SystemInitArgs, SystemInitError, SystemListEntry, SystemParam,
-};
+use crate::system::{SystemConfig, SystemInfo, SystemInitError, SystemListEntry, SystemParam};
 use crate::util::{GetDebugChecked, TypeIdMap, UnwrapDebugChecked};
 use crate::world::UnsafeWorldCell;
 
@@ -152,6 +152,16 @@ impl Default for EventId {
     }
 }
 
+impl BitSetIndex for EventId {
+    fn bit_set_index(self) -> usize {
+        self.0 as usize
+    }
+
+    fn from_bit_set_index(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+}
+
 #[derive(Debug)]
 pub struct EventQueue {
     items: Vec<EventQueueItem>,
@@ -256,18 +266,18 @@ impl<E: Event> SystemParam for &'_ E {
     type State = ();
     type Item<'s, 'a> = &'a E;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        match args.event_access {
-            Some(Access::Read) => {}
-            None => args.event_access = Some(Access::Read),
-            _ => return Err(Box::new(SystemInitError::ConflictingEventAccess)),
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        if !config.access.received_event.is_compatible(Access::Read) {
+            return Err(Box::new(SystemInitError::ConflictingEventAccess));
         }
 
-        let this_id = args.world.init_event::<E>();
+        config.access.received_event = Access::Read;
 
-        if args.event_id == EventId::NULL {
-            args.event_id = this_id;
-        } else if args.event_id != this_id {
+        let this_id = world.init_event::<E>();
+
+        if config.received_event == EventId::NULL {
+            config.received_event = this_id;
+        } else if config.received_event != this_id {
             return Err(Box::new(SystemInitError::ConflictingEventType));
         }
 
@@ -295,18 +305,22 @@ impl<E: Event> SystemParam for &'_ mut E {
     type State = ();
     type Item<'s, 'a> = &'a mut E;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        if let Some(Access::Read | Access::ReadWrite) = args.event_access {
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        if !config
+            .access
+            .received_event
+            .is_compatible(Access::ReadWrite)
+        {
             return Err(Box::new(SystemInitError::ConflictingEventAccess));
         }
 
-        args.event_access = Some(Access::ReadWrite);
+        config.access.received_event = Access::ReadWrite;
 
-        let this_id = args.world.init_event::<E>();
+        let this_id = world.init_event::<E>();
 
-        if args.event_id == EventId::NULL {
-            args.event_id = this_id;
-        } else if args.event_id != this_id {
+        if config.received_event == EventId::NULL {
+            config.received_event = this_id;
+        } else if config.received_event != this_id {
             return Err(Box::new(SystemInitError::ConflictingEventType));
         }
 
@@ -373,8 +387,25 @@ impl<E: Event> SystemParam for Take<'_, E> {
 
     type Item<'s, 'a> = Take<'a, E>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        // TODO: register accessed things.
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        if !config
+            .access
+            .received_event
+            .is_compatible(Access::ReadWrite)
+        {
+            return Err(Box::new(SystemInitError::ConflictingEventAccess));
+        }
+
+        config.access.received_event = Access::ReadWrite;
+
+        let this_id = world.init_event::<E>();
+
+        if config.received_event == EventId::NULL {
+            config.received_event = this_id;
+        } else if config.received_event != this_id {
+            return Err(Box::new(SystemInitError::ConflictingEventType));
+        }
+
         Ok(())
     }
 
@@ -416,19 +447,14 @@ impl<Es: EventSet> Sender<'_, '_, Es> {
     }
 
     #[track_caller]
+    pub fn send_to<E: Event>(&mut self, system: EntityId, event: E) {
+        self.send(SendTo::new(system, event))
+    }
+
+    #[track_caller]
     pub fn spawn(&mut self) -> EntityId {
         unsafe { self.world.reserve_entity() }
     }
-
-    /*
-    #[track_caller]
-    pub fn spawn<Cs: ComponentSet>(&mut self, components: Cs) -> EntityId {
-        let entity = self.entities.reserve(self.reserved_entities);
-
-        components.into_insert_events(entity).send(self);
-
-        entity
-    }*/
 
     // TODO: unsafe fn send_raw or similar.
 }
@@ -444,14 +470,21 @@ impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
 
     type Item<'s, 'a> = Sender<'s, 'a, Es>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        if let Some(Access::Read | Access::ReadWrite) = args.event_queue_access {
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        if !config.access.event_queue.is_compatible(Access::ReadWrite) {
             return Err(Box::new(SystemInitError::ConflictingEventQueueAccess));
         }
 
-        args.event_queue_access = Some(Access::ReadWrite);
+        config.access.event_queue = Access::ReadWrite;
 
-        Ok(Es::new_state(args.world))
+        if !config.access.reserve_entity.is_compatible(Access::ReadWrite) {
+            // TODO: use a different enum variant.
+            return Err(Box::new(SystemInitError::ConflictingEventAccess));
+        }
+
+        config.access.reserve_entity = Access::ReadWrite;
+
+        Ok(Es::new_state(world))
     }
 
     unsafe fn get_param<'s, 'a>(

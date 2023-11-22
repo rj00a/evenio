@@ -1,15 +1,14 @@
 use std::any::Any;
-use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, RwLock};
 
 use evenio_macros::all_tuples;
-use fixedbitset::FixedBitSet;
 use slab::Slab;
 
-use crate::bit_set::BitSetIndex;
+use crate::access::SystemAccess;
+use crate::bit_set::{BitSet, BitSetIndex};
 use crate::event::{EventId, EventPtr};
 use crate::exclusive::Exclusive;
 use crate::util::GetDebugChecked;
@@ -178,7 +177,7 @@ pub(crate) struct SystemListEntry {
 pub struct SystemInfo {
     pub priority: SystemPriority,
     pub event_id: EventId,
-    pub event_access: Option<Access>,
+    pub access: SystemAccess,
     pub system_id: SystemId,
 }
 
@@ -187,7 +186,7 @@ impl SystemInfo {
         Self {
             priority: SystemPriority::default(),
             event_id: EventId::NULL,
-            event_access: None,
+            access: SystemAccess::default(),
             system_id: SystemId::NULL,
         }
     }
@@ -241,55 +240,31 @@ impl BitSetIndex for SystemId {
 pub trait InitSystem<Marker> {
     type System: System;
 
-    fn init_system(self, args: &mut SystemInitArgs<'_>) -> Result<Self::System, Box<dyn Error>>;
+    fn init_system(
+        self,
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> Result<Self::System, Box<dyn Error>>;
 }
 
-pub trait System: Send + Sync + Any + fmt::Debug {
+pub trait System: Send + Sync + fmt::Debug + 'static {
     unsafe fn run(&mut self, system_info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
-
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    unsafe fn notify(&mut self, notification: Notification);
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct SystemInitArgs<'a> {
-    pub world: &'a mut World,
-    pub name: Cow<'static, str>,
-    pub priority: SystemPriority,
-    pub event_id: EventId,
-    pub event_access: Option<Access>,
-    pub event_queue_access: Option<Access>,
+pub enum Notification {
+    // TODO
 }
 
-impl<'a> SystemInitArgs<'a> {
-    pub fn new(world: &'a mut World) -> Self {
-        Self {
-            world,
-            name: Default::default(),
-            priority: Default::default(),
-            event_id: Default::default(),
-            event_access: Default::default(),
-            event_queue_access: Default::default(),
-        }
-    }
-}
-
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default, Debug)]
+#[non_exhaustive]
 pub struct SystemConfig {
-    priority: SystemPriority,
-    received_event_id: Option<EventId>,
-    received_event_access: Option<Access>,
-    sent_events: FixedBitSet,
-    event_queue_access: Option<Access>,
-    archetype_components_r: FixedBitSet,
-    archetype_components_rw: FixedBitSet,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Access {
-    Read,
-    ReadWrite,
+    pub access: SystemAccess,
+    pub priority: SystemPriority,
+    pub received_event: EventId,
+    pub sent_events: BitSet<EventId>,
 }
 
 #[derive(Clone, Debug)]
@@ -341,7 +316,7 @@ pub trait SystemParam {
     type State: Send + Sync + 'static;
     type Item<'s, 'a>: SystemParam<State = Self::State>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>>;
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>>;
 
     unsafe fn get_param<'s, 'a>(
         state: &'s mut Self::State,
@@ -359,10 +334,10 @@ macro_rules! impl_system_param_tuple {
             type Item<'s, 'a> = ($($P::Item<'s, 'a>,)*);
 
             #[inline]
-            fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+            fn init(_world: &mut World, _config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
                 Ok((
                     $(
-                        $P::init(_args)?,
+                        $P::init(_world, _config)?,
                     )*
                 ))
             }
@@ -394,10 +369,14 @@ where
 {
     type System = FunctionSystem<Marker, F>;
 
-    fn init_system(self, args: &mut SystemInitArgs<'_>) -> Result<Self::System, Box<dyn Error>> {
+    fn init_system(
+        self,
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> Result<Self::System, Box<dyn Error>> {
         Ok(FunctionSystem {
             func: self,
-            state: <F::Param as SystemParam>::init(args)?,
+            state: <F::Param as SystemParam>::init(world, config)?,
         })
     }
 }
@@ -433,12 +412,8 @@ where
         self.func.run(param);
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    unsafe fn notify(&mut self, notification: Notification) {
+        todo!()
     }
 }
 
@@ -496,8 +471,8 @@ impl<T: FromWorld + Send + 'static> SystemParam for Local<'_, T> {
 
     type Item<'s, 'a> = Local<'s, T>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        Ok(Exclusive::new(T::from_world(args.world)))
+    fn init(world: &mut World, _config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        Ok(Exclusive::new(T::from_world(world)))
     }
 
     unsafe fn get_param<'s, 'a>(
@@ -531,7 +506,7 @@ impl SystemParam for SystemId {
 
     type Item<'s, 'a> = SystemId;
 
-    fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         Ok(())
     }
 
@@ -550,7 +525,7 @@ impl SystemParam for &'_ SystemInfo {
 
     type Item<'s, 'a> = &'a SystemInfo;
 
-    fn init(_args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         Ok(())
     }
 
@@ -569,8 +544,8 @@ impl<P: SystemParam> SystemParam for Mutex<P> {
 
     type Item<'s, 'a> = Mutex<P::Item<'s, 'a>>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        P::init(args)
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        P::init(world, config)
     }
 
     unsafe fn get_param<'s, 'a>(
@@ -588,8 +563,8 @@ impl<P: SystemParam> SystemParam for RwLock<P> {
 
     type Item<'s, 'a> = RwLock<P::Item<'s, 'a>>;
 
-    fn init(args: &mut SystemInitArgs<'_>) -> Result<Self::State, Box<dyn Error>> {
-        P::init(args)
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        P::init(world, config)
     }
 
     unsafe fn get_param<'s, 'a>(
@@ -618,13 +593,7 @@ mod tests {
         ) {
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
+        unsafe fn notify(&mut self, _notification: Notification) {}
     }
 
     #[test]

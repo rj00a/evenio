@@ -9,7 +9,7 @@ use crate::archetype::{ArchetypeId, Archetypes};
 use crate::component::{Component, ComponentId, Components};
 use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{Event, EventId, EventKind, EventPtr, EventQueue, Events};
-use crate::system::{InitSystem, SystemId, SystemInfo, SystemInitArgs, SystemInitError, Systems};
+use crate::system::{InitSystem, SystemConfig, SystemId, SystemInfo, SystemInitError, Systems};
 use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
@@ -40,18 +40,20 @@ impl World {
     where
         S: InitSystem<M>,
     {
-        let mut args = SystemInitArgs::new(self);
+        let mut config = SystemConfig::default();
 
-        let system = system.init_system(&mut args)?;
+        let system = system.init_system(self, &mut config)?;
 
-        if args.world.events.get(args.event_id).is_none() {
-            return Err(Box::new(SystemInitError::InvalidEventId(args.event_id)));
+        if self.events.get(config.received_event).is_none() {
+            return Err(Box::new(SystemInitError::InvalidEventId(
+                config.received_event,
+            )));
         }
 
         let info = SystemInfo {
-            priority: args.priority,
-            event_id: args.event_id,
-            event_access: args.event_access,
+            priority: config.priority,
+            event_id: config.received_event,
+            access: config.access,
             system_id: SystemId::NULL, // Filled in later.
         };
 

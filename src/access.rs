@@ -5,9 +5,10 @@ use crate::component::ComponentId;
 
 #[derive(Clone, Default, Debug)]
 pub struct SystemAccess {
-    pub event_access: Access,
-    pub event_queue_access: Access,
-    pub component_access: FilteredAccessExpr<ComponentId>,
+    pub received_event: Access,
+    pub event_queue: Access,
+    pub reserve_entity: Access,
+    pub components: FilteredAccessExpr<ComponentId>,
 }
 
 impl SystemAccess {
@@ -15,19 +16,16 @@ impl SystemAccess {
     /// parallel with each other (assuming they don't refer to the same system,
     /// since systems require `&mut self` to run.)
     pub fn is_compatible(&self, other: &Self) -> bool {
-        self.event_access.is_compatible(other.event_access)
-            && self
-                .event_queue_access
-                .is_compatible(other.event_queue_access)
-            && self.component_access.is_compatible(&other.component_access)
+        self.received_event.is_compatible(other.received_event)
+            && self.event_queue.is_compatible(other.event_queue)
+            && self.reserve_entity.is_compatible(other.reserve_entity)
+            && self.components.is_compatible(&other.components)
     }
 }
 
 pub struct FilteredAccessExpr<T> {
-    /// Unfiltered accesses describing Reads and Writes. If `None`, then the
-    /// expr is considered to be in conflict with itself, e.g. `(&mut T, &mut
-    /// T)`.
-    access: Option<AccessMap<T>>,
+    /// Unfiltered accesses describing Reads and Writes.
+    access: AccessMap<T>,
     /// The filters (With and Without) in disjunctive normal form. This is a
     /// series of ANDs joined by ORs.
     filters: Vec<AccessFilters<T>>,
@@ -45,7 +43,7 @@ impl<T: BitSetIndex + fmt::Debug> fmt::Debug for FilteredAccessExpr<T> {
 impl<T> FilteredAccessExpr<T> {
     pub fn new() -> Self {
         Self {
-            access: Some(AccessMap::new()),
+            access: AccessMap::new(),
             filters: vec![AccessFilters::default()],
         }
     }
@@ -67,56 +65,32 @@ impl<T> Default for FilteredAccessExpr<T> {
 }
 
 impl<T: BitSetIndex> FilteredAccessExpr<T> {
-    pub fn and_read(&mut self, value: T) {
-        if let Some(access) = &mut self.access {
-            if access.get(value).is_compatible(Access::Read) {
-                access.set(value, Access::Read);
-            } else {
-                self.access = None;
-            }
-        }
-
-        self.and_with(value);
+    pub fn and_read(&mut self, value: T) -> &mut Self {
+        self.access.set(value, Access::Read);
+        self.and_with(value)
     }
 
-    pub fn and_read_write(&mut self, value: T) {
-        if let Some(access) = &mut self.access {
-            if access.get(value).is_compatible(Access::ReadWrite) {
-                access.set(value, Access::ReadWrite);
-            } else {
-                self.access = None;
-            }
-        }
-
-        self.and_with(value);
+    pub fn and_read_write(&mut self, value: T) -> &mut Self {
+        self.access.set(value, Access::ReadWrite);
+        self.and_with(value)
     }
 
-    pub fn and_with(&mut self, value: T) {
+    pub fn and_with(&mut self, value: T) -> &mut Self {
         for f in &mut self.filters {
             f.with.insert(value);
         }
+        self
     }
 
-    pub fn and_without(&mut self, value: T) {
+    pub fn and_without(&mut self, value: T) -> &mut Self {
         for f in &mut self.filters {
             f.without.insert(value);
         }
+        self
     }
 
-    pub fn and(&mut self, other: &Self) {
-        match (&mut self.access, &other.access) {
-            (Some(this), Some(other)) => {
-                if this.is_compatible(other) {
-                    this.union(&other);
-                } else {
-                    self.access = None;
-                }
-            }
-            (Some(_), None) => {
-                self.access = None;
-            }
-            (None, _) => {}
-        }
+    pub fn and(&mut self, other: &Self) -> &mut Self {
+        self.access.union(&other.access);
 
         let mut new_filters = Vec::with_capacity(self.filters.len() * other.filters.len());
         for filter in &self.filters {
@@ -131,23 +105,18 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
         }
 
         self.filters = new_filters;
+        self
     }
 
-    pub fn or(&mut self, other: &Self) {
-        match (&mut self.access, &other.access) {
-            (Some(this), Some(other)) => {
-                this.union(other);
-            }
-            (Some(this), None) => {
-                self.access = None;
-            }
-            (None, _) => {}
-        }
+    pub fn or(&mut self, other: &Self) -> &mut Self {
+        self.access.union(&other.access);
 
         self.filters.extend(other.filters.iter().cloned());
+
+        self
     }
 
-    pub fn not(&mut self) {
+    pub fn not(&mut self) -> &mut Self {
         // Apply De Morgan's law to the filters and clear the access map.
 
         let mut res = Self::new();
@@ -156,7 +125,7 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
             mem::swap(&mut filter.with, &mut filter.without);
 
             let expr = Self {
-                access: Some(AccessMap::new()),
+                access: AccessMap::new(),
                 filters: vec![filter],
             };
 
@@ -164,41 +133,52 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
         }
 
         *self = res;
+
+        self
     }
 
-    pub fn xor(&mut self, other: &Self) {
+    pub fn xor(&mut self, other: &Self) -> &mut Self {
         // A ⊻ B = (A ∧ ¬B) ∨ (B ∧ ¬A).
-        todo!()
+
+        let mut this = self.clone();
+        let mut other = other.clone();
+
+        self.and(other.clone().not()).or(other.and(this.not()))
+    }
+
+    #[must_use]
+    pub fn is_read_compatible(&self, value: T) -> bool {
+        self.access.get(value).is_compatible(Access::Read)
+    }
+
+    #[must_use]
+    pub fn is_read_write_compatible(&self, value: T) -> bool {
+        self.access.get(value).is_compatible(Access::ReadWrite)
     }
 
     /// Whether these two accesses can be active at the same time without
     /// conflicting.
     pub fn is_compatible(&self, other: &Self) -> bool {
-        match (&self.access, &other.access) {
-            (Some(self_access), Some(other_access)) => {
-                if self_access.is_compatible(other_access) {
-                    // No need to check the filters if the accesses can't possibly conflict.
-                    true
-                } else {
-                    // The unfiltered accesses are incompatible, so check if the filters would make
-                    // the unfiltered access compatible.
-                    //
-                    // Since the filters are in disjunctive normal form (ORs of ANDs), we need to
-                    // check that all pairs of filters from `self` and `other` are disjoint.
-                    self.filters.iter().all(|filter| {
-                        other
-                            .filters
-                            .iter()
-                            .all(|other_filter| filter.is_disjoint(other_filter))
-                    })
-                }
-            }
-            _ => false,
+        if self.access.is_compatible(&other.access) {
+            // No need to check the filters if the accesses can't possibly conflict.
+            return true;
         }
+
+        // The unfiltered accesses are incompatible, so check if the filters would make
+        // the unfiltered access compatible.
+        //
+        // Since the filters are in disjunctive normal form (ORs of ANDs), we need to
+        // check that all pairs of filters from `self` and `other` are disjoint.
+        self.filters.iter().all(|filter| {
+            other
+                .filters
+                .iter()
+                .all(|other_filter| filter.is_disjoint(other_filter))
+        })
     }
 }
 
-/// A map from `T` to [`Access`].
+/// A map from `T` to `Access`.
 struct AccessMap<T> {
     read: BitSet<T>,
     write: BitSet<T>,
@@ -359,14 +339,15 @@ mod tests {
     fn read_write_conflict_and_one() {
         let mut expr = FilteredAccessExpr::<usize>::new();
 
-        assert!(expr.and_read_write(0));
-        assert!(!expr.and_read_write(0));
+        assert!(expr.is_read_write_compatible(0));
+
+        expr.and_read_write(0);
     }
 
     #[test]
     fn read_write_conflict_is_compatible() {
         let mut expr = FilteredAccessExpr::<usize>::new();
-        assert!(expr.and_read_write(0));
+        expr.and_read_write(0);
 
         let expr2 = expr.clone();
 
@@ -376,14 +357,13 @@ mod tests {
     #[test]
     fn compatible_access_basic() {
         let mut expr = FilteredAccessExpr::<usize>::new();
-        assert!(expr.and_read(0));
-        assert!(expr.and_read(0));
-        assert!(expr.and_read_write(1));
+        expr.and_read(0);
+        expr.and_read_write(1);
 
         let mut expr2 = FilteredAccessExpr::<usize>::new();
-        assert!(expr2.and_read(0));
+        expr2.and_read(0);
         expr2.and_with(1);
-        assert!(expr2.and_read_write(2));
+        expr2.and_read_write(2);
 
         assert!(expr.is_compatible(&expr2));
     }
@@ -391,11 +371,11 @@ mod tests {
     #[test]
     fn disjoint_filters() {
         let mut expr = FilteredAccessExpr::<usize>::new();
-        assert!(expr.and_read_write(0));
+        expr.and_read_write(0);
         expr.and_with(1);
 
         let mut expr2 = FilteredAccessExpr::<usize>::new();
-        assert!(expr2.and_read_write(0));
+        expr2.and_read_write(0);
         expr2.and_without(1);
 
         assert!(expr.is_compatible(&expr2));
@@ -404,12 +384,12 @@ mod tests {
     #[test]
     fn filter_contradiction() {
         let mut expr = FilteredAccessExpr::<usize>::new();
-        assert!(expr.and_read_write(0));
+        expr.and_read_write(0);
         expr.and_with(1);
         expr.and_without(1);
 
         let mut expr2 = FilteredAccessExpr::<usize>::new();
-        assert!(expr2.and_read_write(0));
+        expr2.and_read_write(0);
 
         assert!(expr.is_compatible(&expr2));
     }

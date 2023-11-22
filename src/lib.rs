@@ -19,7 +19,8 @@
     nonstandard_style,
     future_incompatible,
     clippy::dbg_macro,
-    clippy::undocumented_unsafe_blocks
+    clippy::undocumented_unsafe_blocks,
+    clippy::mod_module_files,
 )]
 // Warned by `future_incompatible`.
 #![allow(elided_lifetimes_in_paths)]
@@ -31,7 +32,9 @@ const _: () = if std::mem::size_of::<usize>() <= 2 {
 // Lets us use our own derive macros internally.
 extern crate self as evenio;
 
+mod access;
 pub mod archetype;
+mod bit_set;
 pub mod command;
 pub mod component;
 pub mod entity;
@@ -46,8 +49,6 @@ pub mod system;
 mod tests;
 mod util;
 pub mod world;
-mod bit_set;
-mod access;
 
 pub mod prelude {
     pub use crate::component::{Component, ComponentSet};
