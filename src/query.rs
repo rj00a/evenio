@@ -1,29 +1,18 @@
 use std::error::Error;
+use std::fmt;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::ptr::NonNull;
-use std::{fmt, mem};
 
-use crate::access::Access;
+use evenio_macros::all_tuples;
+
+use crate::access::FilteredAccessExpr;
 use crate::archetype::{Archetype, ArchetypeRow};
+use crate::component::ComponentId;
+use crate::entity::EntityId;
 use crate::prelude::{Component, World};
 use crate::system::{SystemConfig, SystemParam};
 use crate::world::UnsafeWorldCell;
-
-pub unsafe trait WorldQuery {
-    /// The item returned by this query. This is the same type as `Self`, but
-    /// with the correct lifetime.
-    type Item<'a>: WorldQuery;
-    /// Per-archetype state.
-    type Fetch: Send + Sync + Clone;
-
-    fn init(world: &mut World, config: &mut SystemConfig);
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch>;
-    unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_>;
-}
-
-pub trait ReadOnlyWorldQuery: WorldQuery {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a>;
-}
 
 pub struct Query<'a, 's, Q: WorldQuery> {
     world: UnsafeWorldCell<'a>,
@@ -72,22 +61,49 @@ pub struct QueryState<Q: WorldQuery> {
     sparse: Vec<Option<Q::Fetch>>,
 }
 
+pub unsafe trait WorldQuery {
+    /// The item returned by this query. This is usually same type as `Self`,
+    /// but with a transformed lifetime.
+    type Item<'a>;
+    /// Per-archetype state.
+    type Fetch: Send + Sync + Clone + 'static;
+    /// Cached data for fetch initialization. This is stored in [`QueryState`].
+    type State: Send + Sync + 'static;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State);
+
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch>;
+
+    unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_>;
+}
+
+pub trait ReadOnlyWorldQuery: WorldQuery {
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_>;
+}
+
 unsafe impl<C: Component> WorldQuery for &'_ C {
     type Item<'a> = &'a C;
 
-    type Fetch = RefFetch;
+    type Fetch = Column<C>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
+    type State = ComponentId;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
         let id = world.init_component::<C>();
 
-        if !config.access.components.is_read_compatible(id) {
-            todo!("nice error message");
-        }
+        let mut expr = FilteredAccessExpr::new();
+        expr.and_read(id);
 
-        config.access.components.and_read(id);
+        (expr, id)
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
         todo!()
     }
 
@@ -97,51 +113,128 @@ unsafe impl<C: Component> WorldQuery for &'_ C {
 }
 
 impl<C: Component> ReadOnlyWorldQuery for &'_ C {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        &*fetch
-            .column
-            .cast::<C>()
-            .as_ptr()
-            .cast_const()
-            .add(row.0 as usize)
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        &*fetch.0.as_ptr().cast_const().add(row.0 as usize)
     }
 }
 
 unsafe impl<C: Component> WorldQuery for &'_ mut C {
     type Item<'a> = &'a mut C;
 
-    type Fetch = RefFetch;
+    type Fetch = Column<C>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
+    type State = ComponentId;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
         let id = world.init_component::<C>();
 
-        assert!(
-            config.access.components.is_read_write_compatible(id),
-            "TODO: nice error message"
-        );
+        let mut expr = FilteredAccessExpr::new();
+        expr.and_read_write(id);
 
-        config.access.components.and_read_write(id);
+        (expr, id)
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
         todo!()
     }
 
     unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
-        &mut *fetch.column.cast::<C>().as_ptr().add(row.0 as usize)
+        &mut *fetch.0.as_ptr().add(row.0 as usize)
     }
 }
 
-/// The [`Qry::Fetch`] type for references (`&C` and `&mut C`).
-#[derive(Clone, Copy, Debug)]
-pub struct RefFetch {
-    /// Direct pointer to the archetype's column containing the component data.
-    column: NonNull<u8>,
+macro_rules! impl_query_tuple {
+    ($(($Q:ident, $q:ident)),*) => {
+        unsafe impl<$($Q: WorldQuery),*> WorldQuery for ($($Q,)*) {
+            type Item<'a> = ($($Q::Item<'a>,)*);
+
+            type Fetch = ($($Q::Fetch,)*);
+
+            type State = ($($Q::State,)*);
+
+            fn init(world: &mut World, config: &mut SystemConfig) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+                let mut res = FilteredAccessExpr::new();
+
+                $(
+                    let (expr, $q) = $Q::init(world, config);
+                    if !res.is_compatible(&expr) {
+                        panic!(
+                            "tuple element `{}` is incompatible with previous elements in the tuple",
+                            std::any::type_name::<$Q>()
+                        );
+                    }
+                    res.and(&expr);
+                )*
+
+                (res, ($($q,)*))
+            }
+
+            fn init_fetch(archetype: &Archetype, ($($q,)*): &mut Self::State) -> Option<Self::Fetch> {
+                Some((
+                    $(
+                        $Q::init_fetch(archetype, $q)?,
+                    )*
+                ))
+            }
+
+            unsafe fn fetch_mut(($($q,)*): &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+                (
+                    $(
+                        $Q::fetch_mut($q, row),
+                    )*
+                )
+            }
+        }
+
+        impl<$($Q: ReadOnlyWorldQuery),*> ReadOnlyWorldQuery for ($($Q,)*) {
+            unsafe fn fetch(($($q,)*): &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+                (
+                    $(
+                        $Q::fetch($q, row),
+                    )*
+                )
+            }
+        }
+    }
 }
 
-// SAFETY: RefFetch is just a wrapper around a pointer.
-unsafe impl Send for RefFetch {}
-unsafe impl Sync for RefFetch {}
+all_tuples!(impl_query_tuple, 0, 15, Q, q);
+
+unsafe impl<Q: WorldQuery> WorldQuery for Option<Q> {
+    type Item<'a> = Option<Q::Item<'a>>;
+
+    type Fetch = Option<Q::Fetch>;
+
+    type State = Q::State;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (mut expr, state) = Q::init(world, config);
+
+        expr.or(&FilteredAccessExpr::new());
+
+        (expr, state)
+    }
+
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
+        Some(Q::init_fetch(archetype, state))
+    }
+
+    unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        fetch.as_mut().map(|f| Q::fetch_mut(f, row))
+    }
+}
+
+impl<Q: ReadOnlyWorldQuery> ReadOnlyWorldQuery for Option<Q> {
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        fetch.as_ref().map(|f| Q::fetch(f, row))
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Or<L, R> {
@@ -189,23 +282,39 @@ where
 
     type Fetch = Or<L::Fetch, R::Fetch>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
-        let mut tmp = config.access.components.clone();
-        L::init(world, config);
-        mem::swap(&mut config.access.components, &mut tmp);
-        R::init(world, config);
+    type State = (L::State, R::State);
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (mut left_access, left_state) = L::init(world, config);
+        let (right_access, right_state) = R::init(world, config);
 
         // Need to check for compatibility because L and R can be active at the same
-        // time in the Or::Both case.
-        if !config.access.components.is_compatible(&tmp) {
+        // time in the `Or::Both` case.
+        if !left_access.is_compatible(&right_access) {
             todo!("nice error message");
         }
 
-        config.access.components.xor(&tmp);
+        left_access.or(&right_access);
+
+        (left_access, (left_state, right_state))
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
-        todo!()
+    fn init_fetch(
+        archetype: &Archetype,
+        (left_state, right_state): &mut Self::State,
+    ) -> Option<Self::Fetch> {
+        match (
+            L::init_fetch(archetype, left_state),
+            R::init_fetch(archetype, right_state),
+        ) {
+            (None, None) => None,
+            (None, Some(r)) => Some(Or::Right(r)),
+            (Some(l), None) => Some(Or::Left(l)),
+            (Some(l), Some(r)) => Some(Or::Both(l, r)),
+        }
     }
 
     unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
@@ -220,7 +329,7 @@ where
     L: ReadOnlyWorldQuery,
     R: ReadOnlyWorldQuery,
 {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
         fetch
             .as_ref()
             .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
@@ -269,20 +378,35 @@ where
 
     type Fetch = Xor<L::Fetch, R::Fetch>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
-        let mut tmp = config.access.components.clone();
-        L::init(world, config);
-        mem::swap(&mut config.access.components, &mut tmp);
-        R::init(world, config);
+    type State = (L::State, R::State);
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (mut left_access, left_state) = L::init(world, config);
+        let (right_access, right_state) = R::init(world, config);
 
         // No need to check for compatilibity because only one of L and R is active at
         // the same time.
+        left_access.xor(&right_access);
 
-        config.access.components.xor(&tmp);
+        (left_access, (left_state, right_state))
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
-        todo!()
+    fn init_fetch(
+        archetype: &Archetype,
+        (left_state, right_state): &mut Self::State,
+    ) -> Option<Self::Fetch> {
+        match (
+            L::init_fetch(archetype, left_state),
+            R::init_fetch(archetype, right_state),
+        ) {
+            (None, None) => None,
+            (None, Some(r)) => Some(Xor::Right(r)),
+            (Some(l), None) => Some(Xor::Left(l)),
+            (Some(_), Some(_)) => None,
+        }
     }
 
     unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
@@ -297,7 +421,7 @@ where
     L: ReadOnlyWorldQuery,
     R: ReadOnlyWorldQuery,
 {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
         fetch
             .as_ref()
             .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
@@ -337,13 +461,24 @@ unsafe impl<Q: WorldQuery> WorldQuery for Not<Q> {
 
     type Fetch = ();
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
-        Q::init(world, config);
-        config.access.components.not();
+    type State = Q::State;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (mut expr, state) = Q::init(world, config);
+
+        expr.not();
+
+        (expr, state)
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
-        todo!()
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
+        match Q::init_fetch(archetype, state) {
+            Some(_) => None,
+            None => Some(()),
+        }
     }
 
     unsafe fn fetch_mut(_fetch: &mut Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
@@ -352,52 +487,59 @@ unsafe impl<Q: WorldQuery> WorldQuery for Not<Q> {
 }
 
 impl<Q: WorldQuery> ReadOnlyWorldQuery for Not<Q> {
-    unsafe fn fetch<'a>(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn fetch(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
         Not::new()
     }
 }
 
-pub struct With<C>(PhantomData<fn(C)>);
+pub struct With<Q>(PhantomData<fn(Q)>);
 
-impl<C> With<C> {
+impl<Q> With<Q> {
     pub const fn new() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<C> Clone for With<C> {
+impl<Q> Clone for With<Q> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<C> Copy for With<C> {}
+impl<Q> Copy for With<Q> {}
 
-impl<C> Default for With<C> {
+impl<Q> Default for With<Q> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-impl<C> fmt::Debug for With<C> {
+impl<Q> fmt::Debug for With<Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("With").finish()
     }
 }
 
-unsafe impl<C: Component> WorldQuery for With<C> {
+unsafe impl<Q: WorldQuery> WorldQuery for With<Q> {
     type Item<'a> = Self;
 
     type Fetch = ();
 
-    fn init(world: &mut World, config: &mut SystemConfig) {
-        let id = world.init_component::<C>();
+    type State = Q::State;
 
-        config.access.components.and_with(id);
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (mut expr, state) = Q::init(world, config);
+
+        expr.clear_access();
+
+        (expr, state)
     }
 
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
-        todo!()
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
+        Q::init_fetch(archetype, state).map(|_| ())
     }
 
     unsafe fn fetch_mut(_fetch: &mut Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
@@ -405,62 +547,141 @@ unsafe impl<C: Component> WorldQuery for With<C> {
     }
 }
 
-impl<C: Component> ReadOnlyWorldQuery for With<C> {
-    unsafe fn fetch<'a>(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
+impl<Q: WorldQuery> ReadOnlyWorldQuery for With<Q> {
+    unsafe fn fetch(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
         With::new()
     }
 }
 
-pub struct Without<C>(PhantomData<fn(C)>);
+pub struct Has<Q> {
+    has: bool,
+    _marker: PhantomData<fn(Q)>,
+}
 
-impl<C> Without<C> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
+impl<Q> Has<Q> {
+    pub const fn new(has: bool) -> Self {
+        Self {
+            has,
+            _marker: PhantomData,
+        }
+    }
+
+    pub const fn get(self) -> bool {
+        self.has
     }
 }
 
-impl<C> Clone for Without<C> {
+impl<Q> Clone for Has<Q> {
+    fn clone(&self) -> Self {
+        Self {
+            has: self.has,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<Q> Copy for Has<Q> {}
+
+impl<Q> Default for Has<Q> {
+    fn default() -> Self {
+        Self {
+            has: false,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<Q> fmt::Debug for Has<Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Has").field(&self.has).finish()
+    }
+}
+
+impl<Q> Deref for Has<Q> {
+    type Target = bool;
+
+    fn deref(&self) -> &Self::Target {
+        &self.has
+    }
+}
+
+unsafe impl<Q: WorldQuery> WorldQuery for Has<Q> {
+    type Item<'a> = Self;
+
+    type Fetch = bool;
+
+    type State = Q::State;
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        let (_, state) = Q::init(world, config);
+
+        (FilteredAccessExpr::new(), state)
+    }
+
+    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
+        Some(Q::init_fetch(archetype, state).is_some())
+    }
+
+    unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        Self::fetch(fetch, row)
+    }
+}
+
+impl<Q: WorldQuery> ReadOnlyWorldQuery for Has<Q> {
+    unsafe fn fetch(fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
+        Has::new(*fetch)
+    }
+}
+
+unsafe impl WorldQuery for EntityId {
+    type Item<'a> = Self;
+
+    type Fetch = Column<EntityId>;
+
+    type State = ();
+
+    fn init(
+        world: &mut World,
+        config: &mut SystemConfig,
+    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+        Default::default()
+    }
+
+    fn init_fetch(archetype: &Archetype, (): &mut Self::State) -> Option<Self::Fetch> {
+        todo!()
+    }
+
+    unsafe fn fetch_mut(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        *fetch.0.as_ptr().add(row.0 as usize)
+    }
+}
+
+impl ReadOnlyWorldQuery for EntityId {
+    unsafe fn fetch(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'_> {
+        *fetch.0.as_ptr().cast_const().add(row.0 as usize)
+    }
+}
+
+pub struct Column<T>(NonNull<T>);
+
+impl<T> Clone for Column<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<C> Copy for Without<C> {}
+impl<T> Copy for Column<T> {}
 
-impl<C> Default for Without<C> {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
-
-impl<C> fmt::Debug for Without<C> {
+impl<T> fmt::Debug for Column<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Without").finish()
+        f.debug_tuple("Column").field(&self.0).finish()
     }
 }
 
-unsafe impl<C: Component> WorldQuery for Without<C> {
-    type Item<'a> = Self;
-
-    type Fetch = ();
-
-    fn init(world: &mut World, config: &mut SystemConfig) {
-        let id = world.init_component::<C>();
-
-        config.access.components.and_without(id);
-    }
-
-    fn init_fetch(archetype: &Archetype) -> Option<Self::Fetch> {
-        todo!()
-    }
-
-    unsafe fn fetch_mut(_fetch: &mut Self::Fetch, _row: ArchetypeRow) -> Self::Item<'_> {
-        Without::new()
-    }
-}
-
-impl<C: Component> ReadOnlyWorldQuery for Without<C> {
-    unsafe fn fetch<'a>(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
-        Without::new()
-    }
-}
+// SAFETY: `Column` is just a wrapper around a pointer, so these impls are
+// safe on their own.
+unsafe impl<T> Send for Column<T> {}
+unsafe impl<T> Sync for Column<T> {}

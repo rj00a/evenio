@@ -146,16 +146,6 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
         self.and(other.clone().not()).or(other.and(this.not()))
     }
 
-    #[must_use]
-    pub fn is_read_compatible(&self, value: T) -> bool {
-        self.access.get(value).is_compatible(Access::Read)
-    }
-
-    #[must_use]
-    pub fn is_read_write_compatible(&self, value: T) -> bool {
-        self.access.get(value).is_compatible(Access::ReadWrite)
-    }
-
     /// Whether these two accesses can be active at the same time without
     /// conflicting.
     pub fn is_compatible(&self, other: &Self) -> bool {
@@ -175,6 +165,10 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
                 .iter()
                 .all(|other_filter| filter.is_disjoint(other_filter))
         })
+    }
+
+    pub fn clear_access(&mut self) {
+        self.access.clear();
     }
 }
 
