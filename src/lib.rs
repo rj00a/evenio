@@ -1,29 +1,4 @@
-//! TODO
-#![deny(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::private_intra_doc_links,
-    rustdoc::missing_crate_level_docs,
-    rustdoc::invalid_codeblock_attributes,
-    rustdoc::invalid_rust_codeblocks,
-    rustdoc::bare_urls,
-    rustdoc::invalid_html_tags
-)]
-#![warn(
-    missing_debug_implementations,
-    // missing_docs, // TODO
-    unreachable_pub,
-    // trivial_numeric_casts,
-    unused_lifetimes,
-    unused_import_braces,
-    rust_2018_idioms,
-    nonstandard_style,
-    future_incompatible,
-    clippy::dbg_macro,
-    clippy::undocumented_unsafe_blocks,
-    clippy::mod_module_files,
-)]
-// Warned by `future_incompatible`.
-#![allow(elided_lifetimes_in_paths)]
+#![doc = include_str!("../README.md")]
 
 const _: () = if std::mem::size_of::<usize>() <= 2 {
     panic!("unsupported target")
