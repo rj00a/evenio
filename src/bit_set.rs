@@ -2,7 +2,7 @@ use core::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 
-use crate::util::GetDebugChecked;
+use crate::debug_checked::GetDebugChecked;
 
 /// A set data structure backed by a vector of bits.
 pub(crate) struct BitSet<T = usize> {

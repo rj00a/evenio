@@ -10,7 +10,7 @@ use slab::Slab;
 use crate::bit_set::BitSetIndex;
 use crate::entity::EntityId;
 use crate::event::{EventSet, Insert};
-use crate::util::TypeIdMap;
+use crate::type_id_hash::TypeIdMap;
 
 pub trait Component: Send + Sync + 'static {}
 

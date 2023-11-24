@@ -3,9 +3,9 @@ use std::ptr::NonNull;
 use ahash::HashMap;
 
 use crate::component::{ComponentId, Components};
+use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
 use crate::erased_vec::ErasedVec;
-use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
 pub(crate) struct Archetypes {

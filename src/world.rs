@@ -7,10 +7,10 @@ use std::ptr::NonNull;
 
 use crate::archetype::{ArchetypeId, Archetypes};
 use crate::component::{Component, ComponentId, Components};
+use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{Event, EventId, EventKind, EventPtr, EventQueue, Events};
 use crate::system::{InitSystem, SystemConfig, SystemId, SystemInfo, SystemInitError, Systems};
-use crate::util::{GetDebugChecked, UnwrapDebugChecked};
 
 #[derive(Debug)]
 pub struct World {

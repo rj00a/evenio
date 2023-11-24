@@ -9,9 +9,9 @@ use slab::Slab;
 
 use crate::access::SystemAccess;
 use crate::bit_set::{BitSet, BitSetIndex};
+use crate::debug_checked::GetDebugChecked;
 use crate::event::{EventId, EventPtr};
 use crate::exclusive::Exclusive;
-use crate::util::GetDebugChecked;
 use crate::world::{FromWorld, UnsafeWorldCell, World};
 
 #[derive(Debug)]

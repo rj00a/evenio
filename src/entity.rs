@@ -1,8 +1,7 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
-use crate::archetype::{ArchetypeId, ArchetypeRow};
-use crate::util::GetDebugChecked;
+use crate::{archetype::{ArchetypeId, ArchetypeRow}, debug_checked::GetDebugChecked};
 
 #[derive(Debug)]
 pub struct Entities {

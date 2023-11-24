@@ -47,8 +47,9 @@ pub mod query;
 pub mod system;
 #[cfg(test)]
 mod tests;
-mod util;
 pub mod world;
+mod debug_checked;
+mod type_id_hash;
 
 pub mod prelude {
     pub use crate::component::{Component, ComponentSet};

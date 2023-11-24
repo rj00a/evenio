@@ -16,10 +16,11 @@ use slab::Slab;
 use crate::access::Access;
 use crate::bit_set::BitSetIndex;
 use crate::component::ComponentId;
+use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
 use crate::prelude::{Component, World};
 use crate::system::{SystemConfig, SystemInfo, SystemInitError, SystemListEntry, SystemParam};
-use crate::util::{GetDebugChecked, TypeIdMap, UnwrapDebugChecked};
+use crate::type_id_hash::TypeIdMap;
 use crate::world::UnsafeWorldCell;
 
 pub unsafe trait Event: Send + Sync + 'static {

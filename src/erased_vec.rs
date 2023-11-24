@@ -2,7 +2,7 @@ use std::alloc::Layout;
 use std::ptr::NonNull;
 use std::{alloc, ptr};
 
-use crate::util::{capacity_overflow, UnwrapDebugChecked};
+use crate::debug_checked::UnwrapDebugChecked;
 
 /// Like `Vec<T>`, but `T` is erased.
 #[derive(Debug)]
@@ -257,6 +257,11 @@ const fn pad_to_align(layout: &Layout) -> Layout {
 
     // SAFETY: padded size is guaranteed to not exceed `isize::MAX`.
     unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) }
+}
+
+#[cold]
+fn capacity_overflow() -> ! {
+    panic!("capacity overflow")
 }
 
 #[cfg(test)]
