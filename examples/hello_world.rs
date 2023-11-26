@@ -1,5 +1,14 @@
 use evenio::prelude::*;
 
+#[derive(Event)]
+struct A;
+
+#[derive(Event)]
+struct B;
+
+#[derive(Event)]
+struct C;
+
 pub fn main() {
     let mut world = World::new();
 
@@ -10,15 +19,6 @@ pub fn main() {
     println!("sending A!");
     world.send(A);
 }
-
-#[derive(Event)]
-struct A;
-
-#[derive(Event)]
-struct B;
-
-#[derive(Event)]
-struct C;
 
 fn get_a_send_b(_: &A, mut sender: Sender<B>) {
     println!("got A, sending B twice!");

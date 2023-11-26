@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use evenio_macros::all_tuples;
 
-use crate::access::FilteredAccessExpr;
+use crate::access::{AccessExpr, Access};
 use crate::archetype::{Archetype, ArchetypeRow};
 use crate::component::ComponentId;
 use crate::entity::EntityId;
@@ -34,11 +34,18 @@ where
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         // TODO: iterate over archetypes and initialize dense and sparse arrays.
 
-        todo!();
+        let (expr, state) = Q::init(world, config);
+
+        if !config.access.components.is_compatible(&expr) {
+            panic!("aklwjdjklawdjkl");
+        }
+
+        config.access.components.and(&expr);
 
         Ok(QueryState {
             dense: vec![],
             sparse: vec![],
+            state,
         })
     }
 
@@ -59,6 +66,25 @@ pub struct QueryState<Q: WorldQuery> {
     /// means the query doesn't match the archetype. Used for random access
     /// `Entity` lookups.
     sparse: Vec<Option<Q::Fetch>>,
+    state: Q::State,
+}
+
+impl<Q: WorldQuery> fmt::Debug for QueryState<Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QueryState")
+            .field("dense", &self.dense)
+            .field("sparse", &self.sparse)
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+struct DenseFetch<F> {
+    /// Collection of archetype column pointers.
+    fetch: F,
+    /// Pointer to the length of the fetched archetype columns.
+    length: *const usize,
 }
 
 pub unsafe trait WorldQuery {
@@ -66,14 +92,14 @@ pub unsafe trait WorldQuery {
     /// but with a transformed lifetime.
     type Item<'a>;
     /// Per-archetype state.
-    type Fetch: Send + Sync + Clone + 'static;
+    type Fetch: Send + Sync + Clone + fmt::Debug + 'static;
     /// Cached data for fetch initialization. This is stored in [`QueryState`].
-    type State: Send + Sync + 'static;
+    type State: Send + Sync + fmt::Debug + 'static;
 
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State);
+    ) -> (AccessExpr<ComponentId>, Self::State);
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch>;
 
@@ -87,18 +113,16 @@ pub trait ReadOnlyWorldQuery: WorldQuery {
 unsafe impl<C: Component> WorldQuery for &'_ C {
     type Item<'a> = &'a C;
 
-    type Fetch = Column<C>;
+    type Fetch = ColumnPtr<C>;
 
     type State = ComponentId;
 
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let id = world.init_component::<C>();
-
-        let mut expr = FilteredAccessExpr::new();
-        expr.and_read(id);
+        let expr = AccessExpr::with(id, Access::Read);
 
         (expr, id)
     }
@@ -121,18 +145,16 @@ impl<C: Component> ReadOnlyWorldQuery for &'_ C {
 unsafe impl<C: Component> WorldQuery for &'_ mut C {
     type Item<'a> = &'a mut C;
 
-    type Fetch = Column<C>;
+    type Fetch = ColumnPtr<C>;
 
     type State = ComponentId;
 
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let id = world.init_component::<C>();
-
-        let mut expr = FilteredAccessExpr::new();
-        expr.and_read_write(id);
+        let expr = AccessExpr::with(id, Access::ReadWrite);
 
         (expr, id)
     }
@@ -155,8 +177,11 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
-            fn init(world: &mut World, config: &mut SystemConfig) -> (FilteredAccessExpr<ComponentId>, Self::State) {
-                let mut res = FilteredAccessExpr::new();
+            fn init(world: &mut World, config: &mut SystemConfig) -> (AccessExpr<ComponentId>, Self::State) {
+                #![allow(unused_variables)]
+
+                #[allow(unused_mut)]
+                let mut res = AccessExpr::one();
 
                 $(
                     let (expr, $q) = $Q::init(world, config);
@@ -201,7 +226,8 @@ macro_rules! impl_query_tuple {
     }
 }
 
-all_tuples!(impl_query_tuple, 0, 15, Q, q);
+// Debug impls for tuples only go up to arity 12.
+all_tuples!(impl_query_tuple, 0, 12, Q, q);
 
 unsafe impl<Q: WorldQuery> WorldQuery for Option<Q> {
     type Item<'a> = Option<Q::Item<'a>>;
@@ -213,10 +239,10 @@ unsafe impl<Q: WorldQuery> WorldQuery for Option<Q> {
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
-        expr.or(&FilteredAccessExpr::new());
+        expr.or(&AccessExpr::one());
 
         (expr, state)
     }
@@ -287,7 +313,7 @@ where
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (mut left_access, left_state) = L::init(world, config);
         let (right_access, right_state) = R::init(world, config);
 
@@ -383,7 +409,7 @@ where
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (mut left_access, left_state) = L::init(world, config);
         let (right_access, right_state) = R::init(world, config);
 
@@ -466,7 +492,7 @@ unsafe impl<Q: WorldQuery> WorldQuery for Not<Q> {
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
         expr.not();
@@ -530,7 +556,7 @@ unsafe impl<Q: WorldQuery> WorldQuery for With<Q> {
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
         expr.clear_access();
@@ -615,10 +641,10 @@ unsafe impl<Q: WorldQuery> WorldQuery for Has<Q> {
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
+    ) -> (AccessExpr<ComponentId>, Self::State) {
         let (_, state) = Q::init(world, config);
 
-        (FilteredAccessExpr::new(), state)
+        (AccessExpr::one(), state)
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -639,15 +665,15 @@ impl<Q: WorldQuery> ReadOnlyWorldQuery for Has<Q> {
 unsafe impl WorldQuery for EntityId {
     type Item<'a> = Self;
 
-    type Fetch = Column<EntityId>;
+    type Fetch = ColumnPtr<EntityId>;
 
     type State = ();
 
     fn init(
         world: &mut World,
         config: &mut SystemConfig,
-    ) -> (FilteredAccessExpr<ComponentId>, Self::State) {
-        Default::default()
+    ) -> (AccessExpr<ComponentId>, Self::State) {
+        (AccessExpr::one(), ())
     }
 
     fn init_fetch(archetype: &Archetype, (): &mut Self::State) -> Option<Self::Fetch> {
@@ -665,23 +691,87 @@ impl ReadOnlyWorldQuery for EntityId {
     }
 }
 
-pub struct Column<T>(NonNull<T>);
+pub struct ColumnPtr<T>(NonNull<T>);
 
-impl<T> Clone for Column<T> {
+impl<T> Clone for ColumnPtr<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T> Copy for Column<T> {}
+impl<T> Copy for ColumnPtr<T> {}
 
-impl<T> fmt::Debug for Column<T> {
+impl<T> fmt::Debug for ColumnPtr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Column").field(&self.0).finish()
     }
 }
 
-// SAFETY: `Column` is just a wrapper around a pointer, so these impls are
+// SAFETY: `ColumnPtr` is just a wrapper around a pointer, so these impls are
 // safe on their own.
-unsafe impl<T> Send for Column<T> {}
-unsafe impl<T> Sync for Column<T> {}
+unsafe impl<T> Send for ColumnPtr<T> {}
+unsafe impl<T> Sync for ColumnPtr<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::*;
+
+    #[derive(Event)]
+    struct E;
+
+    fn check_query<Q: WorldQuery + 'static>() -> bool {
+        let r = std::panic::catch_unwind(|| {
+            let mut world = World::new();
+
+            (world.add_system(|_: &E, _: Query<Q>| {}), world)
+        });
+
+        if let Ok((_, mut world)) = r {
+            dbg!(&world);
+
+            // world.send(E); // TODO
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Test for query access conflicts.
+    macro_rules! t {
+        ($name:ident, $succeed:expr, $q:ty) => {
+            #[test]
+            fn $name() {
+                assert_eq!(check_query::<$q>(), $succeed);
+            }
+        }
+    }
+
+    #[derive(Component)]
+    struct A;
+
+    #[derive(Component)]
+    struct B;
+
+    #[derive(Component)]
+    struct C;
+
+    t!(t00, true, &mut A);
+    t!(t01, true, (&mut A, &mut B));
+    t!(t02, false, (&mut A, &mut A));
+    t!(t03, false, (&mut A, (&mut A,)));
+    t!(t04, false, (&mut A, &A));
+    t!(t05, true, (&A, &A));
+    t!(t06, true, ());
+    t!(t07, false, (Option<&A>, &mut A));
+    t!(t08, false, (&mut A, Option<&B>, &A, Not<&B>));
+    t!(t09, true, (&mut A, Not<&A>, &A));
+    t!(t10, false, Or<&mut A, &mut A>);
+    t!(t11, true, Xor<&mut A, &mut A>);
+    t!(t12, false, Or<(&A, &B), (&mut B, &C)>);
+    t!(t13, true, (Xor<&mut A, &mut A>, &A));
+    t!(t14, true, (Option<&A>, &A, &A));
+    t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
+    t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
+    t!(t17, false, (Or<(&A, &B), (&B, &C)>, &mut B));
+}

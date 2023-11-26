@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -536,6 +535,82 @@ impl SystemParam for &'_ SystemInfo {
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'s, 'a> {
         system_info
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Before<P = ()>(pub P);
+
+impl<P> Deref for Before<P> {
+    type Target = P;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<P> DerefMut for Before<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<P: SystemParam> SystemParam for Before<P> {
+    type State = P::State;
+
+    type Item<'s, 'a> = Before<P::Item<'s, 'a>>;
+
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        let res = P::init(world, config)?;
+        config.priority = SystemPriority::Before;
+        Ok(res)
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Before(P::get_param(state, system_info, event_ptr, world))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct After<P = ()>(pub P);
+
+impl<P> Deref for After<P> {
+    type Target = P;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<P> DerefMut for After<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<P: SystemParam> SystemParam for After<P> {
+    type State = P::State;
+
+    type Item<'s, 'a> = After<P::Item<'s, 'a>>;
+
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        let res = P::init(world, config)?;
+        config.priority = SystemPriority::After;
+        Ok(res)
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        state: &'s mut Self::State,
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        After(P::get_param(state, system_info, event_ptr, world))
     }
 }
 

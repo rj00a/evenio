@@ -12,6 +12,7 @@ pub mod archetype;
 mod bit_set;
 pub mod command;
 pub mod component;
+mod debug_checked;
 pub mod entity;
 mod erased_vec;
 pub mod event;
@@ -22,13 +23,13 @@ pub mod query;
 pub mod system;
 #[cfg(test)]
 mod tests;
-pub mod world;
-mod debug_checked;
 mod type_id_hash;
+pub mod world;
 
 pub mod prelude {
-    pub use crate::component::{Component, ComponentSet};
+    pub use crate::component::Component;
     pub use crate::entity::EntityId;
-    pub use crate::event::{Despawn, Event, EventSet, Insert, Sender, Spawn, Take};
+    pub use crate::event::{Despawn, Event, EventSet, Insert, SendTo, Sender, Spawn, Take};
+    pub use crate::query::{Has, Not, Or, ReadOnlyWorldQuery, With, WorldQuery, Xor};
     pub use crate::world::World;
 }

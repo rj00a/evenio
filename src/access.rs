@@ -3,12 +3,12 @@ use std::{fmt, mem};
 use crate::bit_set::{BitSet, BitSetIndex};
 use crate::component::ComponentId;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct SystemAccess {
     pub received_event: Access,
     pub event_queue: Access,
     pub reserve_entity: Access,
-    pub components: FilteredAccessExpr<ComponentId>,
+    pub components: AccessExpr<ComponentId>,
 }
 
 impl SystemAccess {
@@ -23,113 +23,191 @@ impl SystemAccess {
     }
 }
 
-pub struct FilteredAccessExpr<T> {
-    /// Unfiltered accesses describing Reads and Writes.
-    access: AccessMap<T>,
-    /// The filters (With and Without) in disjunctive normal form. This is a
-    /// series of ANDs joined by ORs.
-    filters: Vec<AccessFilters<T>>,
+impl Default for SystemAccess {
+    fn default() -> Self {
+        Self {
+            received_event: Default::default(),
+            event_queue: Default::default(),
+            reserve_entity: Default::default(),
+            components: AccessExpr::one(),
+        }
+    }
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for FilteredAccessExpr<T> {
+pub struct AccessExpr<T> {
+    /// Describes the potential Reads and Writes of this expression. This is
+    /// used to prevent queries like `(&mut A, &A)` from being considered valid.
+    access: AccessMap<T>,
+    /// A boolean expression in disjunctive normal form,
+    /// e.g. (A ∧ B ∧ ¬C) ∨ (D ∧ ¬E ∧ ¬F).
+    disjunctions: Vec<Conjunctions<T>>,
+}
+
+impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
+
+        impl<T: fmt::Debug + BitSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if self.0.is_empty() {
+                    write!(f, "⊥")?;
+                } else {
+                    let mut first = true;
+
+                    for conj in self.0.iter() {
+                        if !first {
+                            write!(f, " ∨ ")?;
+                        }
+                        first = false;
+
+                        if conj.with.is_empty() && conj.without.is_empty() {
+                            write!(f, "⊤")?;
+                        } else {
+                            let mut first = true;
+
+                            for val in conj.with.iter() {
+                                if !first {
+                                    write!(f, " ∧ ")?;
+                                }
+                                first = false;
+
+                                write!(f, "{val:?}")?;
+                            }
+
+                            for val in conj.without.iter() {
+                                if !first {
+                                    write!(f, " ∧ ")?;
+                                }
+                                first = false;
+
+                                write!(f, "¬{val:?}")?;
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        }
+
         f.debug_struct("FilteredAccessExpr")
             .field("access", &self.access)
-            .field("filters", &self.filters)
+            .field("filters", &DebugDisjunctions(&self.disjunctions))
             .finish()
     }
 }
 
-impl<T> FilteredAccessExpr<T> {
-    pub fn new() -> Self {
+impl<T> AccessExpr<T> {
+    /// Returns a new access expression representing `true` or `1`. This is the
+    /// identity element for `∧`.
+    pub fn one() -> Self {
         Self {
             access: AccessMap::new(),
-            filters: vec![AccessFilters::default()],
+            disjunctions: vec![Conjunctions::default()],
+        }
+    }
+
+    /// Returns a new access expression representing `false` or `0`. This is the
+    /// identity element for `∨`.
+    pub fn zero() -> Self {
+        Self {
+            access: AccessMap::new(),
+            disjunctions: vec![],
         }
     }
 }
 
-impl<T> Clone for FilteredAccessExpr<T> {
+impl<T> Clone for AccessExpr<T> {
     fn clone(&self) -> Self {
         Self {
             access: self.access.clone(),
-            filters: self.filters.clone(),
+            disjunctions: self.disjunctions.clone(),
         }
     }
 }
 
-impl<T> Default for FilteredAccessExpr<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl<T: BitSetIndex> AccessExpr<T> {
+    pub fn with(value: T, access: Access) -> Self {
+        let mut res = Self::zero();
 
-impl<T: BitSetIndex> FilteredAccessExpr<T> {
-    pub fn and_read(&mut self, value: T) -> &mut Self {
-        self.access.set(value, Access::Read);
-        self.and_with(value)
-    }
+        res.access.set(value, access);
 
-    pub fn and_read_write(&mut self, value: T) -> &mut Self {
-        self.access.set(value, Access::ReadWrite);
-        self.and_with(value)
+        let mut conj = Conjunctions::default();
+        conj.with.insert(value);
+        res.disjunctions.push(conj);
+
+        res
     }
 
-    pub fn and_with(&mut self, value: T) -> &mut Self {
-        for f in &mut self.filters {
-            f.with.insert(value);
-        }
-        self
+    pub fn without(value: T) -> Self {
+        let mut res = Self::zero();
+
+        let mut conj = Conjunctions::default();
+        conj.without.insert(value);
+        res.disjunctions.push(conj);
+
+        res
     }
 
-    pub fn and_without(&mut self, value: T) -> &mut Self {
-        for f in &mut self.filters {
-            f.without.insert(value);
-        }
-        self
-    }
-
+    /// Performs an AND (`∧`) with `self` and `other` and stores the result in
+    /// `self`. `self` is then returned for further chaining.
     pub fn and(&mut self, other: &Self) -> &mut Self {
         self.access.union(&other.access);
 
-        let mut new_filters = Vec::with_capacity(self.filters.len() * other.filters.len());
-        for filter in &self.filters {
-            for other in &other.filters {
-                let mut new_filter: AccessFilters<T> = filter.clone();
+        let mut new_filters = Vec::new();
+        for filter in &self.disjunctions {
+            for other in &other.disjunctions {
+                let mut new_filter: Conjunctions<T> = filter.clone();
 
                 new_filter.with.union(&other.with);
                 new_filter.without.union(&other.without);
 
-                new_filters.push(new_filter);
+                // Skip contradictions.
+                if new_filter.with.is_disjoint(&new_filter.without) {
+                    new_filters.push(new_filter);
+                }
             }
         }
 
-        self.filters = new_filters;
+        self.disjunctions = new_filters;
         self
     }
 
+    /// Performs an OR (`∨`) with `self` and `other` and stores the result in
+    /// `self`. `self` is then returned for further chaining.
     pub fn or(&mut self, other: &Self) -> &mut Self {
         self.access.union(&other.access);
 
-        self.filters.extend(other.filters.iter().cloned());
+        self.disjunctions.extend(other.disjunctions.iter().cloned());
 
         self
     }
 
+    /// Performs a unary NOT (`¬`) on `self` and stores the result in `self`.
+    /// `self` is then returned for further chaining.
     pub fn not(&mut self) -> &mut Self {
-        // Apply De Morgan's law to the filters and clear the access map.
+        // Apply De Morgan's laws and clear the access map.
 
-        let mut res = Self::new();
+        let mut res = Self::one();
 
-        for mut filter in mem::take(&mut self.filters) {
-            mem::swap(&mut filter.with, &mut filter.without);
+        for mut conj in mem::take(&mut self.disjunctions) {
+            let mut ors = Self::zero();
 
-            let expr = Self {
-                access: AccessMap::new(),
-                filters: vec![filter],
-            };
+            mem::swap(&mut conj.with, &mut conj.without);
 
-            res.and(&expr);
+            for with in conj.with.iter() {
+                let mut f = Conjunctions::default();
+                f.with.insert(with);
+                ors.disjunctions.push(f);
+            }
+
+            for without in conj.without.iter() {
+                let mut f = Conjunctions::default();
+                f.without.insert(without);
+                ors.disjunctions.push(f);
+            }
+
+            res.and(&ors);
         }
 
         *self = res;
@@ -137,12 +215,13 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
         self
     }
 
+    /// Performs an XOR (`⊻`) with `self` and `other` and stores the result in
+    /// `self`. `self` is then returned for further chaining.
     pub fn xor(&mut self, other: &Self) -> &mut Self {
-        // A ⊻ B = (A ∧ ¬B) ∨ (B ∧ ¬A).
-
         let mut this = self.clone();
         let mut other = other.clone();
 
+        // A ⊻ B ≡ (A ∧ ¬B) ∨ (B ∧ ¬A)
         self.and(other.clone().not()).or(other.and(this.not()))
     }
 
@@ -159,11 +238,11 @@ impl<T: BitSetIndex> FilteredAccessExpr<T> {
         //
         // Since the filters are in disjunctive normal form (ORs of ANDs), we need to
         // check that all pairs of filters from `self` and `other` are disjoint.
-        self.filters.iter().all(|filter| {
+        self.disjunctions.iter().all(|conj| {
             other
-                .filters
+                .disjunctions
                 .iter()
-                .all(|other_filter| filter.is_disjoint(other_filter))
+                .all(|other_conj| conj.is_disjoint(other_conj))
         })
     }
 
@@ -251,7 +330,7 @@ impl<T: BitSetIndex> AccessMap<T> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub(crate) enum Access {
+pub enum Access {
     /// Cannot read or write to the data.
     #[default]
     None,
@@ -276,12 +355,12 @@ impl Access {
 /// Sets of `With` and `Without` filters.
 /// Logically, this is set of variables ANDed together, possibly with negations.
 /// Example: `A ∧ B ∧ ¬C ∧ ¬A`.
-struct AccessFilters<T> {
+struct Conjunctions<T> {
     with: BitSet<T>,
     without: BitSet<T>,
 }
 
-impl<T: BitSetIndex> AccessFilters<T> {
+impl<T: BitSetIndex> Conjunctions<T> {
     /// Determines if `self` and `other` are disjoint, i.e. if there is no
     /// combination of values the variables could have to make both expressions
     /// true at the same time.
@@ -298,7 +377,7 @@ impl<T: BitSetIndex> AccessFilters<T> {
     }
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessFilters<T> {
+impl<T: BitSetIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessFilters")
             .field("with", &self.with)
@@ -307,7 +386,7 @@ impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessFilters<T> {
     }
 }
 
-impl<T> Clone for AccessFilters<T> {
+impl<T> Clone for Conjunctions<T> {
     fn clone(&self) -> Self {
         Self {
             with: self.with.clone(),
@@ -316,7 +395,7 @@ impl<T> Clone for AccessFilters<T> {
     }
 }
 
-impl<T> Default for AccessFilters<T> {
+impl<T> Default for Conjunctions<T> {
     fn default() -> Self {
         Self {
             with: Default::default(),
@@ -330,61 +409,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_write_conflict_and_one() {
-        let mut expr = FilteredAccessExpr::<usize>::new();
-
-        assert!(expr.is_read_write_compatible(0));
-
-        expr.and_read_write(0);
-    }
-
-    #[test]
-    fn read_write_conflict_is_compatible() {
-        let mut expr = FilteredAccessExpr::<usize>::new();
-        expr.and_read_write(0);
-
+    fn t0() {
+        let expr = AccessExpr::with(0usize, Access::ReadWrite);
         let expr2 = expr.clone();
+        let expr3 = AccessExpr::<usize>::with(0usize, Access::Read);
 
         assert!(!expr.is_compatible(&expr2));
+        assert!(!expr.is_compatible(&expr3));
     }
 
     #[test]
-    fn compatible_access_basic() {
-        let mut expr = FilteredAccessExpr::<usize>::new();
-        expr.and_read(0);
-        expr.and_read_write(1);
+    fn t1() {
+        let mut expr = AccessExpr::with(0, Access::Read);
+        expr.and(&AccessExpr::with(1, Access::ReadWrite));
 
-        let mut expr2 = FilteredAccessExpr::<usize>::new();
-        expr2.and_read(0);
-        expr2.and_with(1);
-        expr2.and_read_write(2);
+        let mut expr2 = AccessExpr::with(0, Access::Read);
+        expr2.and(&AccessExpr::with(1, Access::None));
+        expr2.and(&AccessExpr::with(2, Access::ReadWrite));
 
         assert!(expr.is_compatible(&expr2));
     }
 
     #[test]
-    fn disjoint_filters() {
-        let mut expr = FilteredAccessExpr::<usize>::new();
-        expr.and_read_write(0);
-        expr.and_with(1);
+    fn t2() {
+        let mut expr = AccessExpr::<usize>::with(0, Access::ReadWrite);
+        expr.and(&AccessExpr::with(1, Access::None));
 
-        let mut expr2 = FilteredAccessExpr::<usize>::new();
-        expr2.and_read_write(0);
-        expr2.and_without(1);
+        let mut expr2 = AccessExpr::<usize>::with(0, Access::ReadWrite);
+        expr2.and(&AccessExpr::without(1));
 
         assert!(expr.is_compatible(&expr2));
     }
 
     #[test]
-    fn filter_contradiction() {
-        let mut expr = FilteredAccessExpr::<usize>::new();
-        expr.and_read_write(0);
-        expr.and_with(1);
-        expr.and_without(1);
+    fn t3() {
+        let mut expr = AccessExpr::<usize>::with(0, Access::ReadWrite);
+        expr.and(&AccessExpr::with(1, Access::None));
+        expr.and(&AccessExpr::without(1));
 
-        let mut expr2 = FilteredAccessExpr::<usize>::new();
-        expr2.and_read_write(0);
+        let expr2 = AccessExpr::with(0, Access::ReadWrite);
 
         assert!(expr.is_compatible(&expr2));
+    }
+
+    #[test]
+    fn negate_true() {
+        let mut expr = AccessExpr::<usize>::one();
+
+        expr.not();
+
+        assert!(expr.disjunctions.is_empty());
+    }
+
+    #[test]
+    fn negate_false() {
+        let mut expr = AccessExpr::<usize>::zero();
+
+        expr.not();
+
+        assert!(expr.disjunctions[0].with.is_empty() && expr.disjunctions[0].without.is_empty());
     }
 }

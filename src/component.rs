@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::any::TypeId;
+use std::collections::hash_map::Entry;
 use std::mem::needs_drop;
 use std::ptr::{drop_in_place, NonNull};
 
@@ -17,14 +18,14 @@ pub trait Component: Send + Sync + 'static {}
 #[derive(Debug)]
 pub(crate) struct Components {
     infos: Slab<ComponentInfo>,
-    typeid_to_id: TypeIdMap<ComponentId>,
+    by_typeid: TypeIdMap<ComponentId>,
 }
 
 impl Components {
     pub(crate) fn new() -> Self {
         Self {
             infos: Slab::new(),
-            typeid_to_id: Default::default(),
+            by_typeid: Default::default(),
         }
     }
 
@@ -34,17 +35,23 @@ impl Components {
     }
 
     pub(crate) fn init_component<C: Component>(&mut self) -> ComponentId {
-        // TODO
-
-        self.typeid_to_id
-            .get(&TypeId::of::<C>())
-            .copied()
-            .unwrap_or_else(|| self.add(ComponentInfo::new::<C>()))
+        match self.by_typeid.entry(TypeId::of::<C>()) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(v) => {
+                let id = Self::add_info(&mut self.infos, ComponentInfo::new::<C>());
+                v.insert(id);
+                id
+            }
+        }
     }
 
     #[track_caller]
     pub(crate) fn add(&mut self, info: ComponentInfo) -> ComponentId {
-        let id = self.infos.insert(info);
+        Self::add_info(&mut self.infos, info)
+    }
+
+    fn add_info(infos: &mut Slab<ComponentInfo>, info: ComponentInfo) -> ComponentId {
+        let id = infos.insert(info);
 
         id.try_into()
             .map(ComponentId)

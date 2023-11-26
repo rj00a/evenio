@@ -149,6 +149,12 @@ impl ErasedVec {
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
         self.data
     }
+
+    /// Returns a pointer to the length of this vec. The pointer is invalidated
+    /// when the vec is moved or dropped.
+    pub(crate) fn len_ptr(&self) -> *const usize {
+        &self.len
+    }
 }
 
 impl Drop for ErasedVec {

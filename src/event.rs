@@ -420,6 +420,61 @@ impl<E: Event> SystemParam for Take<'_, E> {
     }
 }
 
+pub struct Discard<E>(PhantomData<fn(E)>);
+
+impl<E> Discard<E> {
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<E> Clone for Discard<E> {
+    fn clone(&self) -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<E> Copy for Discard<E> {}
+
+impl<E> Default for Discard<E> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<E> fmt::Debug for Discard<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Discard").finish()
+    }
+}
+
+impl<E: Event> SystemParam for Discard<E> {
+    type State = ();
+
+    type Item<'s, 'a> = Discard<E>;
+
+    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
+        let this_id = world.init_event::<E>();
+
+        if config.received_event == EventId::NULL {
+            config.received_event = this_id;
+        } else if config.received_event != this_id {
+            return Err(Box::new(SystemInitError::ConflictingEventType));
+        }
+
+        Ok(())
+    }
+
+    unsafe fn get_param<'s, 'a>(
+        _state: &'s mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        _world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'s, 'a> {
+        Self::new()
+    }
+}
+
 pub struct Sender<'s, 'a, Es: EventSet> {
     state: &'s Es::State,
     event_queue: &'a mut EventQueue,
@@ -478,7 +533,11 @@ impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
 
         config.access.event_queue = Access::ReadWrite;
 
-        if !config.access.reserve_entity.is_compatible(Access::ReadWrite) {
+        if !config
+            .access
+            .reserve_entity
+            .is_compatible(Access::ReadWrite)
+        {
             // TODO: use a different enum variant.
             return Err(Box::new(SystemInitError::ConflictingEventAccess));
         }
