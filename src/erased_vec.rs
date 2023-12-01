@@ -3,6 +3,7 @@ use std::ptr::NonNull;
 use std::{alloc, ptr};
 
 use crate::debug_checked::UnwrapDebugChecked;
+use crate::layout_util::{padding_needed_for, repeat_layout};
 
 /// Like `Vec<T>`, but `T` is erased.
 #[derive(Debug)]
@@ -45,6 +46,23 @@ impl ErasedVec {
         NonNull::new_unchecked(slot)
     }
 
+    unsafe fn swap_remove_no_drop(&mut self, idx: usize) {
+        debug_assert!(idx < self.len, "index out of bounds");
+
+        let src = self
+            .data
+            .as_ptr()
+            .add(self.elem_layout.size() * (self.len - 1));
+
+        let dst = self.data.as_ptr().add(self.elem_layout.size() * idx);
+
+        self.len -= 1;
+
+        if src != dst {
+            ptr::copy_nonoverlapping(src, dst, self.elem_layout.size());
+        }
+    }
+
     pub(crate) unsafe fn swap_remove(&mut self, idx: usize) {
         debug_assert!(idx < self.len, "index out of bounds");
 
@@ -52,6 +70,7 @@ impl ErasedVec {
             .data
             .as_ptr()
             .add(self.elem_layout.size() * (self.len - 1));
+
         let dst = self.data.as_ptr().add(self.elem_layout.size() * idx);
 
         if let Some(drop) = self.drop {
@@ -63,6 +82,27 @@ impl ErasedVec {
         if src != dst {
             ptr::copy_nonoverlapping(src, dst, self.elem_layout.size());
         }
+    }
+
+    pub(crate) unsafe fn get_mut(&mut self, idx: usize) -> *mut u8 {
+        debug_assert!(idx < self.len, "index out of bounds");
+
+        self.data.as_ptr().add(idx * self.elem_layout.size())
+    }
+
+    /// Move an element from `self` to `other`.
+    pub(crate) unsafe fn transfer_elem(&mut self, other: &mut Self, src_idx: usize) {
+        debug_assert_eq!(
+            self.elem_layout, other.elem_layout,
+            "elem layouts must be the same"
+        );
+        debug_assert!(src_idx < self.len, "index out of bounds");
+
+        let src = self.data.as_ptr().add(src_idx * self.elem_layout.size());
+        let dst = other.push().as_ptr();
+
+        ptr::copy_nonoverlapping(src, dst, self.elem_layout.size());
+        self.swap_remove_no_drop(src_idx);
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -146,6 +186,10 @@ impl ErasedVec {
         }
     }
 
+    pub(crate) fn elem_layout(&self) -> Layout {
+        self.elem_layout
+    }
+
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
         self.data
     }
@@ -171,98 +215,6 @@ impl Drop for ErasedVec {
             }
         }
     }
-}
-
-// TODO: replace with `Layout::repeat` if/when it stabilizes.
-/// Creates a layout describing the record for `n` instances of
-/// `self`, with a suitable amount of padding between each to
-/// ensure that each instance is given its requested size and
-/// alignment. On success, returns `(k, offs)` where `k` is the
-/// layout of the array and `offs` is the distance between the start
-/// of each element in the array.
-///
-/// On arithmetic overflow, returns `LayoutError`.
-#[inline]
-#[must_use]
-fn repeat_layout(layout: &Layout, n: usize) -> Option<(Layout, usize)> {
-    // This cannot overflow. Quoting from the invariant of Layout:
-    // > `size`, when rounded up to the nearest multiple of `align`,
-    // > must not overflow (i.e., the rounded value must be less than
-    // > `usize::MAX`)
-    let padded_size = layout.size() + padding_needed_for(layout, layout.align());
-    let alloc_size = padded_size.checked_mul(n)?;
-
-    // SAFETY: self.align is already known to be valid and alloc_size has been
-    // padded already.
-    unsafe {
-        Some((
-            Layout::from_size_align_unchecked(alloc_size, layout.align()),
-            padded_size,
-        ))
-    }
-}
-
-// TODO: replace with `Layout::padding_needed_for` if/when it stabilizes.
-/// Returns the amount of padding we must insert after `self`
-/// to ensure that the following address will satisfy `align`
-/// (measured in bytes).
-///
-/// e.g., if `self.size()` is 9, then `self.padding_needed_for(4)`
-/// returns 3, because that is the minimum number of bytes of
-/// padding required to get a 4-aligned address (assuming that the
-/// corresponding memory block starts at a 4-aligned address).
-///
-/// The return value of this function has no meaning if `align` is
-/// not a power-of-two.
-///
-/// Note that the utility of the returned value requires `align`
-/// to be less than or equal to the alignment of the starting
-/// address for the whole allocated block of memory. One way to
-/// satisfy this constraint is to ensure `align <= self.align()`.
-#[inline]
-#[must_use]
-const fn padding_needed_for(layout: &Layout, align: usize) -> usize {
-    let len = layout.size();
-
-    // Rounded up value is:
-    //   len_rounded_up = (len + align - 1) & !(align - 1);
-    // and then we return the padding difference: `len_rounded_up - len`.
-    //
-    // We use modular arithmetic throughout:
-    //
-    // 1. align is guaranteed to be > 0, so align - 1 is always valid.
-    //
-    // 2. `len + align - 1` can overflow by at most `align - 1`, so the &-mask with
-    //    `!(align - 1)` will ensure that in the case of overflow, `len_rounded_up`
-    //    will itself be 0. Thus the returned padding, when added to `len`, yields
-    //    0, which trivially satisfies the alignment `align`.
-    //
-    // (Of course, attempts to allocate blocks of memory whose
-    // size and padding overflow in the above manner should cause
-    // the allocator to yield an error anyway.)
-
-    let len_rounded_up = len.wrapping_add(align).wrapping_sub(1) & !align.wrapping_sub(1);
-    len_rounded_up.wrapping_sub(len)
-}
-
-// TODO: replace with `Layout::pad_to_align` if/when it stabilizes.
-/// Creates a layout by rounding the size of this layout up to a multiple
-/// of the layout's alignment.
-///
-/// This is equivalent to adding the result of `padding_needed_for`
-/// to the layout's current size.
-#[inline]
-#[must_use]
-const fn pad_to_align(layout: &Layout) -> Layout {
-    let pad = padding_needed_for(layout, layout.align());
-    // This cannot overflow. Quoting from the invariant of Layout:
-    // > `size`, when rounded up to the nearest multiple of `align`,
-    // > must not overflow isize (i.e., the rounded value must be
-    // > less than or equal to `isize::MAX`)
-    let new_size = layout.size() + pad;
-
-    // SAFETY: padded size is guaranteed to not exceed `isize::MAX`.
-    unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) }
 }
 
 #[cold]

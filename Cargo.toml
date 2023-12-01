@@ -18,6 +18,7 @@ dbg_macro = "warn"
 undocumented_unsafe_blocks = "warn"
 mod_module_files = "warn"
 
+# Deny rustdoc stuff so CI fails.
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 private_intra_doc_links = "deny"
@@ -27,17 +28,18 @@ invalid_rust_codeblocks = "deny"
 bare_urls = "deny"
 invalid_html_tags = "deny"
 
-[dependencies]
-ahash = "0.8.3"
-bumpalo = "3.14.0"
-evenio_macros = { path = "evenio_macros" }
-rayon = { version = "1.8.0", optional = true }
-slab = "0.4.9"
-
 [package]
 name = "evenio"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+ahash = "0.8.3"
+bumpalo = "3.14.0"
+evenio_macros = { path = "evenio_macros" }
+memoffset = "0.9.0"
+rayon = { version = "1.8.0", optional = true }
+slab = "0.4.9"
 
 [dev-dependencies]
 divan = "0.1.2"

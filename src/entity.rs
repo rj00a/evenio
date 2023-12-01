@@ -1,7 +1,8 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
-use crate::{archetype::{ArchetypeId, ArchetypeRow}, debug_checked::GetDebugChecked};
+use crate::archetype::{ArchetypeId, ArchetypeRow};
+use crate::debug_checked::GetDebugChecked;
 
 #[derive(Debug)]
 pub struct Entities {
@@ -93,58 +94,6 @@ impl Entities {
         // TODO: broken with retiring indices.
         self.metas.len() - self.pending.len()
     }
-
-    pub(crate) fn reserve(&self, reserved: &mut ReservedEntities) -> EntityId {
-        if reserved.cursor < self.pending.len() as u32 {
-            let index = *unsafe {
-                self.pending
-                    .get_debug_checked(self.pending.len() - reserved.cursor as usize)
-            };
-
-            let meta = unsafe { self.metas.get_debug_checked(index as usize) };
-
-            reserved.cursor += 1;
-
-            let Some(next_gen) = meta.generation.checked_add(1) else {
-                // Retired index. Cursor increases but no the count.
-                return self.reserve(reserved);
-            };
-
-            reserved.count += 1;
-
-            EntityId {
-                index,
-                generation: next_gen,
-            }
-        } else {
-            let index = self.metas.len() as u32 + (reserved.cursor - self.pending.len() as u32);
-
-            if index == EntityId::NULL.index {
-                panic!("too many entities")
-            }
-
-            reserved.cursor += 1;
-            reserved.count += 1;
-
-            EntityId {
-                index,
-                generation: ONE,
-            }
-        }
-    }
-
-    pub(crate) fn flush_reserved(
-        &mut self,
-        reserved: &mut ReservedEntities,
-        mut f: impl FnMut(EntityId) -> EntityLocation,
-    ) {
-        for _ in 0..reserved.count {
-            self.add(&mut f);
-        }
-
-        reserved.cursor = 0;
-        reserved.count = 0;
-    }
 }
 
 const ONE: NonZeroU32 = match NonZeroU32::new(1) {
@@ -218,6 +167,59 @@ impl ReservedEntities {
             count: 0,
         }
     }
+
+    pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {
+        if self.cursor < entities.pending.len() as u32 {
+            let index = *unsafe {
+                entities
+                    .pending
+                    .get_debug_checked(entities.pending.len() - self.cursor as usize)
+            };
+
+            let meta = unsafe { entities.metas.get_debug_checked(index as usize) };
+
+            self.cursor += 1;
+
+            let Some(next_gen) = meta.generation.checked_add(1) else {
+                // Retired index. Cursor increases but not the count.
+                return self.reserve(entities);
+            };
+
+            self.count += 1;
+
+            EntityId {
+                index,
+                generation: next_gen,
+            }
+        } else {
+            let index = entities.metas.len() as u32 + (self.cursor - entities.pending.len() as u32);
+
+            if index == EntityId::NULL.index {
+                panic!("too many entities")
+            }
+
+            self.cursor += 1;
+            self.count += 1;
+
+            EntityId {
+                index,
+                generation: ONE,
+            }
+        }
+    }
+
+    pub(crate) fn flush(
+        &mut self,
+        entities: &mut Entities,
+        mut f: impl FnMut(EntityId) -> EntityLocation,
+    ) {
+        for _ in 0..self.count {
+            entities.add(&mut f);
+        }
+
+        self.cursor = 0;
+        self.count = 0;
+    }
 }
 
 #[cfg(test)]
@@ -262,9 +264,9 @@ mod tests {
         let mut entities = Entities::new();
         let mut reserved = ReservedEntities::new();
 
-        let e1 = entities.reserve(&mut reserved);
-        let e2 = entities.reserve(&mut reserved);
-        let e3 = entities.reserve(&mut reserved);
+        let e1 = reserved.reserve(&entities);
+        let e2 = reserved.reserve(&entities);
+        let e3 = reserved.reserve(&entities);
 
         assert_eq!(entities.get(e1), None);
         assert!(e1 != e2 && e2 != e3 && e1 != e3);
@@ -274,7 +276,7 @@ mod tests {
             row: ArchetypeRow(i),
         };
 
-        entities.flush_reserved(&mut reserved, |id| l(id.index + 1));
+        reserved.flush(&mut entities, |id| l(id.index + 1));
 
         assert_eq!(entities.get(e1), Some(&l(1)));
         assert_eq!(entities.get(e2), Some(&l(2)));

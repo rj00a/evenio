@@ -7,17 +7,18 @@ fn main() {
 
     world.send(Foo);
 
-    eprintln!("{:#?}", world.entities());
+    eprintln!("{:#?}", world.archetypes());
 }
 
 #[derive(Event)]
 struct Foo;
 
-fn spawn_some_entities(_: &Foo, mut sender: Sender<Spawn>) {
+#[derive(Component)]
+struct MyComponent(i32);
+
+fn spawn_some_entities(_: Discard<Foo>, mut sender: Sender<(Spawn, Insert<MyComponent>)>) {
     println!("spawning entities");
 
-    sender.spawn();
-    sender.spawn();
-    sender.spawn();
-    sender.spawn();
+    let e = sender.spawn();
+    sender.send(Insert::new(e, MyComponent(123)));
 }

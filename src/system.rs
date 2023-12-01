@@ -7,6 +7,7 @@ use evenio_macros::all_tuples;
 use slab::Slab;
 
 use crate::access::SystemAccess;
+use crate::archetype::{Archetype, ArchetypeId};
 use crate::bit_set::{BitSet, BitSetIndex};
 use crate::debug_checked::GetDebugChecked;
 use crate::event::{EventId, EventPtr};
@@ -32,7 +33,7 @@ impl Systems {
     #[track_caller]
     pub(crate) fn add(&mut self, system: Box<dyn System>, mut info: SystemInfo) -> SystemId {
         let id = self.locations.insert(SystemLocation {
-            event: info.event_id,
+            event: info.receive_event,
             list_idx: u32::MAX,
         });
 
@@ -44,9 +45,9 @@ impl Systems {
 
         info.system_id = system_id;
 
-        self.init_event(info.event_id);
+        self.init_event(info.receive_event);
 
-        let list = &mut self.event_to_systems[info.event_id.index() as usize];
+        let list = &mut self.event_to_systems[info.receive_event.index() as usize];
 
         let entry = SystemListEntry {
             system,
@@ -175,7 +176,7 @@ pub(crate) struct SystemListEntry {
 #[non_exhaustive]
 pub struct SystemInfo {
     pub priority: SystemPriority,
-    pub event_id: EventId,
+    pub receive_event: EventId,
     pub access: SystemAccess,
     pub system_id: SystemId,
 }
@@ -184,7 +185,7 @@ impl SystemInfo {
     pub(crate) fn new() -> Self {
         Self {
             priority: SystemPriority::default(),
-            event_id: EventId::NULL,
+            receive_event: EventId::NULL,
             access: SystemAccess::default(),
             system_id: SystemId::NULL,
         }
@@ -248,13 +249,13 @@ pub trait InitSystem<Marker> {
 
 pub trait System: Send + Sync + fmt::Debug + 'static {
     unsafe fn run(&mut self, system_info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
-    unsafe fn notify(&mut self, notification: Notification);
-}
-
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum Notification {
-    // TODO
+    /// Informs this system of a new archetype that it might need access to.
+    /// Returns whether or not the system is interested in the new archetype.
+    unsafe fn new_archetype(&mut self, id: ArchetypeId, arch: &Archetype) -> bool;
+    /// Informs this system that an archetype it accesses has had its column
+    /// pointers change. Any column pointers for this archetype are now invalid,
+    /// and new column pointers should be acquired.
+    unsafe fn refresh_archetype(&mut self, id: ArchetypeId, arch: &Archetype);
 }
 
 #[derive(Clone, Default, Debug)]
@@ -411,7 +412,11 @@ where
         self.func.run(param);
     }
 
-    unsafe fn notify(&mut self, notification: Notification) {
+    unsafe fn refresh_archetype(&mut self, id: ArchetypeId, arch: &Archetype) {
+        todo!()
+    }
+
+    unsafe fn new_archetype(&mut self, id: ArchetypeId, arch: &Archetype) -> bool {
         todo!()
     }
 }
@@ -668,7 +673,13 @@ mod tests {
         ) {
         }
 
-        unsafe fn notify(&mut self, _notification: Notification) {}
+        unsafe fn refresh_archetype(&mut self, _id: ArchetypeId, _arch: &Archetype) {
+            unimplemented!()
+        }
+
+        unsafe fn new_archetype(&mut self, id: ArchetypeId, arch: &Archetype) -> bool {
+            todo!()
+        }
     }
 
     #[test]
@@ -677,16 +688,16 @@ mod tests {
         let event_id = EventId::from_bits(1).unwrap();
 
         let mut info_1 = SystemInfo::new();
-        info_1.event_id = event_id;
+        info_1.receive_event = event_id;
         let id_1 = systems.add(Box::new(FakeSystem), info_1);
 
         let mut info_2 = SystemInfo::new();
-        info_2.event_id = event_id;
+        info_2.receive_event = event_id;
         info_2.priority = SystemPriority::After;
         let id_2 = systems.add(Box::new(FakeSystem), info_2);
 
         let mut info_3 = SystemInfo::new();
-        info_3.event_id = event_id;
+        info_3.receive_event = event_id;
         info_3.priority = SystemPriority::Before;
         let id_3 = systems.add(Box::new(FakeSystem), info_3);
 

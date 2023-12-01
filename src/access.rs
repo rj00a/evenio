@@ -43,60 +43,6 @@ pub struct AccessExpr<T> {
     disjunctions: Vec<Conjunctions<T>>,
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
-
-        impl<T: fmt::Debug + BitSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                if self.0.is_empty() {
-                    write!(f, "⊥")?;
-                } else {
-                    let mut first = true;
-
-                    for conj in self.0.iter() {
-                        if !first {
-                            write!(f, " ∨ ")?;
-                        }
-                        first = false;
-
-                        if conj.with.is_empty() && conj.without.is_empty() {
-                            write!(f, "⊤")?;
-                        } else {
-                            let mut first = true;
-
-                            for val in conj.with.iter() {
-                                if !first {
-                                    write!(f, " ∧ ")?;
-                                }
-                                first = false;
-
-                                write!(f, "{val:?}")?;
-                            }
-
-                            for val in conj.without.iter() {
-                                if !first {
-                                    write!(f, " ∧ ")?;
-                                }
-                                first = false;
-
-                                write!(f, "¬{val:?}")?;
-                            }
-                        }
-                    }
-                }
-
-                Ok(())
-            }
-        }
-
-        f.debug_struct("FilteredAccessExpr")
-            .field("access", &self.access)
-            .field("filters", &DebugDisjunctions(&self.disjunctions))
-            .finish()
-    }
-}
-
 impl<T> AccessExpr<T> {
     /// Returns a new access expression representing `true` or `1`. This is the
     /// identity element for `∧`.
@@ -249,6 +195,64 @@ impl<T: BitSetIndex> AccessExpr<T> {
     pub fn clear_access(&mut self) {
         self.access.clear();
     }
+
+    pub(crate) fn accessed(&self) -> impl Iterator<Item = T> + '_ {
+        self.access.read.iter()
+    }
+}
+
+impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
+
+        impl<T: fmt::Debug + BitSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if self.0.is_empty() {
+                    write!(f, "⊥")?;
+                } else {
+                    let mut first = true;
+
+                    for conj in self.0.iter() {
+                        if !first {
+                            write!(f, " ∨ ")?;
+                        }
+                        first = false;
+
+                        if conj.with.is_empty() && conj.without.is_empty() {
+                            write!(f, "⊤")?;
+                        } else {
+                            let mut first = true;
+
+                            for val in conj.with.iter() {
+                                if !first {
+                                    write!(f, " ∧ ")?;
+                                }
+                                first = false;
+
+                                write!(f, "{val:?}")?;
+                            }
+
+                            for val in conj.without.iter() {
+                                if !first {
+                                    write!(f, " ∧ ")?;
+                                }
+                                first = false;
+
+                                write!(f, "¬{val:?}")?;
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        }
+
+        f.debug_struct("FilteredAccessExpr")
+            .field("access", &self.access)
+            .field("filters", &DebugDisjunctions(&self.disjunctions))
+            .finish()
+    }
 }
 
 /// A map from `T` to `Access`.
@@ -267,14 +271,14 @@ impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
 }
 
 impl<T> AccessMap<T> {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             read: BitSet::new(),
             write: BitSet::new(),
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    fn clear(&mut self) {
         self.read.clear();
         self.write.clear();
     }

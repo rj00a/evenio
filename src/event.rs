@@ -23,8 +23,9 @@ use crate::system::{SystemConfig, SystemInfo, SystemInitError, SystemListEntry, 
 use crate::type_id_hash::TypeIdMap;
 use crate::world::UnsafeWorldCell;
 
-pub unsafe trait Event: Send + Sync + 'static {
-    fn init(_world: &mut World) -> EventKind {
+pub trait Event: Send + Sync + 'static {
+    #[doc(hidden)]
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Other
     }
 }
@@ -75,7 +76,7 @@ impl Events {
     }
 
     #[inline]
-    pub(crate) unsafe fn get_unchecked(&self, id: EventId) -> &EventInfo {
+    pub(crate) unsafe fn get_debug_checked(&self, id: EventId) -> &EventInfo {
         self.infos.get_debug_checked(id.0 as usize)
     }
 }
@@ -502,22 +503,39 @@ impl<Es: EventSet> Sender<'_, '_, Es> {
         }
     }
 
+    /*
     #[track_caller]
     pub fn send_to<E: Event>(&mut self, system: EntityId, event: E) {
         self.send(SendTo::new(system, event))
     }
 
     #[track_caller]
+    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
+        self.send(Insert::new(entity, component))
+    }
+    */
+
+    #[track_caller]
     pub fn spawn(&mut self) -> EntityId {
-        unsafe { self.world.reserve_entity() }
+        let id = unsafe { self.world.reserve_entity() };
+        self.send(Spawn::new(id));
+        id
     }
 
     // TODO: unsafe fn send_raw or similar.
 }
 
-impl<Es: EventSet> fmt::Debug for Sender<'_, '_, Es> {
+impl<Es> fmt::Debug for Sender<'_, '_, Es>
+where
+    Es: EventSet,
+    Es::State: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sender").finish()
+        f.debug_struct("Sender")
+            .field("state", &self.state)
+            .field("event_queue", &self.event_queue)
+            .field("world", &self.world)
+            .finish()
     }
 }
 
@@ -627,25 +645,29 @@ macro_rules! impl_event_set_tuple {
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+#[repr(C)] // Field order is significant!
 pub struct Insert<C> {
-    pub component: C,
     pub entity: EntityId,
+    pub component: C,
 }
 
 impl<C> Insert<C> {
-    pub const fn new(component: C, entity: EntityId) -> Self {
-        Self { component, entity }
+    pub const fn new(entity: EntityId, component: C) -> Self {
+        Self { entity, component }
     }
 }
 
-unsafe impl<C: Component> Event for Insert<C> {
-    fn init(world: &mut World) -> EventKind {
-        let id = world.init_component::<C>();
-        EventKind::Insert(id)
+impl<C: Component> Event for Insert<C> {
+    unsafe fn init(world: &mut World) -> EventKind {
+        EventKind::Insert {
+            component_id: world.init_component::<C>(),
+            component_offset: memoffset::offset_of!(Insert::<C>, component),
+        }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(transparent)]
 pub struct Remove<C> {
     pub entity: EntityId,
     _marker: PhantomData<fn(C)>,
@@ -660,10 +682,11 @@ impl<C> Remove<C> {
     }
 }
 
-unsafe impl<C: Component> Event for Remove<C> {
-    fn init(world: &mut World) -> EventKind {
-        let id = world.init_component::<C>();
-        EventKind::Remove(id)
+impl<C: Component> Event for Remove<C> {
+    unsafe fn init(world: &mut World) -> EventKind {
+        EventKind::Remove {
+            component_id: world.init_component::<C>(),
+        }
     }
 }
 
@@ -687,8 +710,8 @@ impl Spawn {
     }
 }
 
-unsafe impl Event for Spawn {
-    fn init(_world: &mut World) -> EventKind {
+impl Event for Spawn {
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Spawn
     }
 }
@@ -696,8 +719,8 @@ unsafe impl Event for Spawn {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct Despawn(pub EntityId);
 
-unsafe impl Event for Despawn {
-    fn init(_world: &mut World) -> EventKind {
+impl Event for Despawn {
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Despawn
     }
 }
@@ -712,7 +735,8 @@ unsafe impl Event for Despawn {
 ///   the event for performance reasons.
 /// - Interacting with code outside the user's control in a hacky way.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct SendTo<E: Event> {
+#[repr(C)] // Field order is significant!
+pub struct SendTo<E> {
     /// Identifier of the system that will receive the inner event. If the
     /// identifier is invalid, then no system will receive the inner event.
     pub system: EntityId,
@@ -720,15 +744,17 @@ pub struct SendTo<E: Event> {
     pub event: E,
 }
 
-impl<E: Event> SendTo<E> {
+impl<E> SendTo<E> {
     pub const fn new(system: EntityId, event: E) -> Self {
         Self { system, event }
     }
 }
 
-unsafe impl<E: Event> Event for SendTo<E> {
-    fn init(world: &mut World) -> EventKind {
-        EventKind::SendTo(world.init_event::<E>())
+impl<E: Event> Event for SendTo<E> {
+    unsafe fn init(world: &mut World) -> EventKind {
+        EventKind::SendTo {
+            event_id: world.init_event::<E>(),
+        }
     }
 }
 
@@ -737,16 +763,26 @@ pub enum EventKind {
     /// An event not covered by one of the other variants.
     #[default]
     Other,
-    /// The [`Insert`] event. Contains the [`ComponentId`] of the component to
-    /// insert.
-    Insert(ComponentId),
-    /// The [`Remove`] event. Contains the [`ComponentId`] of the component to
-    /// remove.
-    Remove(ComponentId),
+    /// The [`Insert`] event.
+    Insert {
+        /// The [`ComponentId`] of the component to insert.
+        component_id: ComponentId,
+        /// Cached offset from the beginning of the event to the
+        /// [`Insert::component`] field.
+        component_offset: usize,
+    },
+    /// The [`Remove`] event.
+    Remove {
+        /// The [`ComponentId`] of the component to remove.
+        component_id: ComponentId,
+    },
     /// The [`Spawn`] event.
     Spawn,
     /// The [`Despawn`] event.
     Despawn,
-    /// The [`SendTo`] event. Contains the [`EventId`] of the event to send.
-    SendTo(EventId),
+    /// The [`SendTo`] event.
+    SendTo {
+        /// The [`EventId`] of the event to send.
+        event_id: EventId,
+    },
 }

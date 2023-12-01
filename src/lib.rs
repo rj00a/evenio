@@ -21,15 +21,16 @@ pub mod exclusive;
 pub mod label;
 pub mod query;
 pub mod system;
-#[cfg(test)]
-mod tests;
 mod type_id_hash;
 pub mod world;
+mod layout_util;
 
 pub mod prelude {
     pub use crate::component::Component;
     pub use crate::entity::EntityId;
-    pub use crate::event::{Despawn, Event, EventSet, Insert, SendTo, Sender, Spawn, Take};
-    pub use crate::query::{Has, Not, Or, ReadOnlyWorldQuery, With, WorldQuery, Xor};
+    pub use crate::event::{
+        Despawn, Discard, Event, EventSet, Insert, SendTo, Sender, Spawn, Take,
+    };
+    pub use crate::query::{Has, Not, Or, ReadOnlyQuery, With, Query, Xor};
     pub use crate::world::World;
 }

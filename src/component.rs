@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::any::TypeId;
+use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
 use std::mem::needs_drop;
 use std::ptr::{drop_in_place, NonNull};
@@ -8,9 +9,12 @@ use evenio_macros::all_tuples;
 pub use evenio_macros::Component;
 use slab::Slab;
 
+use crate::archetype::ArchetypeId;
 use crate::bit_set::BitSetIndex;
+use crate::debug_checked::GetDebugChecked;
 use crate::entity::EntityId;
 use crate::event::{EventSet, Insert};
+use crate::system::System;
 use crate::type_id_hash::TypeIdMap;
 
 pub trait Component: Send + Sync + 'static {}
@@ -32,6 +36,10 @@ impl Components {
     #[inline]
     pub(crate) fn get(&self, id: ComponentId) -> Option<&ComponentInfo> {
         self.infos.get(id.0 as usize)
+    }
+
+    pub(crate) unsafe fn get_debug_checked_mut(&mut self, id: ComponentId) -> &mut ComponentInfo {
+        self.infos.get_debug_checked_mut(id.0 as usize)
     }
 
     pub(crate) fn init_component<C: Component>(&mut self) -> ComponentId {
@@ -68,6 +76,8 @@ pub struct ComponentInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: Option<unsafe fn(NonNull<u8>)>,
+    /// The set of archetypes that have this component in one of its columns.
+    pub(crate) member_of: BTreeSet<ArchetypeId>,
 }
 
 impl ComponentInfo {
@@ -77,6 +87,7 @@ impl ComponentInfo {
             layout: Layout::new::<C>(),
             drop: needs_drop::<C>()
                 .then_some(|ptr| unsafe { drop_in_place(ptr.cast::<C>().as_ptr()) }),
+            member_of: BTreeSet::new(),
         }
     }
 
@@ -124,6 +135,7 @@ impl BitSetIndex for ComponentId {
     }
 }
 
+/*
 pub trait ComponentSet {
     type InsertEvents: EventSet;
 
@@ -134,7 +146,7 @@ impl<C: Component> ComponentSet for C {
     type InsertEvents = Insert<C>;
 
     fn into_insert_events(self, entity: EntityId) -> Self::InsertEvents {
-        Insert::new(self, entity)
+        Insert::new(entity, self)
     }
 }
 
@@ -157,3 +169,4 @@ macro_rules! impl_component_set_tuple {
 }
 
 all_tuples!(impl_component_set_tuple, 0, 15, C, c);
+*/

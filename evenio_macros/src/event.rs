@@ -14,7 +14,7 @@ pub(crate) fn derive_event(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
 
     quote! {
-        unsafe impl #impl_generics ::evenio::event::Event for #name #ty_generics #where_clause {}
+        impl #impl_generics ::evenio::event::Event for #name #ty_generics #where_clause {}
     }
     .into()
 }
