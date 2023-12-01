@@ -266,7 +266,7 @@ impl<'a> EventPtr<'a> {
 
 impl<E: Event> SystemParam for &'_ E {
     type State = ();
-    type Item<'s, 'a> = &'a E;
+    type Item<'a> = &'a E;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         if !config.access.received_event.is_compatible(Access::Read) {
@@ -287,12 +287,12 @@ impl<E: Event> SystemParam for &'_ E {
     }
 
     #[inline]
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         // SAFETY:
         // - Access to event pointer is shared.
         // - Event pointer is initialized as Some, so unwrap will not fail.
@@ -305,7 +305,7 @@ impl<E: Event> SystemParam for &'_ E {
 
 impl<E: Event> SystemParam for &'_ mut E {
     type State = ();
-    type Item<'s, 'a> = &'a mut E;
+    type Item<'a> = &'a mut E;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         if !config
@@ -329,12 +329,12 @@ impl<E: Event> SystemParam for &'_ mut E {
         Ok(())
     }
 
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         let mut ptr = event_ptr.get_mut().unwrap_debug_checked().cast::<E>();
 
         &mut *ptr.as_mut()
@@ -387,7 +387,7 @@ where
 impl<E: Event> SystemParam for Take<'_, E> {
     type State = ();
 
-    type Item<'s, 'a> = Take<'a, E>;
+    type Item<'a> = Take<'a, E>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         if !config
@@ -411,12 +411,12 @@ impl<E: Event> SystemParam for Take<'_, E> {
         Ok(())
     }
 
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         _system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Self::Item::new(event_ptr.get_mut())
     }
 }
@@ -452,7 +452,7 @@ impl<E> fmt::Debug for Discard<E> {
 impl<E: Event> SystemParam for Discard<E> {
     type State = ();
 
-    type Item<'s, 'a> = Discard<E>;
+    type Item<'a> = Discard<E>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         let this_id = world.init_event::<E>();
@@ -466,23 +466,23 @@ impl<E: Event> SystemParam for Discard<E> {
         Ok(())
     }
 
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         _system_info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Self::new()
     }
 }
 
-pub struct Sender<'s, 'a, Es: EventSet> {
-    state: &'s Es::State,
+pub struct Sender<'a, Es: EventSet> {
+    state: &'a Es::State,
     event_queue: &'a mut EventQueue,
     world: UnsafeWorldCell<'a>,
 }
 
-impl<Es: EventSet> Sender<'_, '_, Es> {
+impl<Es: EventSet> Sender<'_, Es> {
     /// # Panics
     ///
     /// Panics if the given event type `E` is not in the `EventSet` of this
@@ -525,7 +525,7 @@ impl<Es: EventSet> Sender<'_, '_, Es> {
     // TODO: unsafe fn send_raw or similar.
 }
 
-impl<Es> fmt::Debug for Sender<'_, '_, Es>
+impl<Es> fmt::Debug for Sender<'_, Es>
 where
     Es: EventSet,
     Es::State: fmt::Debug,
@@ -539,10 +539,10 @@ where
     }
 }
 
-impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
+impl<Es: EventSet> SystemParam for Sender<'_, Es> {
     type State = Es::State;
 
-    type Item<'s, 'a> = Sender<'s, 'a, Es>;
+    type Item<'a> = Sender<'a, Es>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         if !config.access.event_queue.is_compatible(Access::ReadWrite) {
@@ -565,12 +565,12 @@ impl<Es: EventSet> SystemParam for Sender<'_, '_, Es> {
         Ok(Es::new_state(world))
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         _system_info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Sender {
             state,
             event_queue: unsafe { world.event_queue_mut() },

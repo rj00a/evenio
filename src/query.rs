@@ -36,8 +36,8 @@ pub trait ReadOnlyQuery: Query {
     unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
-pub struct Fetcher<'s, 'a, Q: Query> {
-    state: &'s mut FetcherState<Q>,
+pub struct Fetcher<'a, Q: Query> {
+    state: &'a mut FetcherState<Q>,
     world: UnsafeWorldCell<'a>,
 }
 
@@ -56,7 +56,7 @@ struct Dense<F> {
     id: ArchetypeId,
 }
 
-impl<'a, 's, Q: Query> Fetcher<'a, 's, Q> {
+impl<Q: Query> Fetcher<'_, Q> {
     #[inline]
     pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
         let entities = self.world.entities();
@@ -92,7 +92,7 @@ impl<'a, 's, Q: Query> Fetcher<'a, 's, Q> {
     }
 }
 
-impl<'a, 's, Q: ReadOnlyQuery> Fetcher<'a, 's, Q> {
+impl<Q: ReadOnlyQuery> Fetcher<'_, Q> {
     #[inline]
     pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
         let entities = self.world.entities();
@@ -132,13 +132,13 @@ pub enum FetchError {
     AliasedMutability(EntityId),
 }
 
-impl<Q> SystemParam for Fetcher<'_, '_, Q>
+impl<Q> SystemParam for Fetcher<'_, Q>
 where
     Q: Query + 'static,
 {
     type State = FetcherState<Q>;
 
-    type Item<'s, 'a> = Fetcher<'s, 'a, Q>;
+    type Item<'a> = Fetcher<'a, Q>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         let (expr, mut state) = Q::init(world, config);
@@ -181,12 +181,12 @@ where
         })
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a crate::system::SystemInfo,
         event_ptr: crate::event::EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Fetcher { state, world }
     }
 }

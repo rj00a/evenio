@@ -314,16 +314,16 @@ pub enum SystemPriority {
 
 pub trait SystemParam {
     type State: Send + Sync + 'static;
-    type Item<'s, 'a>: SystemParam<State = Self::State>;
+    type Item<'a>: SystemParam<State = Self::State>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>>;
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a>;
+    ) -> Self::Item<'a>;
 }
 
 macro_rules! impl_system_param_tuple {
@@ -331,7 +331,7 @@ macro_rules! impl_system_param_tuple {
         impl<$($P: SystemParam),*> SystemParam for ($($P,)*) {
             type State = ($($P::State,)*);
 
-            type Item<'s, 'a> = ($($P::Item<'s, 'a>,)*);
+            type Item<'a> = ($($P::Item<'a>,)*);
 
             #[inline]
             fn init(_world: &mut World, _config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
@@ -343,12 +343,12 @@ macro_rules! impl_system_param_tuple {
             }
 
             #[inline]
-            unsafe fn get_param<'s, 'a>(
-                ($($s,)*): &'s mut Self::State,
+            unsafe fn get_param<'a>(
+                ($($s,)*): &'a mut Self::State,
                 _system_info: &'a SystemInfo,
                 _event_ptr: EventPtr<'a>,
                 _world: UnsafeWorldCell<'a>,
-            ) -> Self::Item<'s, 'a> {
+            ) -> Self::Item<'a> {
                 (
                     $(
                         $P::get_param($s, _system_info, _event_ptr, _world),
@@ -439,20 +439,20 @@ where
 pub trait SystemParamFunction<Marker>: Send + Sync + 'static {
     type Param: SystemParam;
 
-    unsafe fn run(&mut self, param: <Self::Param as SystemParam>::Item<'_, '_>);
+    unsafe fn run(&mut self, param: <Self::Param as SystemParam>::Item<'_>);
 }
 
 macro_rules! impl_system_param_function {
     ($(($P:ident, $p:ident)),*) => {
         impl<F, $($P: SystemParam),*> SystemParamFunction<fn($($P),*)> for F
         where
-            F: FnMut($($P),*) + FnMut($($P::Item<'_, '_>),*) + Send + Sync + 'static,
+            F: FnMut($($P),*) + FnMut($($P::Item<'_>),*) + Send + Sync + 'static,
         {
             type Param = ($($P,)*);
 
             unsafe fn run(
                 &mut self,
-                ($($p,)*): <Self::Param as SystemParam>::Item<'_, '_>
+                ($($p,)*): <Self::Param as SystemParam>::Item<'_>
             ) {
                 (self)($($p),*)
             }
@@ -473,18 +473,18 @@ where
 impl<T: FromWorld + Send + 'static> SystemParam for Local<'_, T> {
     type State = Exclusive<T>;
 
-    type Item<'s, 'a> = Local<'s, T>;
+    type Item<'a> = Local<'a, T>;
 
     fn init(world: &mut World, _config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         Ok(Exclusive::new(T::from_world(world)))
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Local {
             state: state.get_mut(),
         }
@@ -508,18 +508,18 @@ impl<T: FromWorld + Send + 'static> DerefMut for Local<'_, T> {
 impl SystemParam for SystemId {
     type State = ();
 
-    type Item<'s, 'a> = SystemId;
+    type Item<'a> = SystemId;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         Ok(())
     }
 
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         system_info.system_id
     }
 }
@@ -527,18 +527,18 @@ impl SystemParam for SystemId {
 impl SystemParam for &'_ SystemInfo {
     type State = ();
 
-    type Item<'s, 'a> = &'a SystemInfo;
+    type Item<'a> = &'a SystemInfo;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         Ok(())
     }
 
-    unsafe fn get_param<'s, 'a>(
-        _state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         system_info
     }
 }
@@ -563,7 +563,7 @@ impl<P> DerefMut for Before<P> {
 impl<P: SystemParam> SystemParam for Before<P> {
     type State = P::State;
 
-    type Item<'s, 'a> = Before<P::Item<'s, 'a>>;
+    type Item<'a> = Before<P::Item<'a>>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         let res = P::init(world, config)?;
@@ -571,12 +571,12 @@ impl<P: SystemParam> SystemParam for Before<P> {
         Ok(res)
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Before(P::get_param(state, system_info, event_ptr, world))
     }
 }
@@ -601,7 +601,7 @@ impl<P> DerefMut for After<P> {
 impl<P: SystemParam> SystemParam for After<P> {
     type State = P::State;
 
-    type Item<'s, 'a> = After<P::Item<'s, 'a>>;
+    type Item<'a> = After<P::Item<'a>>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         let res = P::init(world, config)?;
@@ -609,12 +609,12 @@ impl<P: SystemParam> SystemParam for After<P> {
         Ok(res)
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         After(P::get_param(state, system_info, event_ptr, world))
     }
 }
@@ -622,18 +622,18 @@ impl<P: SystemParam> SystemParam for After<P> {
 impl<P: SystemParam> SystemParam for Mutex<P> {
     type State = P::State;
 
-    type Item<'s, 'a> = Mutex<P::Item<'s, 'a>>;
+    type Item<'a> = Mutex<P::Item<'a>>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         P::init(world, config)
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         Mutex::new(P::get_param(state, system_info, event_ptr, world))
     }
 }
@@ -641,18 +641,18 @@ impl<P: SystemParam> SystemParam for Mutex<P> {
 impl<P: SystemParam> SystemParam for RwLock<P> {
     type State = P::State;
 
-    type Item<'s, 'a> = RwLock<P::Item<'s, 'a>>;
+    type Item<'a> = RwLock<P::Item<'a>>;
 
     fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
         P::init(world, config)
     }
 
-    unsafe fn get_param<'s, 'a>(
-        state: &'s mut Self::State,
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
         system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'s, 'a> {
+    ) -> Self::Item<'a> {
         RwLock::new(P::get_param(state, system_info, event_ptr, world))
     }
 }
