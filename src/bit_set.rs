@@ -88,23 +88,35 @@ impl<T> BitSet<T> {
 
 impl<T: SparseIndex> BitSet<T> {
     #[track_caller]
-    pub(crate) fn insert(&mut self, value: T) {
+    #[inline]
+    pub(crate) fn insert(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
 
         let block = self.grow_to_block(block);
 
+        let newly_inserted = *block & (1 << bit) == 0;
+
         *block |= 1 << bit;
+
+        newly_inserted
     }
 
-    pub(crate) fn remove(&mut self, value: T) {
+    #[inline]
+    pub(crate) fn remove(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
 
         if let Some(block) = self.blocks.get_mut(block) {
+            let removed = *block & (1 << bit) != 0;
+
             *block &= !(1 << bit);
+
+            removed
+        } else {
+            false
         }
     }
 
@@ -126,6 +138,19 @@ impl<T: SparseIndex> BitSet<T> {
             blocks: &self.blocks,
             _marker: PhantomData,
         }
+    }
+
+    pub(crate) fn shrink_to_fit(&mut self) {
+        while let Some(&last) = self.blocks.last() {
+            if last != 0 {
+                // There are bits in this block.
+                break;
+            }
+
+            self.blocks.pop();
+        }
+
+        self.blocks.shrink_to_fit();
     }
 }
 
@@ -150,7 +175,7 @@ impl<T: SparseIndex> FromIterator<T> for BitSet<T> {
     }
 }
 
-pub(crate) struct Iter<'a, T: SparseIndex = usize> {
+pub(crate) struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
