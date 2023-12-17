@@ -1,13 +1,14 @@
-use std::alloc::Layout;
-use std::ptr::NonNull;
-use std::{alloc, ptr};
+use alloc::alloc;
+use core::alloc::Layout;
+use core::ptr;
+use core::ptr::NonNull;
 
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::layout_util::{padding_needed_for, repeat_layout};
 
 /// Like `Vec<T>`, but `T` is erased.
 #[derive(Debug)]
-pub(crate) struct ErasedVec {
+pub(crate) struct BlobVec {
     /// Layout of a single element.
     elem_layout: Layout,
     /// Number of elements.
@@ -19,7 +20,7 @@ pub(crate) struct ErasedVec {
     drop: Option<unsafe fn(NonNull<u8>)>,
 }
 
-impl ErasedVec {
+impl BlobVec {
     /// # Safety
     /// - `layout`'s size must be evenly divisble by its alignment.
     /// - If `Some`, `drop` must be safe to call with an aligned pointer to an
@@ -194,14 +195,24 @@ impl ErasedVec {
         self.data
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.cap
+    }
+
+    /*
     /// Returns a pointer to the length of this vec. The pointer is invalidated
     /// when the vec is moved or dropped.
     pub(crate) fn len_ptr(&self) -> *const usize {
         &self.len
     }
+    */
 }
 
-impl Drop for ErasedVec {
+impl Drop for BlobVec {
     fn drop(&mut self) {
         self.clear();
 
@@ -229,9 +240,9 @@ mod tests {
 
     use super::*;
 
-    fn new_erased_vec<T>() -> ErasedVec {
+    fn new_erased_vec<T>() -> BlobVec {
         unsafe {
-            ErasedVec::new(
+            BlobVec::new(
                 Layout::new::<T>(),
                 mem::needs_drop::<T>()
                     .then_some(|ptr| ptr::drop_in_place(ptr.cast::<T>().as_ptr())),

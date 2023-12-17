@@ -4,7 +4,7 @@
 //!
 //! [`alloc_layout_extra`]: https://github.com/rust-lang/rust/issues/55724
 
-use std::alloc::Layout;
+use core::alloc::Layout;
 
 /// Creates a layout describing the record for `n` instances of
 /// `self`, with a suitable amount of padding between each to

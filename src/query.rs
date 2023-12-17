@@ -1,20 +1,15 @@
-use std::error::Error;
-use std::fmt;
+use core::fmt;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::ptr::NonNull;
 
 use evenio_macros::all_tuples;
 
 use crate::access::{Access, AccessExpr};
-use crate::archetype::{Archetype, ArchetypeId, ArchetypeRow, Archetypes};
-use crate::component::ComponentId;
-use crate::debug_checked::GetDebugChecked;
+use crate::archetype::{Archetype, ArchetypeRow};
+use crate::component::{Component, ComponentId, ComponentIdx};
 use crate::entity::EntityId;
-use crate::prelude::{Component, World};
-use crate::system::{SystemConfig, SystemParam};
-use crate::world::UnsafeWorldCell;
-
+use crate::system::Config;
+use crate::world::World;
 pub unsafe trait Query {
     /// The item returned by this query. This is usually same type as `Self`,
     /// but with a transformed lifetime.
@@ -24,8 +19,7 @@ pub unsafe trait Query {
     /// Cached data for fetch initialization. This is stored in [`QueryState`].
     type State: Send + Sync + fmt::Debug + 'static;
 
-    fn init(world: &mut World, config: &mut SystemConfig)
-        -> (AccessExpr<ComponentId>, Self::State);
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State);
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch>;
 
@@ -36,174 +30,6 @@ pub trait ReadOnlyQuery: Query {
     unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
-pub struct Fetcher<'a, Q: Query> {
-    state: &'a mut FetcherState<Q>,
-    world: UnsafeWorldCell<'a>,
-}
-
-pub struct FetcherState<Q: Query> {
-    dense: Vec<Dense<Q::Fetch>>,
-    /// Mapping from [`ArchetypeId`] to index in `dense`. `u32::MAX` indicates
-    /// no index. Used for random access entity lookups.
-    sparse: Vec<u32>,
-    state: Q::State,
-}
-
-#[derive(Debug)]
-struct Dense<F> {
-    /// Collection of archetype column pointers for one archetype.
-    fetch: F,
-    id: ArchetypeId,
-}
-
-impl<Q: Query> Fetcher<'_, Q> {
-    #[inline]
-    pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
-        let entities = self.world.entities();
-
-        let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
-        };
-
-        let idx = *unsafe {
-            self.state
-                .sparse
-                .get_debug_checked(loc.archetype.0 as usize)
-        };
-
-        if idx == u32::MAX {
-            return Err(FetchError::QueryDoesNotMatch(entity));
-        };
-
-        let fetch = &mut unsafe { self.state.dense.get_debug_checked_mut(idx as usize) }.fetch;
-
-        Ok(unsafe { Q::fetch_mut(fetch, loc.row) })
-    }
-
-    // TODO: get_many_mut
-
-    pub fn iter_mut(&mut self) -> IterMut<Q> {
-        IterMut {
-            dense: self.state.dense.as_mut_slice(),
-            row: ArchetypeRow(0),
-            archetypes: self.world.archetypes(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<Q: ReadOnlyQuery> Fetcher<'_, Q> {
-    #[inline]
-    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
-        let entities = self.world.entities();
-
-        let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
-        };
-
-        let idx = *unsafe {
-            self.state
-                .sparse
-                .get_debug_checked(loc.archetype.0 as usize)
-        };
-
-        if idx == u32::MAX {
-            return Err(FetchError::QueryDoesNotMatch(entity));
-        };
-
-        let fetch = &unsafe { self.state.dense.get_debug_checked(idx as usize) }.fetch;
-
-        Ok(unsafe { Q::fetch(fetch, loc.row) })
-    }
-
-    pub fn iter(&self) -> Iter<Q> {
-        Iter {
-            dense: &self.state.dense,
-            row: ArchetypeRow(0),
-            archetypes: self.world.archetypes(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FetchError {
-    NoSuchEntity(EntityId),
-    QueryDoesNotMatch(EntityId),
-    AliasedMutability(EntityId),
-}
-
-impl<Q> SystemParam for Fetcher<'_, Q>
-where
-    Q: Query + 'static,
-{
-    type State = FetcherState<Q>;
-
-    type Item<'a> = Fetcher<'a, Q>;
-
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        let (expr, mut state) = Q::init(world, config);
-
-        if !config.access.components.is_compatible(&expr) {
-            panic!("aklwjdjklawdjkl");
-        }
-
-        config.access.components.and(&expr);
-
-        // Get an upper bound on the size of the sparse array. This needs to be large
-        // enough to avoid bounds checking.
-        // TODO: iterating slotmap is not great. Also relies on implementation details
-        // out of our control.
-        let sparse_upper_bound = world
-            .archetypes()
-            .iter()
-            .rev()
-            .next()
-            .map(|(id, _)| id.0 + 1)
-            .unwrap_or(0);
-
-        let mut sparse = vec![u32::MAX; sparse_upper_bound as usize];
-        let mut dense = vec![];
-
-        // TODO: don't iterate over every archetype.
-
-        for (id, arch) in world.archetypes().iter() {
-            if let Some(columns) = Q::init_fetch(arch, &mut state) {
-                let idx = dense.len() as u32;
-                dense.push(Dense { fetch: columns, id });
-                *unsafe { sparse.get_debug_checked_mut(id.0 as usize) } = idx;
-            }
-        }
-
-        Ok(FetcherState {
-            dense,
-            sparse,
-            state,
-        })
-    }
-
-    unsafe fn get_param<'a>(
-        state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
-        event_ptr: crate::event::EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
-        Fetcher { state, world }
-    }
-}
-
-impl<Q: Query> fmt::Debug for FetcherState<Q> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QueryState")
-            .field("dense", &self.dense)
-            .field("sparse", &self.sparse)
-            .field("state", &self.state)
-            .finish()
-    }
-}
-
-unsafe impl<F> Send for Dense<F> {}
-unsafe impl<F> Sync for Dense<F> {}
-
 unsafe impl<C: Component> Query for &'_ C {
     type Item<'a> = &'a C;
 
@@ -211,18 +37,23 @@ unsafe impl<C: Component> Query for &'_ C {
 
     type State = ComponentId;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let id = world.init_component::<C>();
-        let expr = AccessExpr::with(id, Access::Read);
+        let expr = AccessExpr::with(id.index(), Access::Read);
 
         (expr, id)
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
         todo!()
+
+        /*
+        let cols = archetype.columns();
+
+        cols.binary_search_by_key(state, |c| c.component_id())
+            .ok()
+            .map(|idx| ColumnPtr(cols[idx].data().cast()))
+        */
     }
 
     unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
@@ -243,22 +74,27 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     type State = ComponentId;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
+        struct AssertMutable<C>(PhantomData<C>);
+
+        impl<C: Component> AssertMutable<C> {
+            const ASSERTION: () = assert!(
+                C::MUTABLE,
+                "component does not permit mutation through mutable references (see \
+                 `Component::MUTABLE`)."
+            );
+        }
+
+        let _ = AssertMutable::<C>::ASSERTION;
+
         let id = world.init_component::<C>();
-        let expr = AccessExpr::with(id, Access::ReadWrite);
+        let expr = AccessExpr::with(id.index(), Access::ReadWrite);
 
         (expr, id)
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        let cols = archetype.columns();
-
-        cols.binary_search_by_key(state, |c| c.component_id())
-            .ok()
-            .map(|idx| ColumnPtr(cols[idx].data().cast()))
+        <&C>::init_fetch(archetype, state)
     }
 
     unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
@@ -275,7 +111,7 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
-            fn init(world: &mut World, config: &mut SystemConfig) -> (AccessExpr<ComponentId>, Self::State) {
+            fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
                 #![allow(unused_variables)]
 
                 #[allow(unused_mut)]
@@ -334,10 +170,7 @@ unsafe impl<Q: Query> Query for Option<Q> {
 
     type State = Q::State;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
         expr.or(&AccessExpr::one());
@@ -408,10 +241,7 @@ where
 
     type State = (L::State, R::State);
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (mut left_access, left_state) = L::init(world, config);
         let (right_access, right_state) = R::init(world, config);
 
@@ -504,10 +334,7 @@ where
 
     type State = (L::State, R::State);
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (mut left_access, left_state) = L::init(world, config);
         let (right_access, right_state) = R::init(world, config);
 
@@ -587,10 +414,7 @@ unsafe impl<Q: Query> Query for Not<Q> {
 
     type State = Q::State;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
         expr.not();
@@ -651,10 +475,7 @@ unsafe impl<Q: Query> Query for With<Q> {
 
     type State = Q::State;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (mut expr, state) = Q::init(world, config);
 
         expr.clear_access();
@@ -721,14 +542,6 @@ impl<Q> fmt::Debug for Has<Q> {
     }
 }
 
-impl<Q> Deref for Has<Q> {
-    type Target = bool;
-
-    fn deref(&self) -> &Self::Target {
-        &self.has
-    }
-}
-
 unsafe impl<Q: Query> Query for Has<Q> {
     type Item<'a> = Self;
 
@@ -736,10 +549,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
 
     type State = Q::State;
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         let (_, state) = Q::init(world, config);
 
         (AccessExpr::one(), state)
@@ -767,15 +577,15 @@ unsafe impl Query for EntityId {
 
     type State = ();
 
-    fn init(
-        world: &mut World,
-        config: &mut SystemConfig,
-    ) -> (AccessExpr<ComponentId>, Self::State) {
+    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
         (AccessExpr::one(), ())
     }
 
     fn init_fetch(archetype: &Archetype, (): &mut Self::State) -> Option<Self::Fetch> {
+        todo!()
+        /*
         Some(ColumnPtr(archetype.entity_ids()))
+        */
     }
 
     unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
@@ -809,83 +619,6 @@ impl<T> fmt::Debug for ColumnPtr<T> {
 // safe on their own.
 unsafe impl<T> Send for ColumnPtr<T> {}
 unsafe impl<T> Sync for ColumnPtr<T> {}
-
-pub struct Iter<'a, Q: ReadOnlyQuery> {
-    dense: &'a [Dense<Q::Fetch>],
-    /// Index into the current archetype.
-    row: ArchetypeRow,
-    archetypes: &'a Archetypes,
-}
-
-impl<'a, Q: ReadOnlyQuery> Iterator for Iter<'a, Q> {
-    type Item = Q::Item<'a>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (dense, rest) = self.dense.split_first()?;
-
-            let len = unsafe { self.archetypes.get_debug_checked(dense.id) }.len();
-
-            if self.row.0 == len {
-                self.dense = rest;
-                self.row.0 = 0;
-                continue;
-            }
-
-            let item = unsafe { Q::fetch(&dense.fetch, self.row) };
-
-            self.row.0 += 1;
-
-            return Some(item);
-        }
-    }
-}
-
-pub struct IterMut<'a, Q: Query> {
-    // Using a pointer to sneak past a puzzling lifetime problem.
-    dense: *mut [Dense<Q::Fetch>],
-    row: ArchetypeRow,
-    archetypes: &'a Archetypes,
-    _marker: PhantomData<&'a mut ()>,
-}
-
-impl<'a, Q: Query> Iterator for IterMut<'a, Q> {
-    type Item = Q::Item<'a>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (dense, rest) = unsafe { &mut (*self.dense) }.split_first_mut()?;
-
-            let len = unsafe { self.archetypes.get_debug_checked(dense.id) }.len();
-
-            if self.row.0 == len {
-                self.dense = rest;
-                self.row.0 = 0;
-                continue;
-            }
-
-            let item = unsafe { Q::fetch_mut(&mut dense.fetch, self.row) };
-
-            self.row.0 += 1;
-
-            return Some(item);
-        }
-    }
-}
-
-impl<Q: Query> fmt::Debug for IterMut<'_, Q> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("IterMut")
-            .field("dense", &self.dense)
-            .field("row", &self.row)
-            .field("archetypes", &self.archetypes)
-            .finish()
-    }
-}
-
-// TODO: more iterator stuff.
 
 #[cfg(test)]
 mod tests {
@@ -948,5 +681,4 @@ mod tests {
     t!(t14, true, (Option<&A>, &A, &A));
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
-    t!(t17, false, (Or<(&A, &B), (&B, &C)>, &mut B));
 }

@@ -17,24 +17,31 @@ elided_lifetimes_in_paths = "allow" # Warned by `future_incompatible`.
 dbg_macro = "warn"
 undocumented_unsafe_blocks = "warn"
 mod_module_files = "warn"
+std_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
 
 # Deny rustdoc stuff so CI fails.
-[workspace.lints.rustdoc]
-broken_intra_doc_links = "deny"
-private_intra_doc_links = "deny"
-missing_crate_level_docs = "deny"
-invalid_codeblock_attributes = "deny"
-invalid_rust_codeblocks = "deny"
-bare_urls = "deny"
-invalid_html_tags = "deny"
+# [workspace.lints.rustdoc]
+# broken_intra_doc_links = "deny"
+# private_intra_doc_links = "deny"
+# missing_crate_level_docs = "deny"
+# invalid_codeblock_attributes = "deny"
+# invalid_rust_codeblocks = "deny"
+# bare_urls = "deny"
+# invalid_html_tags = "deny"
 
 [package]
 name = "evenio"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["std"]
+# rayon = ["std"]
+std = []
+
 [dependencies]
-ahash = "0.8.3"
+# ahash = "0.8.3"
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros" }
 memoffset = "0.9.0"

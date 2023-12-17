@@ -1,14 +1,14 @@
 use std::{fmt, mem};
 
-use crate::bit_set::{BitSet, BitSetIndex};
-use crate::component::ComponentId;
+use crate::bit_set::{BitSet, SparseSetIndex};
+use crate::component::ComponentIdx;
 
 #[derive(Clone, Debug)]
 pub struct SystemAccess {
     pub received_event: Access,
     pub event_queue: Access,
     pub reserve_entity: Access,
-    pub components: AccessExpr<ComponentId>,
+    pub components: AccessExpr<ComponentIdx>,
 }
 
 impl SystemAccess {
@@ -72,7 +72,7 @@ impl<T> Clone for AccessExpr<T> {
     }
 }
 
-impl<T: BitSetIndex> AccessExpr<T> {
+impl<T: SparseSetIndex> AccessExpr<T> {
     pub fn with(value: T, access: Access) -> Self {
         let mut res = Self::zero();
 
@@ -105,8 +105,8 @@ impl<T: BitSetIndex> AccessExpr<T> {
             for other in &other.disjunctions {
                 let mut new_filter: Conjunctions<T> = filter.clone();
 
-                new_filter.with.union(&other.with);
-                new_filter.without.union(&other.without);
+                new_filter.with.union_assign(&other.with);
+                new_filter.without.union_assign(&other.without);
 
                 // Skip contradictions.
                 if new_filter.with.is_disjoint(&new_filter.without) {
@@ -201,11 +201,11 @@ impl<T: BitSetIndex> AccessExpr<T> {
     }
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
+impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
 
-        impl<T: fmt::Debug + BitSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
+        impl<T: fmt::Debug + SparseSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 if self.0.is_empty() {
                     write!(f, "⊥")?;
@@ -261,7 +261,7 @@ struct AccessMap<T> {
     write: BitSet<T>,
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
+impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessMap")
             .field("read", &self.read)
@@ -293,7 +293,7 @@ impl<T> Clone for AccessMap<T> {
     }
 }
 
-impl<T: BitSetIndex> AccessMap<T> {
+impl<T: SparseSetIndex> AccessMap<T> {
     fn get(&self, value: T) -> Access {
         match (self.read.contains(value), self.write.contains(value)) {
             (true, true) => Access::ReadWrite,
@@ -321,8 +321,8 @@ impl<T: BitSetIndex> AccessMap<T> {
     }
 
     fn union(&mut self, other: &Self) {
-        self.read.union(&other.read);
-        self.write.union(&other.write);
+        self.read.union_assign(&other.read);
+        self.write.union_assign(&other.write);
     }
 
     /// Whether these two accesses can be active at the same time without
@@ -354,6 +354,16 @@ impl Access {
             _ => false,
         }
     }
+
+    #[must_use]
+    pub fn set_if_compatible(&mut self, other: Self) -> bool {
+        if self.is_compatible(other) {
+            *self = other;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Sets of `With` and `Without` filters.
@@ -364,7 +374,7 @@ struct Conjunctions<T> {
     without: BitSet<T>,
 }
 
-impl<T: BitSetIndex> Conjunctions<T> {
+impl<T: SparseSetIndex> Conjunctions<T> {
     /// Determines if `self` and `other` are disjoint, i.e. if there is no
     /// combination of values the variables could have to make both expressions
     /// true at the same time.
@@ -381,7 +391,7 @@ impl<T: BitSetIndex> Conjunctions<T> {
     }
 }
 
-impl<T: BitSetIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
+impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessFilters")
             .field("with", &self.with)

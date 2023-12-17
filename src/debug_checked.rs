@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use slab::Slab;
 
@@ -47,8 +47,7 @@ impl<T> GetDebugChecked for Vec<T> {
     }
 }
 
-// Don't use `Slab::get_unchecked` because there is a branch for
-// panic handling. https://github.com/tokio-rs/slab/pull/74
+// Don't use `Slab::get_unchecked` because there's a panicking branch. https://github.com/tokio-rs/slab/pull/74
 impl<T> GetDebugChecked for Slab<T> {
     type Output = T;
 
@@ -123,4 +122,14 @@ where
             return self.unwrap_unchecked();
         }
     }
+}
+
+#[inline]
+#[track_caller]
+pub(crate) unsafe fn unreachable_debug_checked() -> ! {
+    #[cfg(debug_assertions)]
+    unreachable!();
+
+    #[cfg(not(debug_assertions))]
+    std::hint::unreachable_unchecked();
 }

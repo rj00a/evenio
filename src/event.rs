@@ -1,150 +1,179 @@
-use std::alloc::Layout;
-use std::any::{self, TypeId};
-use std::borrow::Cow;
-use std::collections::hash_map::Entry;
-use std::error::Error;
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
-use std::ptr::NonNull;
-use std::{fmt, mem, ptr};
+use alloc::borrow::Cow;
+use alloc::collections::BTreeMap;
+use core::alloc::Layout;
+use core::any::TypeId;
+use core::marker::PhantomData;
+use core::num::NonZeroU32;
+use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
+use core::{any, fmt, mem};
 
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
-pub use evenio_macros::Event;
-use slab::Slab;
+use memoffset::offset_of;
 
 use crate::access::Access;
-use crate::bit_set::BitSetIndex;
-use crate::component::ComponentId;
-use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
+use crate::bit_set::SparseSetIndex;
+use crate::component::ComponentIdx;
+use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
-use crate::prelude::{Component, World};
-use crate::system::{SystemConfig, SystemInfo, SystemInitError, SystemListEntry, SystemParam};
-use crate::type_id_hash::TypeIdMap;
-use crate::world::UnsafeWorldCell;
-
-pub trait Event: Send + Sync + 'static {
-    #[doc(hidden)]
-    unsafe fn init(_world: &mut World) -> EventKind {
-        EventKind::Other
-    }
-}
+use crate::fetch::{Fetcher, FetcherState};
+use crate::prelude::Component;
+use crate::query::Query;
+use crate::slot_map::{Key, SlotMap};
+use crate::system::{Config, InitError, SystemParam};
+use crate::world::{UnsafeWorldCell, World};
 
 #[derive(Debug)]
-pub(crate) struct Events {
-    infos: Slab<EventInfo>,
-    typeid_to_id: TypeIdMap<EventId>,
+pub struct Events {
+    global_events: SlotMap<EventInfo>,
+    entity_events: SlotMap<EventInfo>,
+    by_type_id: BTreeMap<TypeId, EventIdx>,
 }
 
 impl Events {
     pub(crate) fn new() -> Self {
         Self {
-            infos: Slab::new(),
-            typeid_to_id: Default::default(),
+            global_events: SlotMap::new(),
+            entity_events: SlotMap::new(),
+            by_type_id: BTreeMap::new(),
         }
     }
 
-    #[track_caller]
-    pub(crate) unsafe fn init<E: Event>(&mut self, kind: EventKind) -> EventId {
-        match self.typeid_to_id.entry(TypeId::of::<E>()) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(_) => {
-                let mut info = EventInfo::new::<E>();
-                info.kind = kind;
+    pub fn get(&self, id: EventId) -> Option<&EventInfo> {
+        match id.to_enum() {
+            EventIdEnum::Global(id) => self.global_events.get(id.0),
+            EventIdEnum::Entity(id) => self.entity_events.get(id.0),
+        }
+    }
 
-                let id = self.add(info);
-                self.typeid_to_id.insert(TypeId::of::<E>(), id);
-                id
+    #[inline]
+    pub fn by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
+        match idx {
+            EventIdx::Global(idx) => {
+                let k = self.global_events.key_at_index(idx.0)?;
+                Some(unsafe { self.global_events.get(k).unwrap_debug_checked() })
+            }
+            EventIdx::Entity(idx) => {
+                let k = self.entity_events.key_at_index(idx.0)?;
+                Some(unsafe { self.entity_events.get(k).unwrap_debug_checked() })
             }
         }
     }
 
-    #[track_caller]
-    pub(crate) unsafe fn add(&mut self, info: EventInfo) -> EventId {
-        let id = self.infos.insert(info);
+    pub fn by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
+        let idx = *self.by_type_id.get(&type_id)?;
+        Some(unsafe { self.by_index(idx).unwrap_debug_checked() })
+    }
+}
 
-        if id >= EventId::NULL.0 as usize {
-            panic!("too many events added")
+pub unsafe trait Event: Send + Sync + 'static {
+    const TARGET_OFFSET: Option<usize> = None;
+
+    // TODO: const MUTABLE: bool = true
+
+    fn init(world: &mut World) -> EventKind {
+        let _ = world;
+        EventKind::Other
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+#[non_exhaustive]
+pub enum EventKind {
+    /// An event not covered by one of the other variants.
+    #[default]
+    Other,
+    /// The [`Insert`] event.
+    Insert {
+        /// The [`ComponentIdx`] of the component to insert.
+        component_idx: ComponentIdx,
+        /// Cached offset from the beginning of the event to the
+        /// [`Insert::component`] field.
+        component_offset: usize,
+    },
+    /// The [`Remove`] event.
+    Remove {
+        /// The [`ComponentIdx`] of the component to remove.
+        component_idx: ComponentIdx,
+    },
+    /// The [`Spawn`] event.
+    Spawn,
+    /// The [`Despawn`] event.
+    Despawn,
+}
+
+/// Performs sanity checks on [`Entity::TARGET_OFFSET`]. Returns true if `E`'s
+/// `TARGET_OFFSET` might be correct, and false if it's definitely incorrect.
+const fn check_target_offset<E: Event>() -> bool {
+    match E::TARGET_OFFSET {
+        Some(target_offset) => {
+            mem::size_of::<E>() >= mem::size_of::<EventId>()
+                && target_offset <= mem::size_of::<E>() - mem::size_of::<EventId>()
         }
-
-        EventId(id as u32)
-    }
-
-    #[inline]
-    pub(crate) fn get(&self, id: EventId) -> Option<&EventInfo> {
-        self.infos.get(id.0 as usize)
-    }
-
-    #[inline]
-    pub(crate) unsafe fn get_debug_checked(&self, id: EventId) -> &EventInfo {
-        self.infos.get_debug_checked(id.0 as usize)
+        None => true,
     }
 }
 
-#[derive(Debug)]
-pub struct EventInfo {
-    name: Cow<'static, str>,
-    type_id: Option<TypeId>,
-    layout: Layout,
-    drop: Option<unsafe fn(NonNull<u8>)>,
-    kind: EventKind,
-}
-
-impl EventInfo {
-    pub fn new<E: Event>() -> Self {
-        Self {
-            name: any::type_name::<E>().into(),
-            type_id: Some(TypeId::of::<E>()),
-            layout: Layout::new::<E>(),
-            drop: mem::needs_drop::<E>()
-                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<E>()) }),
-            kind: EventKind::Other,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn type_id(&self) -> Option<TypeId> {
-        self.type_id
-    }
-
-    pub fn layout(&self) -> Layout {
-        self.layout
-    }
-
-    pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
-        self.drop
-    }
-
-    pub fn kind(&self) -> EventKind {
-        self.kind
+#[inline]
+const fn get_target<E: Event>(event: &E) -> Option<EntityId> {
+    match E::TARGET_OFFSET {
+        Some(offset) => Some(unsafe {
+            *(event as *const E as *const u8)
+                .add(offset)
+                .cast::<EntityId>()
+        }),
+        None => None,
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EventId(u32);
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventId {
+    index: u32,
+    generation: u32,
+}
 
 impl EventId {
-    pub const NULL: Self = Self(u32::MAX);
+    pub const NULL: Self = Self {
+        index: u32::MAX,
+        generation: u32::MAX,
+    };
 
-    pub(crate) fn index(&self) -> u32 {
-        self.0
-    }
+    pub fn to_enum(self) -> EventIdEnum {
+        if self.generation & 1 == 0 {
+            // SAFETY: Generation is nonzero.
+            let gen = unsafe { NonZeroU32::new(self.generation | 1).unwrap_debug_checked() };
 
-    #[inline]
-    pub const fn to_bits(self) -> u64 {
-        self.0 as u64
-    }
+            // SAFETY: Generation is odd.
+            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
 
-    #[inline]
-    pub const fn from_bits(bits: u64) -> Option<Self> {
-        if bits <= u32::MAX as u64 {
-            Some(Self(bits as u32))
+            EventIdEnum::Global(GlobalEventId(k))
         } else {
-            None
+            // SAFETY: Generation is nonzero.
+            let gen = unsafe { NonZeroU32::new(self.generation).unwrap_debug_checked() };
+
+            // SAFETY: Generation is odd.
+            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
+
+            EventIdEnum::Entity(EntityEventId(k))
         }
+    }
+
+    pub const fn from_enum(id: EventIdEnum) -> Self {
+        match id {
+            EventIdEnum::Global(id) => Self {
+                index: id.index().0,
+                generation: id.0.generation().get(),
+            },
+            EventIdEnum::Entity(id) => Self {
+                index: id.index().0,
+                generation: id.0.generation().get() & !1,
+            },
+        }
+    }
+
+    pub fn index(self) -> EventIdx {
+        self.to_enum().index()
     }
 }
 
@@ -154,18 +183,92 @@ impl Default for EventId {
     }
 }
 
-impl BitSetIndex for EventId {
-    fn bit_set_index(self) -> usize {
+impl fmt::Debug for EventId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.to_enum().fmt(f)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum EventIdEnum {
+    Global(GlobalEventId),
+    Entity(EntityEventId),
+}
+
+impl EventIdEnum {
+    pub const fn index(self) -> EventIdx {
+        match self {
+            Self::Global(id) => EventIdx::Global(id.index()),
+            Self::Entity(id) => EventIdx::Entity(id.index()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum EventIdx {
+    Global(GlobalEventIdx),
+    Entity(EntityEventIdx),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct GlobalEventId(Key);
+
+impl GlobalEventId {
+    pub const NULL: Self = Self(Key::NULL);
+
+    pub const fn index(self) -> GlobalEventIdx {
+        GlobalEventIdx(self.0.index())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct GlobalEventIdx(pub u32);
+
+impl SparseSetIndex for GlobalEventIdx {
+    fn index(self) -> usize {
         self.0 as usize
     }
 
-    fn from_bit_set_index(idx: usize) -> Self {
+    fn from_index(idx: usize) -> Self {
+        Self(idx as u32)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct EntityEventId(Key);
+
+impl EntityEventId {
+    pub const NULL: Self = Self(Key::NULL);
+
+    pub const fn index(self) -> EntityEventIdx {
+        EntityEventIdx(self.0.index())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct EntityEventIdx(pub u32);
+
+impl SparseSetIndex for EntityEventIdx {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    fn from_index(idx: usize) -> Self {
         Self(idx as u32)
     }
 }
 
 #[derive(Debug)]
-pub struct EventQueue {
+pub struct EventInfo {
+    id: EventId,
+    name: Cow<'static, str>,
+    type_id: Option<TypeId>,
+    layout: Layout,
+    drop: Option<unsafe fn(NonNull<u8>)>,
+}
+
+#[derive(Debug)]
+pub(crate) struct EventQueue {
     items: Vec<EventQueueItem>,
     bump: Bump,
 }
@@ -178,25 +281,13 @@ impl EventQueue {
         }
     }
 
-    /// Push an event to the event queue.
-    ///
-    /// # Safety
-    ///
-    /// `event_id` must be correct for the given event type. Otherwise,
-    /// undefined behavior may occur.
-    pub unsafe fn push<E: Event>(&mut self, event: E, event_id: EventId) {
-        let event_ptr = NonNull::from(self.bump.alloc(event)).cast::<u8>();
+    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, event_idx: EventIdx) {
+        let event_ptr = NonNull::from(self.bump.alloc(event)).cast();
 
         self.items.push(EventQueueItem {
-            event_id,
+            event_idx,
             event_ptr: Some(event_ptr),
-            system_slice: &mut [],
-            system_idx: 0,
-        });
-    }
-
-    pub(crate) unsafe fn get_unchecked_mut(&mut self, idx: usize) -> &mut EventQueueItem {
-        self.items.get_debug_checked_mut(idx)
+        })
     }
 
     /// Clears the event queue and resets the internal bump allocator.
@@ -207,20 +298,8 @@ impl EventQueue {
         self.bump.reset();
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     pub(crate) unsafe fn set_len(&mut self, new_len: usize) {
         self.items.set_len(new_len)
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> + '_ {
-        self.items.iter()
     }
 }
 
@@ -228,184 +307,128 @@ impl EventQueue {
 // the event queue.
 unsafe impl Sync for EventQueue {}
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct EventQueueItem {
-    /// Type of this event.
-    pub(crate) event_id: EventId,
+    pub(crate) event_idx: EventIdx,
     /// Type-erased pointer to this event. When `None`, ownership of the event
     /// has been transferred and no destructor needs to run.
     pub(crate) event_ptr: Option<NonNull<u8>>,
-    /// Slice of systems that handle this event.
-    pub(crate) system_slice: *mut [SystemListEntry],
-    /// Current index into the system slice.
-    pub(crate) system_idx: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct EventPtr<'a> {
-    ptr: NonNull<Option<NonNull<u8>>>,
+    ptr: NonNull<*mut u8>,
     _marker: PhantomData<&'a mut u8>,
 }
 
 impl<'a> EventPtr<'a> {
-    pub(crate) fn new(ptr: &'a mut Option<NonNull<u8>>) -> Self {
+    pub(crate) fn new(ptr: NonNull<*mut u8>) -> Self {
         Self {
             ptr: NonNull::from(ptr),
             _marker: PhantomData,
         }
     }
 
-    pub unsafe fn get(self) -> &'a Option<NonNull<u8>> {
-        &*self.ptr.as_ptr()
+    pub unsafe fn as_event<E: Event>(self) -> &'a E {
+        &*self.ptr.as_ptr().read().cast::<E>()
     }
 
-    pub unsafe fn get_mut(self) -> &'a mut Option<NonNull<u8>> {
-        &mut *self.ptr.as_ptr()
-    }
-}
-
-impl<E: Event> SystemParam for &'_ E {
-    type State = ();
-    type Item<'a> = &'a E;
-
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        if !config.access.received_event.is_compatible(Access::Read) {
-            return Err(Box::new(SystemInitError::ConflictingEventAccess));
-        }
-
-        config.access.received_event = Access::Read;
-
-        let this_id = world.init_event::<E>();
-
-        if config.received_event == EventId::NULL {
-            config.received_event = this_id;
-        } else if config.received_event != this_id {
-            return Err(Box::new(SystemInitError::ConflictingEventType));
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    unsafe fn get_param<'a>(
-        _state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
-        event_ptr: EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
-        // SAFETY:
-        // - Access to event pointer is shared.
-        // - Event pointer is initialized as Some, so unwrap will not fail.
-        let ptr = event_ptr.get().unwrap_debug_checked().cast::<E>();
-
-        // SAFETY: Caller guarantees pointer is valid and properly aligned.
-        &*ptr.as_ref()
-    }
-}
-
-impl<E: Event> SystemParam for &'_ mut E {
-    type State = ();
-    type Item<'a> = &'a mut E;
-
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        if !config
-            .access
-            .received_event
-            .is_compatible(Access::ReadWrite)
-        {
-            return Err(Box::new(SystemInitError::ConflictingEventAccess));
-        }
-
-        config.access.received_event = Access::ReadWrite;
-
-        let this_id = world.init_event::<E>();
-
-        if config.received_event == EventId::NULL {
-            config.received_event = this_id;
-        } else if config.received_event != this_id {
-            return Err(Box::new(SystemInitError::ConflictingEventType));
-        }
-
-        Ok(())
-    }
-
-    unsafe fn get_param<'a>(
-        _state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
-        event_ptr: EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
-        let mut ptr = event_ptr.get_mut().unwrap_debug_checked().cast::<E>();
-
-        &mut *ptr.as_mut()
-    }
-}
-
-pub struct Take<'a, E> {
-    event_ptr: &'a mut Option<NonNull<u8>>,
-    _marker: PhantomData<&'a mut Option<E>>,
-}
-
-impl<'a, E: Event> Take<'a, E> {
-    pub(crate) unsafe fn new(event_ptr: &'a mut Option<NonNull<u8>>) -> Self {
-        Self {
-            event_ptr,
+    pub unsafe fn as_event_mut<E: Event>(self) -> EventMut<'a, E> {
+        EventMut {
+            ptr: unsafe { &mut *(self.ptr.as_ptr() as *mut *mut E) },
             _marker: PhantomData,
         }
     }
 
-    pub fn take(self) -> E {
-        let ptr = unsafe { mem::take(self.event_ptr).unwrap_debug_checked() }.cast::<E>();
+    pub unsafe fn as_ptr(self) -> &'a *const u8 {
+        &*(self.ptr.as_ptr() as *const *const u8)
+    }
 
-        unsafe { ptr::read(ptr.as_ptr()) }
+    pub unsafe fn as_ptr_mut(self) -> &'a mut *mut u8 {
+        &mut *self.ptr.as_ptr()
     }
 }
 
-impl<E: Event> Deref for Take<'_, E> {
+pub struct EventMut<'a, E> {
+    ptr: &'a mut *mut E,
+    _marker: PhantomData<&'a mut E>,
+}
+
+impl<E> EventMut<'_, E> {
+    pub fn take(this: Self) -> E {
+        let res = unsafe { this.ptr.read() };
+
+        *this.ptr = core::ptr::null_mut();
+
+        res
+    }
+}
+
+impl<E> Deref for EventMut<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.event_ptr.unwrap_debug_checked().cast::<E>().as_ref() }
+        unsafe { &**self.ptr }
     }
 }
 
-impl<E: Event> DerefMut for Take<'_, E> {
+impl<E> DerefMut for EventMut<'_, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.event_ptr.unwrap_debug_checked().cast::<E>().as_mut() }
+        unsafe { &mut **self.ptr }
     }
 }
 
-impl<E> fmt::Debug for Take<'_, E>
-where
-    E: Event + fmt::Debug,
-{
+impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Take").field("event", &*self).finish()
+        f.debug_tuple("EventMut").field(self.deref()).finish()
     }
 }
 
-impl<E: Event> SystemParam for Take<'_, E> {
+#[derive(Clone, Copy, Debug)]
+pub struct Receiver<'a, E: Event, Q: ReceiverQuery = NullReceiverQuery> {
+    pub event: &'a E,
+    pub query: Q::Item<'a>,
+}
+
+impl<E: Event> SystemParam for Receiver<'_, E> {
     type State = ();
 
-    type Item<'a> = Take<'a, E>;
+    type Item<'a> = Receiver<'a, E>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        if !config
-            .access
-            .received_event
-            .is_compatible(Access::ReadWrite)
-        {
-            return Err(Box::new(SystemInitError::ConflictingEventAccess));
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        struct AssertGlobalEvent<E>(PhantomData<E>);
+
+        impl<E: Event> AssertGlobalEvent<E> {
+            const ASSERTION: () = assert!(E::TARGET_OFFSET.is_none(), "TODO: error message");
         }
 
-        config.access.received_event = Access::ReadWrite;
+        let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        let this_id = world.init_event::<E>();
+        let id = world.init_event::<E>();
 
-        if config.received_event == EventId::NULL {
-            config.received_event = this_id;
-        } else if config.received_event != this_id {
-            return Err(Box::new(SystemInitError::ConflictingEventType));
+        if let Some(received_event) = config.received_event {
+            if received_event != id {
+                return Err(InitError(
+                    format!(
+                        "`{}` conflicts with a previous system parameter; systems must listen for \
+                         exactly one event type",
+                        any::type_name::<Self>()
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        config.received_event = Some(id);
+
+        if !config.access.received_event.set_if_compatible(Access::Read) {
+            return Err(InitError(
+                format!(
+                    "`{}` has conflicting event access with a previous system parameter",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
         }
 
         Ok(())
@@ -413,203 +436,332 @@ impl<E: Event> SystemParam for Take<'_, E> {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _system_info: &'a crate::system::SystemInfo,
         event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        Self::Item::new(event_ptr.get_mut())
+        Receiver {
+            // SAFETY:
+            // - We have permission to access the event immutably.
+            // - Pointer is nonnull.
+            event: event_ptr.as_event(),
+            query: (),
+        }
     }
 }
 
-pub struct Discard<E>(PhantomData<fn(E)>);
+impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
+    type State = FetcherState<Q>;
 
-impl<E> Discard<E> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
+    type Item<'a> = Receiver<'a, E, Q>;
+
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        struct AssertEntityEvent<E>(PhantomData<E>);
+
+        impl<E: Event> AssertEntityEvent<E> {
+            const ASSERTION: () = match E::TARGET_OFFSET {
+                Some(n) => assert!(
+                    check_target_offset::<E>(),
+                    "incorrect `TARGET_OFFSET` value for event type"
+                ),
+                None => panic!("TODO: error message"),
+            };
+        }
+
+        let _ = AssertEntityEvent::<E>::ASSERTION;
+
+        todo!();
+
+        Fetcher::init(world, config)
+    }
+
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
+        system_info: &'a crate::system::SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        let event = event_ptr.as_event::<E>();
+        let target = get_target(event).unwrap();
+
+        let mut fetcher = Fetcher::new(state, world);
+
+        // SAFETY: The target entity is guaranteed to match the query.
+        let query = fetcher.temp(target).unwrap_debug_checked();
+
+        Receiver { event, query }
+    }
+
+    unsafe fn refresh_archetype(
+        state: &mut Self::State,
+        reason: crate::system::RefreshArchetypeReason,
+        idx: crate::archetype::ArchetypeIdx,
+        arch: &crate::archetype::Archetype,
+    ) -> bool {
+        Fetcher::refresh_archetype(state, reason, idx, arch)
     }
 }
 
-impl<E> Clone for Discard<E> {
-    fn clone(&self) -> Self {
-        Self(PhantomData)
-    }
+pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery = NullReceiverQuery> {
+    pub event: EventMut<'a, E>,
+    pub query: Q::Item<'a>,
 }
 
-impl<E> Copy for Discard<E> {}
-
-impl<E> Default for Discard<E> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<E> fmt::Debug for Discard<E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Discard").finish()
-    }
-}
-
-impl<E: Event> SystemParam for Discard<E> {
+impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     type State = ();
 
-    type Item<'a> = Discard<E>;
+    type Item<'a> = ReceiverMut<'a, E>;
 
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        let this_id = world.init_event::<E>();
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        struct AssertGlobalEvent<E>(PhantomData<E>);
 
-        if config.received_event == EventId::NULL {
-            config.received_event = this_id;
-        } else if config.received_event != this_id {
-            return Err(Box::new(SystemInitError::ConflictingEventType));
+        impl<E: Event> AssertGlobalEvent<E> {
+            const ASSERTION: () = assert!(E::TARGET_OFFSET.is_none(), "TODO: error message");
+        }
+
+        let _ = AssertGlobalEvent::<E>::ASSERTION;
+
+        let id = world.init_event::<E>();
+
+        if let Some(received_event) = config.received_event {
+            if received_event != id {
+                return Err(InitError(
+                    format!(
+                        "`{}` conflicts with a previous system parameter; systems must listen for \
+                         exactly one event type",
+                        any::type_name::<Self>()
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        config.received_event = Some(id);
+
+        if !config
+            .access
+            .received_event
+            .set_if_compatible(Access::ReadWrite)
+        {
+            return Err(InitError(
+                format!(
+                    "`{}` has conflicting event access with a previous system parameter",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
         }
 
         Ok(())
     }
 
     unsafe fn get_param<'a>(
-        _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
-        _event_ptr: EventPtr<'a>,
-        _world: UnsafeWorldCell<'a>,
+        state: &'a mut Self::State,
+        system_info: &'a crate::system::SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        Self::new()
+        ReceiverMut {
+            event: event_ptr.as_event_mut(),
+            query: (),
+        }
     }
 }
 
-pub struct Sender<'a, Es: EventSet> {
-    state: &'a Es::State,
-    event_queue: &'a mut EventQueue,
+impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
+    type State = FetcherState<Q>;
+
+    type Item<'a> = ReceiverMut<'a, E, Q>;
+
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        struct AssertEntityEvent<E>(PhantomData<E>);
+
+        impl<E: Event> AssertEntityEvent<E> {
+            const ASSERTION: () = match E::TARGET_OFFSET {
+                Some(n) => assert!(
+                    check_target_offset::<E>(),
+                    "incorrect `TARGET_OFFSET` value for event type"
+                ),
+                None => panic!("TODO: error message"),
+            };
+        }
+
+        let _ = AssertEntityEvent::<E>::ASSERTION;
+
+        Fetcher::init(world, config)
+    }
+
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
+        system_info: &'a crate::system::SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        let event = event_ptr.as_event_mut::<E>();
+        let target = get_target(&*event).unwrap();
+
+        let mut fetcher = Fetcher::new(state, world);
+
+        // SAFETY: The target entity is guaranteed to match the query.
+        let query = fetcher.temp(target).unwrap_debug_checked();
+
+        ReceiverMut { event, query }
+    }
+
+    unsafe fn refresh_archetype(
+        state: &mut Self::State,
+        reason: crate::system::RefreshArchetypeReason,
+        idx: crate::archetype::ArchetypeIdx,
+        arch: &crate::archetype::Archetype,
+    ) -> bool {
+        Fetcher::refresh_archetype(state, reason, idx, arch)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NullReceiverQuery;
+
+pub trait ReceiverQuery: private::Sealed {
+    type Item<'a>;
+}
+
+impl ReceiverQuery for NullReceiverQuery {
+    type Item<'a> = ();
+}
+
+impl<Q: Query + 'static> ReceiverQuery for Q {
+    type Item<'a> = Q::Item<'a>;
+}
+
+mod private {
+    use super::*;
+
+    pub trait Sealed {}
+
+    impl Sealed for NullReceiverQuery {}
+
+    impl<Q: Query> Sealed for Q {}
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sender<'a, T: EventSet> {
+    state: &'a T::State,
     world: UnsafeWorldCell<'a>,
 }
 
-impl<Es: EventSet> Sender<'_, Es> {
+impl<T: EventSet> Sender<'_, T> {
     /// # Panics
     ///
-    /// Panics if the given event type `E` is not in the `EventSet` of this
+    /// Panics if the given event type `E` is not in the [`EventSet`] of this
     /// sender. This may become a compile time error in the future.
     #[track_caller]
     pub fn send<E: Event>(&mut self, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
-        let event_id = Es::event_id_of::<E>(self.state).unwrap_or_else(|| {
+        let event_idx = T::event_idx_of::<E>(self.state).unwrap_or_else(|| {
             panic!(
-                "event {} is not in the EventSet of this Sender",
+                "event `{}` is not in the `EventSet` of this `Sender`",
                 any::type_name::<E>()
             )
         });
 
-        unsafe {
-            self.event_queue.push(event, event_id);
-        }
+        unsafe { self.world.send_unchecked(event, event_idx) }
     }
 
-    /*
-    #[track_caller]
-    pub fn send_to<E: Event>(&mut self, system: EntityId, event: E) {
-        self.send(SendTo::new(system, event))
-    }
-
-    #[track_caller]
-    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
-        self.send(Insert::new(entity, component))
-    }
-    */
-
+    /// # Panics
+    ///
+    /// Panics if the [`EventSet`] of this sender does not contain [`Spawn`].
+    /// This may become a compile time error in the future.
     #[track_caller]
     pub fn spawn(&mut self) -> EntityId {
         let id = unsafe { self.world.reserve_entity() };
-        self.send(Spawn::new(id));
+        self.send(Spawn(id));
         id
     }
-
-    // TODO: unsafe fn send_raw or similar.
 }
 
-impl<Es> fmt::Debug for Sender<'_, Es>
-where
-    Es: EventSet,
-    Es::State: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sender")
-            .field("state", &self.state)
-            .field("event_queue", &self.event_queue)
-            .field("world", &self.world)
-            .finish()
-    }
-}
+impl<T: EventSet> SystemParam for Sender<'_, T> {
+    type State = T::State;
 
-impl<Es: EventSet> SystemParam for Sender<'_, Es> {
-    type State = Es::State;
+    type Item<'a> = Sender<'a, T>;
 
-    type Item<'a> = Sender<'a, Es>;
-
-    fn init(world: &mut World, config: &mut SystemConfig) -> Result<Self::State, Box<dyn Error>> {
-        if !config.access.event_queue.is_compatible(Access::ReadWrite) {
-            return Err(Box::new(SystemInitError::ConflictingEventQueueAccess));
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        if !config
+            .access
+            .event_queue
+            .set_if_compatible(Access::ReadWrite)
+        {
+            return Err(InitError(
+                format!(
+                    "`{}` has conflicting access with a previous system parameter. Only one \
+                     system parameter can send events",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
         }
-
-        config.access.event_queue = Access::ReadWrite;
 
         if !config
             .access
             .reserve_entity
-            .is_compatible(Access::ReadWrite)
+            .set_if_compatible(Access::ReadWrite)
         {
-            // TODO: use a different enum variant.
-            return Err(Box::new(SystemInitError::ConflictingEventAccess));
+            return Err(InitError(
+                format!(
+                    "`{}` has conflicting access with a previous system parameter. Only one \
+                     system parameter can reserve entities",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
         }
 
-        config.access.reserve_entity = Access::ReadWrite;
-
-        Ok(Es::new_state(world))
+        Ok(T::new_state(world))
     }
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
-        _event_ptr: EventPtr<'a>,
+        system_info: &'a crate::system::SystemInfo,
+        event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        Sender {
-            state,
-            event_queue: unsafe { world.event_queue_mut() },
-            world,
-        }
+        Sender { state, world }
     }
 }
 
-pub trait EventSet {
+pub unsafe trait EventSet {
     type State: Send + Sync + 'static;
 
     fn new_state(world: &mut World) -> Self::State;
 
-    fn event_id_of<E: Event>(state: &Self::State) -> Option<EventId>;
-
-    #[track_caller]
-    fn send<Es: EventSet>(self, sender: &mut Sender<Es>);
+    fn event_idx_of<E: Event>(state: &Self::State) -> Option<EventIdx>;
 }
 
-impl<E: Event> EventSet for E {
-    type State = EventId;
+unsafe impl<E: Event> EventSet for E {
+    type State = u32;
 
     fn new_state(world: &mut World) -> Self::State {
-        world.init_event::<E>()
+        match world.init_event::<E>().index() {
+            EventIdx::Global(idx) => idx.0,
+            EventIdx::Entity(idx) => idx.0,
+        }
     }
 
     #[inline]
-    fn event_id_of<EE: Event>(state: &Self::State) -> Option<EventId> {
-        (TypeId::of::<EE>() == TypeId::of::<E>()).then_some(*state)
-    }
-
-    fn send<Es: EventSet>(self, sender: &mut Sender<Es>) {
-        sender.send(self)
+    fn event_idx_of<F: Event>(state: &Self::State) -> Option<EventIdx> {
+        (TypeId::of::<F>() == TypeId::of::<E>()).then(|| {
+            if E::TARGET_OFFSET.is_some() {
+                EventIdx::Entity(EntityEventIdx(*state))
+            } else {
+                EventIdx::Global(GlobalEventIdx(*state))
+            }
+        })
     }
 }
 
 macro_rules! impl_event_set_tuple {
     ($(($E:ident, $e:ident)),*) => {
-        impl<$($E: EventSet),*> EventSet for ($($E,)*) {
+        unsafe impl<$($E: EventSet),*> EventSet for ($($E,)*) {
             type State = ($($E::State,)*);
 
             fn new_state(_world: &mut World) -> Self::State {
@@ -621,22 +773,14 @@ macro_rules! impl_event_set_tuple {
             }
 
             #[inline]
-            fn event_id_of<E: Event>(($($e,)*): &Self::State) -> Option<EventId> {
+            fn event_idx_of<E: Event>(($($e,)*): &Self::State) -> Option<EventIdx> {
                 $(
-                    if let Some(id) = $E::event_id_of::<E>($e) {
+                    if let Some(id) = $E::event_idx_of::<E>($e) {
                         return Some(id);
                     }
                 )*
 
                 None
-            }
-
-            fn send<Es: EventSet>(self, _sender: &mut Sender<Es>) {
-                let ($($e,)*) = self;
-
-                $(
-                    $e.send(_sender);
-                )*
             }
         }
     };
@@ -644,7 +788,7 @@ macro_rules! impl_event_set_tuple {
 
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(C)] // Field order is significant!
 pub struct Insert<C> {
     pub entity: EntityId,
@@ -657,11 +801,13 @@ impl<C> Insert<C> {
     }
 }
 
-impl<C: Component> Event for Insert<C> {
-    unsafe fn init(world: &mut World) -> EventKind {
+unsafe impl<C: Component> Event for Insert<C> {
+    const TARGET_OFFSET: Option<usize> = Some(0);
+
+    fn init(world: &mut World) -> EventKind {
         EventKind::Insert {
-            component_id: world.init_component::<C>(),
-            component_offset: memoffset::offset_of!(Insert::<C>, component),
+            component_idx: world.init_component::<C>().index(),
+            component_offset: offset_of!(Self, component),
         }
     }
 }
@@ -682,107 +828,36 @@ impl<C> Remove<C> {
     }
 }
 
-impl<C: Component> Event for Remove<C> {
-    unsafe fn init(world: &mut World) -> EventKind {
+unsafe impl<C: Component> Event for Remove<C> {
+    const TARGET_OFFSET: Option<usize> = Some(0);
+
+    fn init(world: &mut World) -> EventKind {
         EventKind::Remove {
-            component_id: world.init_component::<C>(),
+            component_idx: world.init_component::<C>().index(),
         }
     }
 }
 
-impl<C> Default for Remove<C> {
-    fn default() -> Self {
-        Self {
-            entity: Default::default(),
-            _marker: Default::default(),
-        }
-    }
-}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Spawn(pub EntityId);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Spawn {
-    pub entity: EntityId,
-}
+unsafe impl Event for Spawn {
+    const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
 
-impl Spawn {
-    pub const fn new(entity: EntityId) -> Self {
-        Self { entity }
-    }
-}
-
-impl Event for Spawn {
-    unsafe fn init(_world: &mut World) -> EventKind {
+    fn init(world: &mut World) -> EventKind {
         EventKind::Spawn
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Despawn(pub EntityId);
 
-impl Event for Despawn {
-    unsafe fn init(_world: &mut World) -> EventKind {
+unsafe impl Event for Despawn {
+    const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
+
+    fn init(world: &mut World) -> EventKind {
         EventKind::Despawn
     }
 }
 
-/// An [`Event`] used to send an event to a specific system. Only the system
-/// specified will receive the inner event.
-///
-/// A few scenarios where this could be useful:
-/// - A function-like system needs to "return" a value to a "caller".
-/// - An event sender has ahead-of-time knowledge about which systems are
-///   interested in the event, and would like to choose which systems receive
-///   the event for performance reasons.
-/// - Interacting with code outside the user's control in a hacky way.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-#[repr(C)] // Field order is significant!
-pub struct SendTo<E> {
-    /// Identifier of the system that will receive the inner event. If the
-    /// identifier is invalid, then no system will receive the inner event.
-    pub system: EntityId,
-    /// The inner event to send to the system.
-    pub event: E,
-}
-
-impl<E> SendTo<E> {
-    pub const fn new(system: EntityId, event: E) -> Self {
-        Self { system, event }
-    }
-}
-
-impl<E: Event> Event for SendTo<E> {
-    unsafe fn init(world: &mut World) -> EventKind {
-        EventKind::SendTo {
-            event_id: world.init_event::<E>(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub enum EventKind {
-    /// An event not covered by one of the other variants.
-    #[default]
-    Other,
-    /// The [`Insert`] event.
-    Insert {
-        /// The [`ComponentId`] of the component to insert.
-        component_id: ComponentId,
-        /// Cached offset from the beginning of the event to the
-        /// [`Insert::component`] field.
-        component_offset: usize,
-    },
-    /// The [`Remove`] event.
-    Remove {
-        /// The [`ComponentId`] of the component to remove.
-        component_id: ComponentId,
-    },
-    /// The [`Spawn`] event.
-    Spawn,
-    /// The [`Despawn`] event.
-    Despawn,
-    /// The [`SendTo`] event.
-    SendTo {
-        /// The [`EventId`] of the event to send.
-        event_id: EventId,
-    },
-}
+// TODO: `Call<E>` event?

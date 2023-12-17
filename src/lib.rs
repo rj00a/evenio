@@ -1,36 +1,37 @@
 #![doc = include_str!("../README.md")]
 
-const _: () = if std::mem::size_of::<usize>() <= 2 {
-    panic!("unsupported target")
-};
+extern crate alloc;
 
 // Lets us use our own derive macros internally.
 extern crate self as evenio;
 
-mod access;
+pub mod access;
 pub mod archetype;
-mod bit_set;
-pub mod command;
+pub mod bit_set;
+mod blob_vec;
 pub mod component;
 mod debug_checked;
 pub mod entity;
-mod erased_vec;
 pub mod event;
 #[doc(hidden)]
 pub mod exclusive;
-pub mod label;
-pub mod query;
-pub mod system;
-mod type_id_hash;
-pub mod world;
+pub mod fetch;
 mod layout_util;
+pub mod query;
+mod slot_map;
+pub mod system;
+pub mod world;
 
 pub mod prelude {
-    pub use crate::component::Component;
+    pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;
-    pub use crate::event::{
-        Despawn, Discard, Event, EventSet, Insert, SendTo, Sender, Spawn, Take,
-    };
-    pub use crate::query::{Has, Not, Or, ReadOnlyQuery, With, Query, Xor};
+    pub use crate::event::{Event, EventMut, EventId, Receiver, Sender};
+    pub use crate::fetch::{FetchError, Fetcher};
+    pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
+    pub use crate::system::{IntoSystem, SystemId};
     pub use crate::world::World;
 }
+
+const _: () = if std::mem::size_of::<usize>() < std::mem::size_of::<u32>() {
+    panic!("unsupported target")
+};

@@ -1,11 +1,11 @@
 use core::fmt;
-use std::iter::FusedIterator;
-use std::marker::PhantomData;
+use core::iter::FusedIterator;
+use core::marker::PhantomData;
 
 use crate::debug_checked::GetDebugChecked;
 
 /// A set data structure backed by a vector of bits.
-pub(crate) struct BitSet<T = usize> {
+pub struct BitSet<T = usize> {
     blocks: Vec<Block>,
     _marker: PhantomData<T>,
 }
@@ -23,20 +23,20 @@ type Block = usize;
 /// Number of bits in a block.
 const BITS: usize = Block::BITS as usize;
 
-pub(crate) trait BitSetIndex: Clone + Copy {
-    fn bit_set_index(self) -> usize;
-    fn from_bit_set_index(idx: usize) -> Self;
+pub trait SparseSetIndex: Clone + Copy {
+    fn index(self) -> usize;
+    fn from_index(idx: usize) -> Self;
 }
 
 impl<T> BitSet<T> {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             blocks: vec![],
             _marker: PhantomData,
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.blocks.clear();
     }
 
@@ -59,14 +59,14 @@ impl<T> BitSet<T> {
     }
 
     #[must_use]
-    pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
+    pub fn is_disjoint(&self, other: &Self) -> bool {
         self.blocks
             .iter()
             .zip(other.blocks.iter())
             .all(|(a, b)| a & b == 0)
     }
 
-    pub(crate) fn union(&mut self, other: &Self) {
+    pub fn union_assign(&mut self, other: &Self) {
         if self.blocks.len() < other.blocks.len() {
             self.blocks.resize(other.blocks.len(), 0);
         }
@@ -77,7 +77,7 @@ impl<T> BitSet<T> {
     }
 
     #[must_use]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.blocks
             .iter()
             .map(|block| block.count_ones() as usize)
@@ -85,15 +85,15 @@ impl<T> BitSet<T> {
     }
 
     #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.blocks.iter().all(|&block| block == 0)
     }
 }
 
-impl<T: BitSetIndex> BitSet<T> {
+impl<T: SparseSetIndex> BitSet<T> {
     #[track_caller]
     pub(crate) fn insert(&mut self, value: T) {
-        let idx = value.bit_set_index();
+        let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
 
@@ -103,7 +103,7 @@ impl<T: BitSetIndex> BitSet<T> {
     }
 
     pub(crate) fn remove(&mut self, value: T) {
-        let idx = value.bit_set_index();
+        let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
 
@@ -114,7 +114,7 @@ impl<T: BitSetIndex> BitSet<T> {
 
     #[must_use]
     pub(crate) fn contains(&self, value: T) -> bool {
-        let idx = value.bit_set_index();
+        let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
 
@@ -142,7 +142,7 @@ impl<T> Default for BitSet<T> {
     }
 }
 
-impl<T: BitSetIndex> FromIterator<T> for BitSet<T> {
+impl<T: SparseSetIndex> FromIterator<T> for BitSet<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut set = Self::new();
 
@@ -154,14 +154,14 @@ impl<T: BitSetIndex> FromIterator<T> for BitSet<T> {
     }
 }
 
-pub(crate) struct Iter<'a, T: BitSetIndex = usize> {
+pub(crate) struct Iter<'a, T: SparseSetIndex = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
     _marker: PhantomData<fn(T)>,
 }
 
-impl<'a, T: BitSetIndex> Iterator for Iter<'a, T> {
+impl<'a, T: SparseSetIndex> Iterator for Iter<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -176,11 +176,11 @@ impl<'a, T: BitSetIndex> Iterator for Iter<'a, T> {
         // Clear the least significant bit.
         self.bits ^= 1 << zeros;
 
-        Some(T::from_bit_set_index(self.block_idx * BITS + zeros))
+        Some(T::from_index(self.block_idx * BITS + zeros))
     }
 }
 
-impl<'a, T: BitSetIndex> FusedIterator for Iter<'a, T> {}
+impl<'a, T: SparseSetIndex> FusedIterator for Iter<'a, T> {}
 
 #[inline]
 fn div_rem(a: usize, b: usize) -> (usize, usize) {
@@ -189,7 +189,7 @@ fn div_rem(a: usize, b: usize) -> (usize, usize) {
 
 impl<T> fmt::Debug for BitSet<T>
 where
-    T: BitSetIndex + fmt::Debug,
+    T: SparseSetIndex + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut set = f.debug_set();
@@ -202,14 +202,14 @@ where
     }
 }
 
-impl BitSetIndex for usize {
+impl SparseSetIndex for usize {
     #[inline]
-    fn bit_set_index(self) -> usize {
+    fn index(self) -> usize {
         self
     }
 
     #[inline]
-    fn from_bit_set_index(idx: usize) -> Self {
+    fn from_index(idx: usize) -> Self {
         idx
     }
 }
