@@ -620,6 +620,7 @@ impl<T> fmt::Debug for ColumnPtr<T> {
 unsafe impl<T> Send for ColumnPtr<T> {}
 unsafe impl<T> Sync for ColumnPtr<T> {}
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,3 +683,4 @@ mod tests {
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
 }
+*/

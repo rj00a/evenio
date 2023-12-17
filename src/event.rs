@@ -13,7 +13,6 @@ use evenio_macros::all_tuples;
 use memoffset::offset_of;
 
 use crate::access::Access;
-use crate::bit_set::SparseSetIndex;
 use crate::component::ComponentIdx;
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
@@ -21,6 +20,7 @@ use crate::fetch::{Fetcher, FetcherState};
 use crate::prelude::Component;
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
+use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
@@ -224,13 +224,15 @@ impl GlobalEventId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct GlobalEventIdx(pub u32);
 
-impl SparseSetIndex for GlobalEventIdx {
+unsafe impl SparseIndex for GlobalEventIdx {
+    const MAX: Self = Self(u32::MAX);
+
     fn index(self) -> usize {
-        self.0 as usize
+        self.0.index()
     }
 
     fn from_index(idx: usize) -> Self {
-        Self(idx as u32)
+        Self(u32::from_index(idx))
     }
 }
 
@@ -248,13 +250,15 @@ impl EntityEventId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EntityEventIdx(pub u32);
 
-impl SparseSetIndex for EntityEventIdx {
+unsafe impl SparseIndex for EntityEventIdx {
+    const MAX: Self = Self(u32::MAX);
+
     fn index(self) -> usize {
-        self.0 as usize
+        self.0.index()
     }
 
     fn from_index(idx: usize) -> Self {
-        Self(idx as u32)
+        Self(u32::from_index(idx))
     }
 }
 

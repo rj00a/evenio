@@ -8,11 +8,12 @@ use evenio_macros::all_tuples;
 
 use crate::access::SystemAccess;
 use crate::archetype::{Archetype, ArchetypeIdx};
-use crate::bit_set::{BitSet, SparseSetIndex};
+use crate::bit_set::BitSet;
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
-use crate::event::{EntityEventIdx, EventId, EventPtr, GlobalEventIdx, EventIdEnum};
+use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventPtr, GlobalEventIdx};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
+use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
 
 #[derive(Debug)]
@@ -245,13 +246,15 @@ impl SystemId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SystemIdx(pub u32);
 
-impl SparseSetIndex for SystemIdx {
+unsafe impl SparseIndex for SystemIdx {
+    const MAX: Self = Self(u32::MAX);
+
     fn index(self) -> usize {
-        self.0 as usize
+        self.0.index()
     }
 
     fn from_index(idx: usize) -> Self {
-        Self(idx as u32)
+        Self(u32::from_index(idx))
     }
 }
 

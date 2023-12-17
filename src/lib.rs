@@ -21,6 +21,8 @@ pub mod query;
 mod slot_map;
 pub mod system;
 pub mod world;
+pub mod sparse;
+mod sparse_map;
 
 pub mod prelude {
     pub use crate::component::{Component, ComponentId};

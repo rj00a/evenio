@@ -3,8 +3,8 @@ use core::any::TypeId;
 use alloc::collections::BTreeMap;
 use core::marker::PhantomData;
 
-use crate::bit_set::SparseSetIndex;
 use crate::slot_map::{Key, SlotMap};
+use crate::sparse::SparseIndex;
 
 #[derive(Debug)]
 pub struct Components {
@@ -80,12 +80,14 @@ impl ComponentId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct ComponentIdx(pub u32);
 
-impl SparseSetIndex for ComponentIdx {
+unsafe impl SparseIndex for ComponentIdx {
+    const MAX: Self = Self(u32::MAX);
+
     fn index(self) -> usize {
-        self.0 as usize
+        self.0.index()
     }
 
     fn from_index(idx: usize) -> Self {
-        Self(idx as u32)
+        Self(u32::from_index(idx))
     }
 }

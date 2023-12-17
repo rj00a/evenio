@@ -3,6 +3,7 @@ use core::iter::FusedIterator;
 use core::marker::PhantomData;
 
 use crate::debug_checked::GetDebugChecked;
+use crate::sparse::SparseIndex;
 
 /// A set data structure backed by a vector of bits.
 pub struct BitSet<T = usize> {
@@ -22,11 +23,6 @@ impl<T> Clone for BitSet<T> {
 type Block = usize;
 /// Number of bits in a block.
 const BITS: usize = Block::BITS as usize;
-
-pub trait SparseSetIndex: Clone + Copy {
-    fn index(self) -> usize;
-    fn from_index(idx: usize) -> Self;
-}
 
 impl<T> BitSet<T> {
     pub const fn new() -> Self {
@@ -90,7 +86,7 @@ impl<T> BitSet<T> {
     }
 }
 
-impl<T: SparseSetIndex> BitSet<T> {
+impl<T: SparseIndex> BitSet<T> {
     #[track_caller]
     pub(crate) fn insert(&mut self, value: T) {
         let idx = value.index();
@@ -142,7 +138,7 @@ impl<T> Default for BitSet<T> {
     }
 }
 
-impl<T: SparseSetIndex> FromIterator<T> for BitSet<T> {
+impl<T: SparseIndex> FromIterator<T> for BitSet<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut set = Self::new();
 
@@ -154,14 +150,14 @@ impl<T: SparseSetIndex> FromIterator<T> for BitSet<T> {
     }
 }
 
-pub(crate) struct Iter<'a, T: SparseSetIndex = usize> {
+pub(crate) struct Iter<'a, T: SparseIndex = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
     _marker: PhantomData<fn(T)>,
 }
 
-impl<'a, T: SparseSetIndex> Iterator for Iter<'a, T> {
+impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -180,7 +176,7 @@ impl<'a, T: SparseSetIndex> Iterator for Iter<'a, T> {
     }
 }
 
-impl<'a, T: SparseSetIndex> FusedIterator for Iter<'a, T> {}
+impl<'a, T: SparseIndex> FusedIterator for Iter<'a, T> {}
 
 #[inline]
 fn div_rem(a: usize, b: usize) -> (usize, usize) {
@@ -189,7 +185,7 @@ fn div_rem(a: usize, b: usize) -> (usize, usize) {
 
 impl<T> fmt::Debug for BitSet<T>
 where
-    T: SparseSetIndex + fmt::Debug,
+    T: SparseIndex + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut set = f.debug_set();
@@ -202,25 +198,13 @@ where
     }
 }
 
-impl SparseSetIndex for usize {
-    #[inline]
-    fn index(self) -> usize {
-        self
-    }
-
-    #[inline]
-    fn from_index(idx: usize) -> Self {
-        idx
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn contains() {
-        let indices = [0, 1, 4, 15, 64, 100, 1000, 1001, 1002];
+        let indices = [0u32, 1, 4, 15, 64, 100, 1000, 1001, 1002];
 
         let set = BitSet::from_iter(indices);
 
@@ -236,11 +220,11 @@ mod tests {
 
     #[test]
     fn iter() {
-        let mut indices = [0, 1, 4, 15, 100, 1000, 1001, 1002, 64];
+        let mut indices = [0u32, 1, 4, 15, 100, 1000, 1001, 1002, 64];
 
         let set = BitSet::from_iter(indices);
 
-        let collected = set.iter().collect::<Vec<usize>>();
+        let collected = set.iter().collect::<Vec<u32>>();
 
         indices.sort_unstable();
 

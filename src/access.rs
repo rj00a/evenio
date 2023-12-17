@@ -1,7 +1,8 @@
 use std::{fmt, mem};
 
-use crate::bit_set::{BitSet, SparseSetIndex};
+use crate::bit_set::BitSet;
 use crate::component::ComponentIdx;
+use crate::sparse::SparseIndex;
 
 #[derive(Clone, Debug)]
 pub struct SystemAccess {
@@ -72,7 +73,7 @@ impl<T> Clone for AccessExpr<T> {
     }
 }
 
-impl<T: SparseSetIndex> AccessExpr<T> {
+impl<T: SparseIndex> AccessExpr<T> {
     pub fn with(value: T, access: Access) -> Self {
         let mut res = Self::zero();
 
@@ -201,11 +202,11 @@ impl<T: SparseSetIndex> AccessExpr<T> {
     }
 }
 
-impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
+impl<T: SparseIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
 
-        impl<T: fmt::Debug + SparseSetIndex> fmt::Debug for DebugDisjunctions<'_, T> {
+        impl<T: fmt::Debug + SparseIndex> fmt::Debug for DebugDisjunctions<'_, T> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 if self.0.is_empty() {
                     write!(f, "⊥")?;
@@ -261,7 +262,7 @@ struct AccessMap<T> {
     write: BitSet<T>,
 }
 
-impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
+impl<T: SparseIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessMap")
             .field("read", &self.read)
@@ -293,7 +294,7 @@ impl<T> Clone for AccessMap<T> {
     }
 }
 
-impl<T: SparseSetIndex> AccessMap<T> {
+impl<T: SparseIndex> AccessMap<T> {
     fn get(&self, value: T) -> Access {
         match (self.read.contains(value), self.write.contains(value)) {
             (true, true) => Access::ReadWrite,
@@ -374,7 +375,7 @@ struct Conjunctions<T> {
     without: BitSet<T>,
 }
 
-impl<T: SparseSetIndex> Conjunctions<T> {
+impl<T: SparseIndex> Conjunctions<T> {
     /// Determines if `self` and `other` are disjoint, i.e. if there is no
     /// combination of values the variables could have to make both expressions
     /// true at the same time.
@@ -391,7 +392,7 @@ impl<T: SparseSetIndex> Conjunctions<T> {
     }
 }
 
-impl<T: SparseSetIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
+impl<T: SparseIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AccessFilters")
             .field("with", &self.with)
@@ -434,7 +435,7 @@ mod tests {
 
     #[test]
     fn t1() {
-        let mut expr = AccessExpr::with(0, Access::Read);
+        let mut expr = AccessExpr::with(0u32, Access::Read);
         expr.and(&AccessExpr::with(1, Access::ReadWrite));
 
         let mut expr2 = AccessExpr::with(0, Access::Read);

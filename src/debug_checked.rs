@@ -133,3 +133,11 @@ pub(crate) unsafe fn unreachable_debug_checked() -> ! {
     #[cfg(not(debug_assertions))]
     std::hint::unreachable_unchecked();
 }
+
+#[inline]
+#[track_caller]
+pub(crate) unsafe fn assume_debug_checked(cond: bool) {
+    if !cond {
+        unreachable_debug_checked()
+    }
+}
