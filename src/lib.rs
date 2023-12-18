@@ -24,6 +24,12 @@ pub mod world;
 pub mod sparse;
 mod sparse_map;
 
+/// For macros only.
+#[doc(hidden)]
+pub mod __private {
+    pub use memoffset::offset_of;
+}
+
 pub mod prelude {
     pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;

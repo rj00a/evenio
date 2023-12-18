@@ -8,6 +8,7 @@ use crate::blob_vec::BlobVec;
 use crate::component::ComponentIdx;
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
+use crate::sparse::SparseIndex;
 
 #[derive(Debug)]
 pub struct Archetypes {
@@ -62,6 +63,18 @@ impl ArchetypeIdx {
     pub const EMPTY: Self = Self(0);
     /// The archetype index that is always invalid.
     pub const NULL: Self = Self(u32::MAX);
+}
+
+unsafe impl SparseIndex for ArchetypeIdx {
+    const MAX: Self = ArchetypeIdx::NULL;
+
+    fn index(self) -> usize {
+        self.0.index()
+    }
+
+    fn from_index(idx: usize) -> Self {
+        Self(u32::from_index(idx))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

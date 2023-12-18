@@ -1,6 +1,8 @@
 use core::fmt;
 use core::mem::ManuallyDrop;
 use core::num::NonZeroU32;
+use std::mem;
+use std::ops::{Index, IndexMut};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SlotMap<T> {
@@ -19,17 +21,28 @@ impl<T> SlotMap<T> {
     }
 
     pub(crate) fn insert(&mut self, value: T) -> Key {
+        self.insert_with(|_| value)
+    }
+
+    pub(crate) fn insert_with<F>(&mut self, f: F) -> Key
+    where
+        F: FnOnce(Key) -> T,
+    {
         let key;
 
         if let Some(slot) = self.slots.get_mut(self.next_free as usize) {
             debug_assert!(slot.is_vacant());
 
-            slot.generation += 1;
-
             key = Key {
                 index: self.next_free,
-                generation: unsafe { NonZeroU32::new_unchecked(slot.generation) },
+                // SAFETY: Generation didn't overflow because it's even.
+                generation: unsafe { NonZeroU32::new_unchecked(slot.generation + 1) },
             };
+
+            // Get value before modifying the slot in case `f` unwinds.
+            let value = f(key);
+
+            slot.generation += 1;
 
             self.next_free = unsafe { slot.union.next_free };
 
@@ -45,6 +58,8 @@ impl<T> SlotMap<T> {
                 index,
                 generation: ONE,
             };
+
+            let value = f(key);
 
             self.slots.push(Slot {
                 union: SlotUnion {
@@ -128,6 +143,26 @@ impl<T> Default for SlotMap<T> {
     }
 }
 
+impl<T> Index<Key> for SlotMap<T> {
+    type Output = T;
+
+    fn index(&self, k: Key) -> &Self::Output {
+        match self.get(k) {
+            Some(v) => v,
+            None => panic!("invalid slot map key of {k:?}"),
+        }
+    }
+}
+
+impl<T> IndexMut<Key> for SlotMap<T> {
+    fn index_mut(&mut self, k: Key) -> &mut Self::Output {
+        match self.get_mut(k) {
+            Some(v) => v,
+            None => panic!("invalid slot map key of {k:?}"),
+        }
+    }
+}
+
 struct Slot<T> {
     union: SlotUnion<T>,
     generation: u32,
@@ -141,7 +176,7 @@ impl<T> Slot<T> {
 
 impl<T> Drop for Slot<T> {
     fn drop(&mut self) {
-        if !self.is_vacant() {
+        if mem::needs_drop::<T>() && !self.is_vacant() {
             unsafe { ManuallyDrop::drop(&mut self.union.value) }
         }
     }
@@ -175,7 +210,7 @@ impl<T: fmt::Debug> fmt::Debug for Slot<T> {
         if self.is_vacant() {
             s.field("next_free", unsafe { &self.union.next_free });
         } else {
-            s.field("value", unsafe { &self.union.value });
+            s.field("value", unsafe { &*self.union.value });
         }
 
         s.field("generation", &self.generation).finish()

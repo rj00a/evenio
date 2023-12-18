@@ -7,14 +7,16 @@ use core::num::NonZeroU32;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::{any, fmt, mem};
+use std::collections::btree_map::Entry;
 
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
+pub use evenio_macros::Event;
 use memoffset::offset_of;
 
 use crate::access::Access;
 use crate::component::ComponentIdx;
-use crate::debug_checked::UnwrapDebugChecked;
+use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
 use crate::fetch::{Fetcher, FetcherState};
 use crate::prelude::Component;
@@ -28,7 +30,7 @@ use crate::world::{UnsafeWorldCell, World};
 pub struct Events {
     global_events: SlotMap<EventInfo>,
     entity_events: SlotMap<EventInfo>,
-    by_type_id: BTreeMap<TypeId, EventIdx>,
+    by_type_id: BTreeMap<TypeId, EventId>,
 }
 
 impl Events {
@@ -37,6 +39,50 @@ impl Events {
             global_events: SlotMap::new(),
             entity_events: SlotMap::new(),
             by_type_id: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn add(&mut self, desc: EventDescriptor) -> EventId {
+        let target_offset = if let Some(t) = desc.target_offset {
+            assert_ne!(t, usize::MAX, "unsupported target offset");
+            t
+        } else {
+            usize::MAX
+        };
+
+        let info = EventInfo {
+            id: EventId::NULL,
+            target_offset,
+            name: desc.name,
+            kind: desc.kind,
+            type_id: desc.type_id,
+            layout: desc.layout,
+            drop: desc.drop,
+        };
+
+        let insert = || {
+            let is_global = desc.target_offset.is_none();
+
+            let map = if is_global {
+                &mut self.global_events
+            } else {
+                &mut self.entity_events
+            };
+
+            let k = map.insert(info);
+            let id = EventId::from_key(k, is_global);
+            map[k].id = id;
+
+            id
+        };
+
+        if let Some(type_id) = desc.type_id {
+            match self.by_type_id.entry(type_id) {
+                Entry::Vacant(v) => *v.insert(insert()),
+                Entry::Occupied(o) => *o.get(),
+            }
+        } else {
+            insert()
         }
     }
 
@@ -63,7 +109,7 @@ impl Events {
 
     pub fn by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
         let idx = *self.by_type_id.get(&type_id)?;
-        Some(unsafe { self.by_index(idx).unwrap_debug_checked() })
+        Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
 }
 
@@ -81,7 +127,8 @@ pub unsafe trait Event: Send + Sync + 'static {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 #[non_exhaustive]
 pub enum EventKind {
-    /// An event not covered by one of the other variants.
+    /// An event not covered by one of the other variants. Most events are of
+    /// this kind.
     #[default]
     Other,
     /// The [`Insert`] event.
@@ -139,23 +186,14 @@ impl EventId {
         generation: u32::MAX,
     };
 
-    pub fn to_enum(self) -> EventIdEnum {
-        if self.generation & 1 == 0 {
-            // SAFETY: Generation is nonzero.
-            let gen = unsafe { NonZeroU32::new(self.generation | 1).unwrap_debug_checked() };
-
-            // SAFETY: Generation is odd.
-            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
-
-            EventIdEnum::Global(GlobalEventId(k))
-        } else {
-            // SAFETY: Generation is nonzero.
-            let gen = unsafe { NonZeroU32::new(self.generation).unwrap_debug_checked() };
-
-            // SAFETY: Generation is odd.
-            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
-
-            EventIdEnum::Entity(EntityEventId(k))
+    fn from_key(k: Key, is_global: bool) -> Self {
+        Self {
+            index: k.index(),
+            generation: if is_global {
+                k.generation().get()
+            } else {
+                k.generation().get() & !1
+            },
         }
     }
 
@@ -169,6 +207,26 @@ impl EventId {
                 index: id.index().0,
                 generation: id.0.generation().get() & !1,
             },
+        }
+    }
+
+    pub fn to_enum(self) -> EventIdEnum {
+        if self.generation & 1 == 1 {
+            // SAFETY: Generation is nonzero.
+            let gen = unsafe { NonZeroU32::new(self.generation).unwrap_debug_checked() };
+
+            // SAFETY: Generation is odd.
+            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
+
+            EventIdEnum::Global(GlobalEventId(k))
+        } else {
+            // SAFETY: Generation is nonzero.
+            let gen = unsafe { NonZeroU32::new(self.generation | 1).unwrap_debug_checked() };
+
+            // SAFETY: Generation is odd.
+            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
+
+            EventIdEnum::Entity(EntityEventId(k))
         }
     }
 
@@ -265,10 +323,49 @@ unsafe impl SparseIndex for EntityEventIdx {
 #[derive(Debug)]
 pub struct EventInfo {
     id: EventId,
+    /// [`Event::TARGET_OFFSET`] of this event, or `usize::MAX` if absent.
+    target_offset: usize,
     name: Cow<'static, str>,
+    kind: EventKind,
     type_id: Option<TypeId>,
     layout: Layout,
     drop: Option<unsafe fn(NonNull<u8>)>,
+}
+
+impl EventInfo {
+    pub fn id(&self) -> EventId {
+        self.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> EventKind {
+        self.kind
+    }
+
+    pub fn type_id(&self) -> Option<TypeId> {
+        self.type_id
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
+        self.drop
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EventDescriptor {
+    pub name: Cow<'static, str>,
+    pub type_id: Option<TypeId>,
+    pub target_offset: Option<usize>,
+    pub kind: EventKind,
+    pub layout: Layout,
+    pub drop: Option<unsafe fn(NonNull<u8>)>,
 }
 
 #[derive(Debug)]
@@ -285,12 +382,14 @@ impl EventQueue {
         }
     }
 
-    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, event_idx: EventIdx) {
-        let event_ptr = NonNull::from(self.bump.alloc(event)).cast();
+    pub(crate) unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut EventQueueItem {
+        self.items.get_debug_checked_mut(idx)
+    }
 
+    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, event_idx: EventIdx) {
         self.items.push(EventQueueItem {
             event_idx,
-            event_ptr: Some(event_ptr),
+            event: self.bump.alloc(event) as *mut _ as *mut u8,
         })
     }
 
@@ -300,6 +399,10 @@ impl EventQueue {
     pub(crate) fn reset(&mut self) {
         self.items.clear();
         self.bump.reset();
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
     }
 
     pub(crate) unsafe fn set_len(&mut self, new_len: usize) {
@@ -314,9 +417,9 @@ unsafe impl Sync for EventQueue {}
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EventQueueItem {
     pub(crate) event_idx: EventIdx,
-    /// Type-erased pointer to this event. When `None`, ownership of the event
+    /// Type-erased pointer to this event. When null, ownership of the event
     /// has been transferred and no destructor needs to run.
-    pub(crate) event_ptr: Option<NonNull<u8>>,
+    pub(crate) event: *mut u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -408,7 +511,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        let id = world.init_event::<E>();
+        let id = world.add_event::<E>();
 
         if let Some(received_event) = config.received_event {
             if received_event != id {
@@ -525,7 +628,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        let id = world.init_event::<E>();
+        let id = world.add_event::<E>();
 
         if let Some(received_event) = config.received_event {
             if received_event != id {
@@ -647,7 +750,7 @@ mod private {
     impl<Q: Query> Sealed for Q {}
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Sender<'a, T: EventSet> {
     state: &'a T::State,
     world: UnsafeWorldCell<'a>,
@@ -733,6 +836,18 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
     }
 }
 
+impl<T: EventSet> fmt::Debug for Sender<'_, T>
+where
+    T::State: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sender")
+            .field("state", &self.state)
+            .field("world", &self.world)
+            .finish()
+    }
+}
+
 pub unsafe trait EventSet {
     type State: Send + Sync + 'static;
 
@@ -745,7 +860,7 @@ unsafe impl<E: Event> EventSet for E {
     type State = u32;
 
     fn new_state(world: &mut World) -> Self::State {
-        match world.init_event::<E>().index() {
+        match world.add_event::<E>().index() {
             EventIdx::Global(idx) => idx.0,
             EventIdx::Entity(idx) => idx.0,
         }
@@ -810,7 +925,7 @@ unsafe impl<C: Component> Event for Insert<C> {
 
     fn init(world: &mut World) -> EventKind {
         EventKind::Insert {
-            component_idx: world.init_component::<C>().index(),
+            component_idx: world.add_component::<C>().index(),
             component_offset: offset_of!(Self, component),
         }
     }
@@ -837,7 +952,7 @@ unsafe impl<C: Component> Event for Remove<C> {
 
     fn init(world: &mut World) -> EventKind {
         EventKind::Remove {
-            component_idx: world.init_component::<C>().index(),
+            component_idx: world.add_component::<C>().index(),
         }
     }
 }
@@ -849,6 +964,7 @@ unsafe impl Event for Spawn {
     const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
 
     fn init(world: &mut World) -> EventKind {
+        let _ = world;
         EventKind::Spawn
     }
 }
@@ -860,6 +976,7 @@ unsafe impl Event for Despawn {
     const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
 
     fn init(world: &mut World) -> EventKind {
+        let _ = world;
         EventKind::Despawn
     }
 }

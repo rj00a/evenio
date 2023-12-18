@@ -1,7 +1,7 @@
 use alloc::collections::BTreeMap;
 use core::any::TypeId;
 use core::fmt;
-use core::ops::{Deref, DerefMut, Range};
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use evenio_macros::all_tuples;
@@ -9,7 +9,7 @@ use evenio_macros::all_tuples;
 use crate::access::SystemAccess;
 use crate::archetype::{Archetype, ArchetypeIdx};
 use crate::bit_set::BitSet;
-use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
+use crate::debug_checked::UnwrapDebugChecked;
 use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventPtr, GlobalEventIdx};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
@@ -37,16 +37,34 @@ impl Systems {
     pub(crate) fn insert(&mut self, info: SystemInfo) -> SystemId {
         let ptr = info.ptr();
 
-        if let EventIdEnum::Global(id) = info.received_event().to_enum() {
-            if id.index().0 >= self.by_global_event.len() as u32 {
-                self.by_global_event
-                    .resize_with((id.index().0 + 1) as usize, SystemList::default);
-
-                self.by_global_event[id.index().0 as usize].insert(ptr, info.priority())
-            }
+        if let Some(type_id) = info.type_id() {
+            assert!(self.by_type_id.insert(type_id, ptr).is_none());
         }
 
-        SystemId(self.sm.insert(info))
+        let k = self.sm.insert_with(|k| {
+            let id = SystemId(k);
+
+            unsafe { (*ptr.as_ptr()).id = id };
+
+            if let EventIdEnum::Global(id) = info.received_event().to_enum() {
+                let idx = id.index().0 as usize;
+    
+                if idx >= self.by_global_event.len() {
+                    self.by_global_event
+                        .resize_with(idx + 1, SystemList::default);
+                }
+    
+                self.by_global_event[idx].insert(ptr, info.priority())
+            }
+
+            info
+        });
+
+        SystemId(k)
+    }
+
+    pub(crate) fn get_global_list(&self, idx: GlobalEventIdx) -> Option<&SystemList> {
+        self.by_global_event.get(idx.0 as usize)
     }
 
     pub fn get(&self, id: SystemId) -> Option<&SystemInfo> {
@@ -57,16 +75,6 @@ impl Systems {
         self.by_type_id
             .get(&id)
             .map(|p| unsafe { SystemInfo::ref_from_ptr(p) })
-    }
-
-    #[inline]
-    pub(crate) unsafe fn systems_for_event_debug_checked(
-        &mut self,
-        idx: GlobalEventIdx,
-    ) -> Range<*mut SystemInfoPtr> {
-        self.by_global_event
-            .get_debug_checked_mut(idx.0 as usize)
-            .ptr_range_mut()
     }
 }
 
@@ -87,6 +95,21 @@ pub struct SystemInfo {
 }
 
 pub(crate) type SystemInfoPtr = NonNull<SystemInfoInner>;
+
+// This is generic over `S` so that we can do an unsizing coercion.
+#[derive(Debug)]
+pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
+    pub(crate) received_event: EventId,
+    pub(crate) priority: Priority,
+    pub(crate) access: SystemAccess,
+    pub(crate) sent_global_events: BitSet<GlobalEventIdx>,
+    pub(crate) sent_entity_events: BitSet<EntityEventIdx>,
+    pub(crate) id: SystemId,
+    pub(crate) type_id: Option<TypeId>,
+    // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
+    // aliasing.
+    pub(crate) system: S,
+}
 
 impl SystemInfo {
     pub(crate) fn new<S: System>(inner: SystemInfoInner<S>) -> Self {
@@ -129,21 +152,6 @@ impl SystemInfo {
     }
 }
 
-// This is generic over `S` so that we can do an unsizing coercion.
-#[derive(Debug)]
-pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
-    received_event: EventId,
-    priority: Priority,
-    access: SystemAccess,
-    sent_global_events: BitSet<GlobalEventIdx>,
-    sent_entity_events: BitSet<EntityEventIdx>,
-    id: SystemId,
-    type_id: Option<TypeId>,
-    // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
-    // aliasing.
-    pub(crate) system: S,
-}
-
 unsafe impl Send for SystemInfo {}
 unsafe impl Sync for SystemInfo {}
 
@@ -165,7 +173,7 @@ impl Drop for SystemInfo {
 }
 
 #[derive(Debug, Default)]
-struct SystemList {
+pub(crate) struct SystemList {
     before_divider: u32,
     after_divider: u32,
     entries: Vec<SystemInfoPtr>,
@@ -189,9 +197,6 @@ impl SystemList {
                 self.entries.push(ptr);
             }
         }
-
-        self.entries.insert(self.after_divider as usize, ptr);
-        self.after_divider += 1;
     }
 
     fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
@@ -214,21 +219,8 @@ impl SystemList {
         }
     }
 
-    /// Returns a pointer range containing all the elements in this system list.
-    ///
-    /// For the purposes of the aliasing model, this function does not
-    /// invalidate any existing pointers into the system list. Calling
-    /// [`insert`](Self::insert), [`remove`](Self::remove), or dropping the
-    /// system list will, however, invalidate any pointers derived from this
-    /// function.
-    #[inline]
-    fn ptr_range_mut(&mut self) -> Range<*mut SystemInfoPtr> {
-        // Don't use `as_mut_ptr_range` to avoid materializing a reference to the Vec's
-        // slice.
-        let start = self.entries.as_mut_ptr();
-        // SAFETY: `end` points to one past the end of the buffer, which is in bounds.
-        let end = unsafe { start.add(self.entries.len()) };
-        Range { start, end }
+    pub(crate) fn systems(&self) -> &[SystemInfoPtr] {
+        &self.entries
     }
 }
 
@@ -264,7 +256,19 @@ pub trait IntoSystem<Marker> {
     fn into_system(self) -> Self::System;
 }
 
-impl<S: System, M> IntoSystem<M> for S {
+impl<Marker, F> IntoSystem<(Marker,)> for F
+where
+    Marker: 'static,
+    F: SystemParamFunction<Marker>,
+{
+    type System = FunctionSystem<Marker, F>;
+
+    fn into_system(self) -> Self::System {
+        FunctionSystem::new(self)
+    }
+}
+
+impl<S: System> IntoSystem<()> for S {
     type System = Self;
 
     fn into_system(self) -> Self::System {
@@ -294,7 +298,7 @@ pub unsafe trait System: Send + Sync + 'static {
     ) -> bool;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RefreshArchetypeReason {
     /// The archetype is newly created.
     New,
@@ -424,6 +428,29 @@ all_tuples!(impl_system_param_tuple, 0, 15, P, s);
 pub struct FunctionSystem<Marker, F: SystemParamFunction<Marker>> {
     func: F,
     state: Option<<F::Param as SystemParam>::State>,
+}
+
+impl<Marker, F> FunctionSystem<Marker, F>
+where
+    F: SystemParamFunction<Marker>,
+{
+    /// Create a new uninitialized function system.
+    pub fn new(func: F) -> Self {
+        Self { func, state: None }
+    }
+}
+
+impl<Marker, F> fmt::Debug for FunctionSystem<Marker, F>
+where
+    F: SystemParamFunction<Marker> + fmt::Debug,
+    <F::Param as SystemParam>::State: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FunctionSystem")
+            .field("func", &self.func)
+            .field("state", &self.state)
+            .finish()
+    }
 }
 
 unsafe impl<Marker, F> System for FunctionSystem<Marker, F>

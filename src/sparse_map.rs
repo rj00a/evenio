@@ -102,6 +102,29 @@ struct Dense<K, V> {
     value: V,
 }
 
+impl<K, V> fmt::Debug for SparseMap<K, V>
+where
+    K: SparseIndex + fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = f.debug_struct("SparseMap");
+
+        if is_zst::<V>() {
+            let this = unsafe { &self.union.zst };
+
+            s.field("sparse", &this.sparse).field("dense", &this.dense)
+        } else {
+            let this = unsafe { &self.union.non_zst };
+
+            s.field("sparse", &this.sparse)
+                .field("dense", &this.dense)
+                .field("indices", &this.indices)
+        }
+        .finish()
+    }
+}
+
 impl<K: SparseIndex, V> SparseMap<K, V> {
     pub(crate) fn new() -> Self {
         Self {

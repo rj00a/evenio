@@ -1,12 +1,19 @@
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::panic::{RefUnwindSafe, UnwindSafe};
+use std::alloc::Layout;
+use std::any::{self, TypeId};
+use std::mem;
+use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
-use crate::component::{Component, ComponentId, Components};
+use crate::component::{Component, ComponentDescriptor, ComponentId, Components};
+use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
-use crate::event::{Event, EventId, EventIdx, EventQueue, Events};
-use crate::system::{IntoSystem, SystemId, Systems};
+use crate::event::{
+    Event, EventDescriptor, EventId, EventIdx, EventKind, EventPtr, EventQueue, Events,
+};
+use crate::system::{Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, Systems};
 
 #[derive(Debug)]
 pub struct World {
@@ -33,19 +40,79 @@ impl World {
     }
 
     pub fn send<E: Event>(&mut self, event: E) {
-        todo!()
+        let event_id = self.add_event::<E>();
+
+        unsafe { self.event_queue.push(event, event_id.index()) };
+
+        self.process_event_queue();
     }
 
+    #[track_caller]
     pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> SystemId {
+        let mut system = system.into_system();
+        let mut config = Config::default();
+
+        let type_id = system.type_id();
+
+        if let Some(type_id) = type_id {
+            if let Some(info) = self.systems.by_type_id(type_id) {
+                return info.id();
+            }
+        }
+
+        if let Err(e) = system.init(self, &mut config) {
+            panic!("{e}");
+        }
+
+        let Some(received_event) = config.received_event else {
+            panic!(
+                "system `{}` did not specify an event to receive. All systems must listen for \
+                 exactly one event type (see `Receiver`)",
+                any::type_name::<S>()
+            )
+        };
+
+        let info = SystemInfo::new(SystemInfoInner {
+            received_event,
+            priority: config.priority,
+            access: config.access,
+            sent_global_events: config.sent_global_events,
+            sent_entity_events: config.sent_entity_events,
+            id: SystemId::NULL, // Filled in later.
+            type_id,
+            system,
+        });
+
+        self.systems.insert(info)
+    }
+
+    pub fn add_component<C: Component>(&mut self) -> ComponentId {
         todo!()
     }
 
-    pub fn init_component<C: Component>(&mut self) -> ComponentId {
+    pub unsafe fn add_component_with_descriptor(
+        &mut self,
+        descriptor: ComponentDescriptor,
+    ) -> ComponentId {
         todo!()
     }
 
-    pub fn init_event<E: Event>(&mut self) -> EventId {
-        todo!()
+    pub fn add_event<E: Event>(&mut self) -> EventId {
+        let desc = EventDescriptor {
+            name: any::type_name::<E>().into(),
+            type_id: Some(TypeId::of::<E>()),
+            target_offset: E::TARGET_OFFSET,
+            kind: E::init(self),
+            layout: Layout::new::<E>(),
+            drop: mem::needs_drop::<E>()
+                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<E>()) }),
+        };
+
+        unsafe { self.add_event_with_descriptor(desc) }
+    }
+
+    pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
+        self.events.add(desc)
     }
 
     pub fn entities(&self) -> &Entities {
@@ -66,6 +133,84 @@ impl World {
 
     pub fn events(&self) -> &Events {
         &self.events
+    }
+
+    fn process_event_queue(&mut self) {
+        handle_events(0, self);
+        debug_assert_eq!(self.event_queue.len(), 0);
+
+        fn handle_events(queue_start_idx: usize, world: &mut World) {
+            debug_assert!(queue_start_idx < world.event_queue.len());
+
+            'next_event: for queue_idx in queue_start_idx..world.event_queue.len() {
+                let item = unsafe { world.event_queue.get_debug_checked_mut(queue_idx) };
+                let event_idx = item.event_idx;
+                let event_info = unsafe { world.events.by_index(event_idx).unwrap_debug_checked() };
+                let event_kind = event_info.kind();
+
+                let system_list = match event_idx {
+                    EventIdx::Global(global_idx) => unsafe {
+                        world
+                            .systems
+                            .get_global_list(global_idx)
+                            .unwrap_debug_checked()
+                    },
+                    EventIdx::Entity(_) => todo!(),
+                };
+
+                // Put the event pointer on the stack because pointers into the event queue
+                // would be invalidated by a push.
+                let mut event = item.event;
+
+                // Mark this pointer so we'll avoid dropping the event in the `World`'s
+                // destructor.
+                item.event = ptr::null_mut();
+
+                // TODO: event dropper.
+
+                let systems: *const [_] = system_list.systems();
+
+                for info_ptr in unsafe { &*systems } {
+                    let events_before = world.event_queue.len();
+
+                    let system = unsafe { &mut (*info_ptr.as_ptr()).system };
+
+                    let info = unsafe { SystemInfo::ref_from_ptr(info_ptr) };
+
+                    let event_ptr = EventPtr::new(NonNull::from(&mut event));
+                    let world_cell = UnsafeWorldCell::new(world);
+
+                    unsafe { system.run(info, event_ptr, world_cell) };
+
+                    let events_after = world.event_queue.len();
+
+                    if events_before < events_after {
+                        // Eagerly handle any events produced by the system.
+                        handle_events(events_before, world);
+                    }
+
+                    debug_assert_eq!(world.event_queue.len(), events_before);
+
+                    // Did the system take ownership of the event?
+                    if event.is_null() {
+                        continue 'next_event;
+                    }
+                }
+
+                match event_kind {
+                    EventKind::Other => {}
+                    EventKind::Insert {
+                        component_idx,
+                        component_offset,
+                    } => todo!(),
+                    EventKind::Remove { component_idx } => todo!(),
+                    EventKind::Spawn => todo!(),
+                    EventKind::Despawn => todo!(),
+                }
+            }
+
+            unsafe { world.event_queue.set_len(queue_start_idx) };
+        }
     }
 }
 

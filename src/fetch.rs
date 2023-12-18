@@ -3,9 +3,10 @@ use std::marker::PhantomData;
 use std::{any, mem};
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
+use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
 use crate::query::{Query, ReadOnlyQuery};
+use crate::sparse_map::SparseMap;
 use crate::system::{Config, InitError, RefreshArchetypeReason, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
@@ -15,20 +16,9 @@ pub struct Fetcher<'a, Q: Query> {
 }
 
 pub struct FetcherState<Q: Query> {
-    dense: Vec<Dense<Q::Fetch>>,
-    /// Mapping from [`ArchetypeId`] to index in `dense`. `u32::MAX` indicates
-    /// no index. Used for random access entity lookups.
-    sparse: Vec<u32>,
+    map: SparseMap<ArchetypeIdx, Q::Fetch>,
     state: Q::State,
 }
-
-#[derive(Debug)]
-struct Dense<F> {
-    /// Collection of archetype column pointers for one archetype.
-    fetch: F,
-    idx: ArchetypeIdx,
-}
-
 
 impl<'a, Q: Query> Fetcher<'a, Q> {
     pub(crate) unsafe fn new(state: &'a mut FetcherState<Q>, world: UnsafeWorldCell<'a>) -> Self {
@@ -47,17 +37,15 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
             return Err(FetchError::NoSuchEntity(entity));
         };
 
-        let idx = *unsafe {
-            self.state
-                .sparse
-                .get_debug_checked(loc.archetype.0 as usize)
-        };
+        // Eliminate a panicking branch.
+        unsafe { assume_debug_checked(loc.archetype != ArchetypeIdx::NULL) };
 
-        if idx == u32::MAX {
+        // TODO: Resize the sparse array so that all valid archetype indices are in
+        // bounds, and then `assume` it. That would eliminate a bounds check.
+
+        let Some(fetch) = self.state.map.get_mut(loc.archetype) else {
             return Err(FetchError::QueryDoesNotMatch(entity));
         };
-
-        let fetch = &mut unsafe { self.state.dense.get_debug_checked_mut(idx as usize) }.fetch;
 
         Ok(unsafe { Q::fetch_mut(fetch, loc.row) })
     }
@@ -66,7 +54,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
 
     pub fn iter_mut(&mut self) -> IterMut<Q> {
         IterMut {
-            dense: self.state.dense.as_mut_slice(),
+            fetches: self.state.map.values_mut(),
             row: ArchetypeRow(0),
             archetypes: self.world.archetypes(),
             _marker: PhantomData,
@@ -83,30 +71,24 @@ impl<Q: ReadOnlyQuery> Fetcher<'_, Q> {
             return Err(FetchError::NoSuchEntity(entity));
         };
 
-        let idx = *unsafe {
-            self.state
-                .sparse
-                .get_debug_checked(loc.archetype.0 as usize)
-        };
+        // Eliminate a panicking branch.
+        unsafe { assume_debug_checked(loc.archetype != ArchetypeIdx::NULL) };
 
-        if idx == u32::MAX {
+        let Some(fetch) = self.state.map.get(loc.archetype) else {
             return Err(FetchError::QueryDoesNotMatch(entity));
         };
-
-        let fetch = &unsafe { self.state.dense.get_debug_checked(idx as usize) }.fetch;
 
         Ok(unsafe { Q::fetch(fetch, loc.row) })
     }
 
     pub fn iter(&self) -> Iter<Q> {
         Iter {
-            dense: &self.state.dense,
+            fetches: &self.state.map.values(),
             row: ArchetypeRow(0),
             archetypes: self.world.archetypes(),
         }
     }
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FetchError {
@@ -114,7 +96,6 @@ pub enum FetchError {
     QueryDoesNotMatch(EntityId),
     AliasedMutability(EntityId),
 }
-
 
 impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -158,10 +139,7 @@ where
 
         let sparse_upper_bound = world.archetypes().max_archetype_index().0 + 1;
 
-        let mut sparse = vec![u32::MAX; sparse_upper_bound as usize];
-        let mut dense = vec![];
-
-        todo!();
+        let map = SparseMap::new();
 
         /*
         for (id, arch) in world.archetypes().iter() {
@@ -173,11 +151,7 @@ where
         }
         */
 
-        Ok(FetcherState {
-            dense,
-            sparse,
-            state,
-        })
+        Ok(FetcherState { map, state })
     }
 
     unsafe fn get_param<'a>(
@@ -266,18 +240,14 @@ where
 impl<Q: Query> fmt::Debug for FetcherState<Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueryState")
-            .field("dense", &self.dense)
-            .field("sparse", &self.sparse)
+            .field("map", &self.map)
             .field("state", &self.state)
             .finish()
     }
 }
 
-unsafe impl<F> Send for Dense<F> {}
-unsafe impl<F> Sync for Dense<F> {}
-
 pub struct Iter<'a, Q: ReadOnlyQuery> {
-    dense: &'a [Dense<Q::Fetch>],
+    fetches: &'a [Q::Fetch],
     /// Index into the current archetype.
     row: ArchetypeRow,
     archetypes: &'a Archetypes,
@@ -313,7 +283,7 @@ impl<'a, Q: ReadOnlyQuery> Iterator for Iter<'a, Q> {
 
 pub struct IterMut<'a, Q: Query> {
     // Using a pointer to sneak past a puzzling lifetime problem.
-    dense: *mut [Dense<Q::Fetch>],
+    fetches: *mut [Q::Fetch],
     row: ArchetypeRow,
     archetypes: &'a Archetypes,
     _marker: PhantomData<&'a mut ()>,
@@ -350,10 +320,9 @@ impl<'a, Q: Query> Iterator for IterMut<'a, Q> {
 impl<Q: Query> fmt::Debug for IterMut<'_, Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IterMut")
-            .field("dense", &self.dense)
+            .field("fetches", &self.fetches)
             .field("row", &self.row)
             .field("archetypes", &self.archetypes)
             .finish()
     }
 }
-

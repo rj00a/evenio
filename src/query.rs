@@ -38,7 +38,7 @@ unsafe impl<C: Component> Query for &'_ C {
     type State = ComponentId;
 
     fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let id = world.init_component::<C>();
+        let id = world.add_component::<C>();
         let expr = AccessExpr::with(id.index(), Access::Read);
 
         (expr, id)
@@ -87,7 +87,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
         let _ = AssertMutable::<C>::ASSERTION;
 
-        let id = world.init_component::<C>();
+        let id = world.add_component::<C>();
         let expr = AccessExpr::with(id.index(), Access::ReadWrite);
 
         (expr, id)

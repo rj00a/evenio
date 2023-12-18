@@ -1,4 +1,3 @@
-use core::fmt;
 use core::num::NonZeroU32;
 
 use crate::{slot_map::{Key, SlotMap}, archetype::{ArchetypeIdx, ArchetypeRow}};
@@ -65,7 +64,9 @@ pub(crate) struct ReservedEntities {
 
 impl ReservedEntities {
     pub(crate) const fn new() -> Self {
-        todo!()
+        Self {
+
+        }
     }
 
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {

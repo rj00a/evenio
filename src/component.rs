@@ -1,7 +1,11 @@
+use alloc::collections::BTreeMap;
 use core::alloc::Layout;
 use core::any::TypeId;
-use alloc::collections::BTreeMap;
 use core::marker::PhantomData;
+use std::borrow::Cow;
+use std::ptr::NonNull;
+
+pub use evenio_macros::Component;
 
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -27,9 +31,11 @@ impl Components {
 
 #[derive(Debug)]
 pub struct ComponentInfo {
+    name: Cow<'static, str>,
     id: ComponentId,
     type_id: Option<TypeId>,
     layout: Layout,
+    drop: Option<unsafe fn(NonNull<u8>)>,
 }
 
 pub trait Component: Send + Sync + 'static {
@@ -55,15 +61,12 @@ pub trait Component: Send + Sync + 'static {
     const MUTABLE: bool = true;
 }
 
-pub(crate) struct AssertMutable<C: Component> {
-    _marker: PhantomData<C>,
-}
-
-impl<C: Component> AssertMutable<C> {
-    const _ASSERTION: () = assert!(
-        C::MUTABLE,
-        "component does not permit mutation through mutable references (see `Component::MUTABLE`)."
-    );
+#[derive(Clone, Debug)]
+pub struct ComponentDescriptor {
+    pub name: Cow<'static, str>,
+    pub type_id: Option<TypeId>,
+    pub layout: Layout,
+    pub drop: Option<unsafe fn(NonNull<u8>)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
