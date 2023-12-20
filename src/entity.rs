@@ -1,7 +1,7 @@
 use core::num::NonZeroU32;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
-use crate::slot_map::{Key, SlotMap};
+use crate::slot_map::{Key, NextKeyIter, SlotMap};
 
 #[derive(Debug)]
 pub struct Entities {
@@ -17,8 +17,16 @@ impl Entities {
         self.sm.get(id.0).copied()
     }
 
-    pub(crate) fn insert(&mut self, loc: EntityLocation) -> EntityId {
-        EntityId(self.sm.insert(loc))
+    pub fn contains(&self, id: EntityId) -> bool {
+        self.get(id).is_some()
+    }
+
+    pub(crate) fn add(&mut self, loc: EntityLocation) -> EntityId {
+        let Some(k) = self.sm.insert(loc) else {
+            panic!("too many entities")
+        };
+
+        EntityId(k)
     }
 
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
@@ -59,15 +67,25 @@ pub struct EntityIdx(pub u32);
 
 #[derive(Debug)]
 pub(crate) struct ReservedEntities {
-    // TODO
+    iter: NextKeyIter<EntityLocation>,
+    count: u32,
 }
 
 impl ReservedEntities {
-    pub(crate) const fn new() -> Self {
-        Self {}
+    pub(crate) fn new() -> Self {
+        Self {
+            iter: NextKeyIter::new(),
+            count: 0,
+        }
     }
 
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {
-        todo!()
+        if let Some(k) = self.iter.next(&entities.sm) {
+            EntityId(k)
+        } else {
+            panic!("too many entities")
+        }
     }
+
+    // TODO: flush
 }

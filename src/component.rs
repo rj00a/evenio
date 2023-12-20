@@ -29,13 +29,15 @@ impl Components {
         if let Some(type_id) = desc.type_id {
             return match self.by_type_id.entry(type_id) {
                 Entry::Vacant(v) => {
-                    let k = self.sm.insert_with(|k| ComponentInfo {
+                    let Some(k) = self.sm.insert_with(|k| ComponentInfo {
                         name: desc.name,
                         id: ComponentId(k),
                         type_id: desc.type_id,
                         layout: desc.layout,
                         drop: desc.drop,
-                    });
+                    }) else {
+                        panic!("too many components")
+                    };
 
                     (*v.insert(ComponentId(k)), true)
                 }
@@ -43,13 +45,15 @@ impl Components {
             };
         }
 
-        let k = self.sm.insert_with(|k| ComponentInfo {
+        let Some(k) = self.sm.insert_with(|k| ComponentInfo {
             name: desc.name,
             id: ComponentId(k),
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
-        });
+        }) else {
+            panic!("too many components")
+        };
 
         (ComponentId(k), true)
     }

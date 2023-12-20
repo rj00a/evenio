@@ -12,7 +12,7 @@ use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
-    EventKind, EventPtr, EventQueue, Events,
+    EventKind, EventPtr, EventQueue, Events, Spawn,
 };
 use crate::system::{Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, Systems};
 
@@ -46,6 +46,12 @@ impl World {
         unsafe { self.event_queue.push(event, event_id.index()) };
 
         self.process_event_queue();
+    }
+
+    pub fn spawn(&mut self) -> EntityId {
+        let id = self.reserved_entities.reserve(&self.entities);
+        self.send(Spawn(id));
+        id
     }
 
     #[track_caller]
@@ -85,7 +91,7 @@ impl World {
             system,
         });
 
-        let id = self.systems.insert(info);
+        let id = self.systems.add(info);
 
         self.send(AddSystem(id));
 

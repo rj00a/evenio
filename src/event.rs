@@ -69,7 +69,9 @@ impl Events {
                 &mut self.entity_events
             };
 
-            let k = map.insert(info);
+            let Some(k) = map.insert(info) else {
+                panic!("too many events")
+            };
             let id = EventId::from_key(k, is_global);
             map[k].id = id;
 
@@ -97,11 +99,11 @@ impl Events {
     pub fn by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
         match idx {
             EventIdx::Global(idx) => {
-                let k = self.global_events.key_at_index(idx.0)?;
+                let k = self.global_events.key_at_occupied_index(idx.0)?;
                 Some(unsafe { self.global_events.get(k).unwrap_debug_checked() })
             }
             EventIdx::Entity(idx) => {
-                let k = self.entity_events.key_at_index(idx.0)?;
+                let k = self.entity_events.key_at_occupied_index(idx.0)?;
                 Some(unsafe { self.entity_events.get(k).unwrap_debug_checked() })
             }
         }

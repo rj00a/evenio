@@ -36,14 +36,14 @@ impl Systems {
         }
     }
 
-    pub(crate) fn insert(&mut self, info: SystemInfo) -> SystemId {
+    pub(crate) fn add(&mut self, info: SystemInfo) -> SystemId {
         let ptr = info.ptr();
 
         if let Some(type_id) = info.type_id() {
             assert!(self.by_type_id.insert(type_id, ptr).is_none());
         }
 
-        let k = self.sm.insert_with(|k| {
+        let Some(k) = self.sm.insert_with(|k| {
             let id = SystemId(k);
 
             unsafe { (*ptr.as_ptr()).id = id };
@@ -60,9 +60,15 @@ impl Systems {
             }
 
             info
-        });
+        }) else {
+            panic!("too many systems")
+        };
 
         SystemId(k)
+    }
+
+    pub(crate) fn remove(&mut self, id: SystemId) -> Option<SystemInfo> {
+        todo!()
     }
 
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {

@@ -1,6 +1,7 @@
 use core::fmt;
 use core::mem::ManuallyDrop;
 use core::num::NonZeroU32;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Index, IndexMut};
 
@@ -20,11 +21,11 @@ impl<T> SlotMap<T> {
         }
     }
 
-    pub(crate) fn insert(&mut self, value: T) -> Key {
+    pub(crate) fn insert(&mut self, value: T) -> Option<Key> {
         self.insert_with(|_| value)
     }
 
-    pub(crate) fn insert_with<F>(&mut self, f: F) -> Key
+    pub(crate) fn insert_with<F>(&mut self, f: F) -> Option<Key>
     where
         F: FnOnce(Key) -> T,
     {
@@ -48,10 +49,10 @@ impl<T> SlotMap<T> {
 
             slot.union.value = ManuallyDrop::new(value);
         } else {
-            let index: u32 = self.slots.len() as u32;
+            let index = self.slots.len() as u32;
 
             if index == u32::MAX {
-                panic!("reached maximum number of slotmap elements");
+                return None;
             }
 
             key = Key {
@@ -71,7 +72,7 @@ impl<T> SlotMap<T> {
 
         self.len += 1;
 
-        key
+        Some(key)
     }
 
     pub(crate) fn remove(&mut self, key: Key) -> Option<T> {
@@ -117,7 +118,7 @@ impl<T> SlotMap<T> {
         Some(unsafe { &mut slot.union.value })
     }
 
-    pub(crate) fn key_at_index(&self, idx: u32) -> Option<Key> {
+    pub(crate) fn key_at_occupied_index(&self, idx: u32) -> Option<Key> {
         let slot = self.slots.get(idx as usize)?;
 
         if slot.is_vacant() {
@@ -125,6 +126,17 @@ impl<T> SlotMap<T> {
         }
 
         Some(unsafe { Key::new_unchecked(idx, slot.generation) })
+    }
+
+    pub(crate) fn next_key_iter(&self) -> NextKeyIter<T> {
+        NextKeyIter {
+            index: if self.next_free == u32::MAX {
+                self.slots.len() as u32
+            } else {
+                self.next_free
+            },
+            _marker: PhantomData,
+        }
     }
 
     /// Returns the number of occupied slots.
@@ -276,6 +288,55 @@ const ONE: NonZeroU32 = match NonZeroU32::new(1) {
     None => unreachable!(),
 };
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NextKeyIter<T> {
+    index: u32,
+    _marker: PhantomData<fn(T)>,
+}
+
+impl<T> NextKeyIter<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            index: 0,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn next(&mut self, sm: &SlotMap<T>) -> Option<Key> {
+        let key;
+
+        if let Some(slot) = sm.slots.get(self.index as usize) {
+            if slot.is_vacant() {
+                // SAFETY: slot.generation is even because slot is vacant.
+                key = Some(unsafe { Key::new_unchecked(self.index, slot.generation + 1) });
+
+                // SAFETY: slot is vacant.
+                let next_free = unsafe { slot.union.next_free };
+
+                // Reached end of free list?
+                if next_free == u32::MAX {
+                    self.index = sm.slots.len() as u32;
+                } else {
+                    self.index = next_free;
+                }
+            } else {
+                panic!("incorrect state for next key iter");
+            }
+        } else if self.index < u32::MAX {
+            key = Some(Key {
+                index: self.index,
+                generation: ONE,
+            });
+
+            self.index += 1;
+        } else {
+            key = None;
+        }
+
+        key
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -285,15 +346,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slotmap_insert_remove() {
+    fn insert_remove() {
         let mut sm = SlotMap::new();
 
-        let k = sm.insert(123);
+        let k = sm.insert(123).unwrap();
         assert_eq!(sm.remove(Key::NULL), None);
         assert_eq!(sm.remove(k), Some(123));
-        let k1 = sm.insert(123);
-        let k2 = sm.insert(456);
-        let k3 = sm.insert(789);
+        let k1 = sm.insert(123).unwrap();
+        let k2 = sm.insert(456).unwrap();
+        let k3 = sm.insert(789).unwrap();
         assert_eq!(BTreeSet::from_iter([k, k1, k2, k3]).len(), 4);
         assert_eq!(sm.remove(Key::NULL), None);
         assert_eq!(sm.remove(k2), Some(456));
@@ -305,11 +366,11 @@ mod tests {
     }
 
     #[test]
-    fn slotmap_get() {
+    fn get() {
         let mut sm = SlotMap::new();
 
-        let k1 = sm.insert(123);
-        let k2 = sm.insert(456);
+        let k1 = sm.insert(123).unwrap();
+        let k2 = sm.insert(456).unwrap();
 
         assert_eq!(sm.get(k1), Some(&123));
         assert_eq!(sm.get_mut(k2), Some(&mut 456));
@@ -322,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn slotmap_retires_slot() {
+    fn retires_slot() {
         let mut sm = SlotMap::new();
 
         sm.insert(123);
@@ -334,13 +395,13 @@ mod tests {
         };
 
         assert_eq!(sm.remove(k), Some(123));
-        let k2 = sm.insert(456);
+        let k2 = sm.insert(456).unwrap();
 
         assert_ne!(k2.index(), 0);
     }
 
     #[test]
-    fn slotmap_drops_items() {
+    fn drops_items() {
         struct Foo(Rc<Cell<usize>>);
 
         impl Drop for Foo {
@@ -353,7 +414,7 @@ mod tests {
         let count = Rc::new(Cell::new(0));
 
         sm.insert(Foo(count.clone()));
-        let k = sm.insert(Foo(count.clone()));
+        let k = sm.insert(Foo(count.clone())).unwrap();
         sm.insert(Foo(count.clone()));
 
         sm.remove(k);
@@ -361,5 +422,50 @@ mod tests {
         drop(sm);
 
         assert_eq!(count.get(), 3);
+    }
+
+    #[test]
+    fn next_key_iter() {
+        let mut sm = SlotMap::new();
+
+        sm.insert(123).unwrap();
+        let id = sm.insert(456).unwrap();
+        sm.insert(789).unwrap();
+
+        sm.remove(id);
+
+        let mut iter = sm.next_key_iter();
+
+        assert_eq!(
+            iter.next(&sm),
+            Some(Key::new(1, NonZeroU32::new(3).unwrap()).unwrap())
+        );
+        assert_eq!(
+            iter.next(&sm),
+            Some(Key::new(3, NonZeroU32::new(1).unwrap()).unwrap())
+        );
+        assert_eq!(
+            iter.next(&sm),
+            Some(Key::new(4, NonZeroU32::new(1).unwrap()).unwrap())
+        );
+    }
+
+    #[test]
+    fn next_key_iter_null_next_free() {
+        let mut sm = SlotMap::new();
+
+        sm.insert(123).unwrap();
+        sm.insert(456).unwrap();
+
+        let mut iter = sm.next_key_iter();
+
+        assert_eq!(
+            iter.next(&sm),
+            Some(Key::new(2, NonZeroU32::new(1).unwrap()).unwrap())
+        );
+        assert_eq!(
+            iter.next(&sm),
+            Some(Key::new(3, NonZeroU32::new(1).unwrap()).unwrap())
+        );
     }
 }
