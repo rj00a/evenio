@@ -620,7 +620,6 @@ impl<T> fmt::Debug for ColumnPtr<T> {
 unsafe impl<T> Send for ColumnPtr<T> {}
 unsafe impl<T> Sync for ColumnPtr<T> {}
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,13 +632,11 @@ mod tests {
         let r = std::panic::catch_unwind(|| {
             let mut world = World::new();
 
-            (world.add_system(|_: &E, _: Fetcher<Q>| {}), world)
+            (world.add_system(|_: Receiver<E>, _: Fetcher<Q>| {}), world)
         });
 
         if let Ok((_, mut world)) = r {
-            dbg!(&world);
-
-            // world.send(E); // TODO
+            world.send(E);
             true
         } else {
             false
@@ -683,4 +680,3 @@ mod tests {
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
 }
-*/

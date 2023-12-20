@@ -3,6 +3,8 @@ use core::any::TypeId;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
+use std::any;
+use std::borrow::Cow;
 
 use evenio_macros::all_tuples;
 
@@ -10,7 +12,7 @@ use crate::access::SystemAccess;
 use crate::archetype::{Archetype, ArchetypeIdx};
 use crate::bit_set::BitSet;
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventPtr, GlobalEventIdx};
+use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventIdx, EventPtr, GlobalEventIdx};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -48,12 +50,12 @@ impl Systems {
 
             if let EventIdEnum::Global(id) = info.received_event().to_enum() {
                 let idx = id.index().0 as usize;
-    
+
                 if idx >= self.by_global_event.len() {
                     self.by_global_event
                         .resize_with(idx + 1, SystemList::default);
                 }
-    
+
                 self.by_global_event[idx].insert(ptr, info.priority())
             }
 
@@ -61,6 +63,15 @@ impl Systems {
         });
 
         SystemId(k)
+    }
+
+    pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
+        if let EventIdx::Global(GlobalEventIdx(idx)) = event_idx {
+            if idx as usize >= self.by_global_event.len() {
+                self.by_global_event
+                    .resize_with(idx as usize + 1, SystemList::default);
+            }
+        }
     }
 
     pub(crate) fn get_global_list(&self, idx: GlobalEventIdx) -> Option<&SystemList> {
@@ -99,11 +110,12 @@ pub(crate) type SystemInfoPtr = NonNull<SystemInfoInner>;
 // This is generic over `S` so that we can do an unsizing coercion.
 #[derive(Debug)]
 pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
+    pub(crate) name: Cow<'static, str>,
     pub(crate) received_event: EventId,
-    pub(crate) priority: Priority,
-    pub(crate) access: SystemAccess,
     pub(crate) sent_global_events: BitSet<GlobalEventIdx>,
     pub(crate) sent_entity_events: BitSet<EntityEventIdx>,
+    pub(crate) priority: Priority,
+    pub(crate) access: SystemAccess,
     pub(crate) id: SystemId,
     pub(crate) type_id: Option<TypeId>,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
@@ -119,14 +131,30 @@ impl SystemInfo {
         Self { inner: ptr }
     }
 
+    pub fn name(&self) -> &str {
+        unsafe { &(*self.inner.as_ptr()).name }
+    }
+
     pub fn received_event(&self) -> EventId {
         // SAFETY: Type ensures inner pointer is valid.
         unsafe { (*self.inner.as_ptr()).received_event }
     }
 
+    pub fn sent_global_events(&self) -> &BitSet<GlobalEventIdx> {
+        unsafe { &(*self.inner.as_ptr()).sent_global_events }
+    }
+
+    pub fn sent_entity_events(&self) -> &BitSet<EntityEventIdx> {
+        unsafe { &(*self.inner.as_ptr()).sent_entity_events }
+    }
+
     pub fn priority(&self) -> Priority {
         // SAFETY: Type ensures inner pointer is valid.
         unsafe { (*self.inner.as_ptr()).priority }
+    }
+
+    pub fn access(&self) -> &SystemAccess {
+        unsafe { &(*self.inner.as_ptr()).access }
     }
 
     pub fn id(&self) -> SystemId {
@@ -158,8 +186,14 @@ unsafe impl Sync for SystemInfo {}
 impl fmt::Debug for SystemInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemInfo")
+            .field("name", &self.name())
             .field("received_event", &self.received_event())
+            .field("sent_global_events", &self.sent_global_events())
+            .field("sent_entity_events", &self.sent_entity_events())
             .field("priority", &self.priority())
+            .field("access", &self.access())
+            .field("id", &self.id())
+            .field("type_id", &self.type_id())
             .finish_non_exhaustive()
     }
 }
@@ -224,7 +258,7 @@ impl SystemList {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct SystemId(Key);
 
 impl SystemId {
@@ -235,7 +269,7 @@ impl SystemId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SystemIdx(pub u32);
 
 unsafe impl SparseIndex for SystemIdx {
@@ -250,13 +284,52 @@ unsafe impl SparseIndex for SystemIdx {
     }
 }
 
-pub trait IntoSystem<Marker> {
+pub trait IntoSystem<Marker>: Sized {
     type System: System;
 
+    /// Performs the conversion into a [`System`].
     fn into_system(self) -> Self::System;
+
+    /// Ignore this system's reported [`TypeId`]. This can be used to add a
+    /// specific system to the world more than once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let id_1 = world.add_system(my_system);
+    /// let id_2 = world.add_system(my_system.no_type_id());
+    /// let id_3 = world.add_system(my_system);
+    ///
+    /// assert_ne!(id_1, id_2);
+    /// assert_eq!(id_1, id_3);
+    /// #
+    /// # fn my_system(_: Receiver<E>) {}
+    /// #
+    /// # #[derive(Event)]
+    /// # struct E;
+    /// ```
+    fn no_type_id(self) -> NoTypeId<Self::System> {
+        NoTypeId(self.into_system())
+    }
+
+    fn before(self) -> Before<Self::System> {
+        Before(self.into_system())
+    }
+
+    fn after(self) -> After<Self::System> {
+        After(self.into_system())
+    }
 }
 
-impl<Marker, F> IntoSystem<(Marker,)> for F
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct FunctionSystemMarker;
+
+impl<Marker, F> IntoSystem<(FunctionSystemMarker, Marker)> for F
 where
     Marker: 'static,
     F: SystemParamFunction<Marker>,
@@ -276,15 +349,109 @@ impl<S: System> IntoSystem<()> for S {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct NoTypeId<S>(pub S);
+
+unsafe impl<S: System> System for NoTypeId<S> {
+    fn type_id(&self) -> Option<TypeId> {
+        None
+    }
+
+    fn name(&self) -> Cow<'static, str> {
+        self.0.name()
+    }
+
+    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+        self.0.init(world, config)
+    }
+
+    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
+        self.0.run(info, event_ptr, world)
+    }
+
+    unsafe fn refresh_archetype(
+        &mut self,
+        reason: RefreshArchetypeReason,
+        idx: ArchetypeIdx,
+        arch: &Archetype,
+    ) -> bool {
+        self.0.refresh_archetype(reason, idx, arch)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct Before<S>(pub S);
+
+unsafe impl<S: System> System for Before<S> {
+    fn type_id(&self) -> Option<TypeId> {
+        self.0.type_id()
+    }
+
+    fn name(&self) -> Cow<'static, str> {
+        self.0.name()
+    }
+
+    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+        let res = self.0.init(world, config);
+        config.priority = Priority::Before;
+        res
+    }
+
+    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
+        self.0.run(info, event_ptr, world)
+    }
+
+    unsafe fn refresh_archetype(
+        &mut self,
+        reason: RefreshArchetypeReason,
+        idx: ArchetypeIdx,
+        arch: &Archetype,
+    ) -> bool {
+        self.0.refresh_archetype(reason, idx, arch)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub struct After<S>(pub S);
+
+unsafe impl<S: System> System for After<S> {
+    fn type_id(&self) -> Option<TypeId> {
+        self.0.type_id()
+    }
+
+    fn name(&self) -> Cow<'static, str> {
+        self.0.name()
+    }
+
+    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+        let res = self.0.init(world, config);
+        config.priority = Priority::After;
+        res
+    }
+
+    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
+        self.0.run(info, event_ptr, world)
+    }
+
+    unsafe fn refresh_archetype(
+        &mut self,
+        reason: RefreshArchetypeReason,
+        idx: ArchetypeIdx,
+        arch: &Archetype,
+    ) -> bool {
+        self.0.refresh_archetype(reason, idx, arch)
+    }
+}
+
 pub unsafe trait System: Send + Sync + 'static {
     /// Returns the [`TypeId`] which uniquely identifies this system, or `None`
     /// if there is none.
     ///
     /// No two systems with the same [`TypeId`] will exist in the [`World`] at
     /// the same time.
-    fn type_id(&self) -> Option<TypeId> {
-        None
-    }
+    fn type_id(&self) -> Option<TypeId>;
+
+    fn name(&self) -> Cow<'static, str>;
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError>;
 
@@ -462,6 +629,10 @@ where
         Some(TypeId::of::<F>())
     }
 
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(any::type_name::<F>())
+    }
+
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
         self.state = Some(<F::Param as SystemParam>::init(world, config)?);
         Ok(())
@@ -499,6 +670,7 @@ where
     }
 }
 
+/// This trait is sealed and cannot be implemented by downstream crates.
 pub trait SystemParamFunction<Marker>: Send + Sync + 'static {
     type Param: SystemParam;
 

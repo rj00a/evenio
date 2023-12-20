@@ -1,19 +1,20 @@
 use alloc::collections::BTreeMap;
 use core::alloc::Layout;
 use core::any::TypeId;
-use core::marker::PhantomData;
 use std::borrow::Cow;
+use std::collections::btree_map::Entry;
 use std::ptr::NonNull;
 
 pub use evenio_macros::Component;
 
+use crate::debug_checked::UnwrapDebugChecked;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 
 #[derive(Debug)]
 pub struct Components {
     sm: SlotMap<ComponentInfo>,
-    by_type_id: BTreeMap<TypeId, ComponentIdx>,
+    by_type_id: BTreeMap<TypeId, ComponentId>,
 }
 
 impl Components {
@@ -24,8 +25,42 @@ impl Components {
         }
     }
 
+    pub(crate) fn add(&mut self, desc: ComponentDescriptor) -> (ComponentId, bool) {
+        if let Some(type_id) = desc.type_id {
+            return match self.by_type_id.entry(type_id) {
+                Entry::Vacant(v) => {
+                    let k = self.sm.insert_with(|k| ComponentInfo {
+                        name: desc.name,
+                        id: ComponentId(k),
+                        type_id: desc.type_id,
+                        layout: desc.layout,
+                        drop: desc.drop,
+                    });
+
+                    (*v.insert(ComponentId(k)), true)
+                }
+                Entry::Occupied(o) => (*o.get(), false),
+            };
+        }
+
+        let k = self.sm.insert_with(|k| ComponentInfo {
+            name: desc.name,
+            id: ComponentId(k),
+            type_id: desc.type_id,
+            layout: desc.layout,
+            drop: desc.drop,
+        });
+
+        (ComponentId(k), true)
+    }
+
     pub fn get(&self, id: ComponentId) -> Option<&ComponentInfo> {
         self.sm.get(id.0)
+    }
+
+    pub fn by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
+        let id = *self.by_type_id.get(&type_id)?;
+        Some(unsafe { self.get(id).unwrap_debug_checked() })
     }
 }
 

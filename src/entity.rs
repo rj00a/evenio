@@ -1,6 +1,7 @@
 use core::num::NonZeroU32;
 
-use crate::{slot_map::{Key, SlotMap}, archetype::{ArchetypeIdx, ArchetypeRow}};
+use crate::archetype::{ArchetypeIdx, ArchetypeRow};
+use crate::slot_map::{Key, SlotMap};
 
 #[derive(Debug)]
 pub struct Entities {
@@ -56,7 +57,6 @@ impl EntityId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Debug)]
 pub struct EntityIdx(pub u32);
 
-
 #[derive(Debug)]
 pub(crate) struct ReservedEntities {
     // TODO
@@ -64,9 +64,7 @@ pub(crate) struct ReservedEntities {
 
 impl ReservedEntities {
     pub(crate) const fn new() -> Self {
-        Self {
-
-        }
+        Self {}
     }
 
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {

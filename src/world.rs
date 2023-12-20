@@ -7,11 +7,12 @@ use std::mem;
 use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
-use crate::component::{Component, ComponentDescriptor, ComponentId, Components};
+use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    Event, EventDescriptor, EventId, EventIdx, EventKind, EventPtr, EventQueue, Events,
+    AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
+    EventKind, EventPtr, EventQueue, Events,
 };
 use crate::system::{Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, Systems};
 
@@ -73,6 +74,7 @@ impl World {
         };
 
         let info = SystemInfo::new(SystemInfoInner {
+            name: system.name(),
             received_event,
             priority: config.priority,
             access: config.access,
@@ -83,17 +85,43 @@ impl World {
             system,
         });
 
-        self.systems.insert(info)
+        let id = self.systems.insert(info);
+
+        self.send(AddSystem(id));
+
+        id
+    }
+
+    pub fn remove_system(&mut self, id: SystemId) -> Option<SystemInfo> {
+        todo!()
     }
 
     pub fn add_component<C: Component>(&mut self) -> ComponentId {
-        todo!()
+        let desc = ComponentDescriptor {
+            name: any::type_name::<C>().into(),
+            type_id: Some(TypeId::of::<C>()),
+            layout: Layout::new::<C>(),
+            drop: mem::needs_drop::<C>()
+                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<C>()) }),
+        };
+
+        unsafe { self.add_component_with_descriptor(desc) }
     }
 
     pub unsafe fn add_component_with_descriptor(
         &mut self,
-        descriptor: ComponentDescriptor,
+        desc: ComponentDescriptor,
     ) -> ComponentId {
+        let (id, is_new) = self.components.add(desc);
+
+        if is_new {
+            self.send(AddComponent(id));
+        }
+
+        id
+    }
+
+    pub fn remove_component(&mut self, id: SystemId) -> Option<ComponentInfo> {
         todo!()
     }
 
@@ -112,7 +140,19 @@ impl World {
     }
 
     pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
-        self.events.add(desc)
+        let (id, is_new) = self.events.add(desc);
+
+        if is_new {
+            self.systems.register_event(id.index());
+
+            self.send(AddEvent(id));
+        }
+
+        id
+    }
+
+    pub fn remove_event(&mut self, id: EventId) -> Option<EventInfo> {
+        todo!()
     }
 
     pub fn entities(&self) -> &Entities {
@@ -159,14 +199,31 @@ impl World {
                 };
 
                 // Put the event pointer on the stack because pointers into the event queue
-                // would be invalidated by a push.
-                let mut event = item.event;
+                // would be invalidated by pushes.
+                let mut event = EventDropper {
+                    event: item.event,
+                    drop: event_info.drop(),
+                };
 
-                // Mark this pointer so we'll avoid dropping the event in the `World`'s
-                // destructor.
+                // Mark this pointer so the `World`'s destructor will know we've taken ownership
+                // of the event.
                 item.event = ptr::null_mut();
 
-                // TODO: event dropper.
+                struct EventDropper {
+                    event: *mut u8,
+                    drop: Option<unsafe fn(NonNull<u8>)>,
+                }
+
+                // In case `System::run` or `handle_events` unwinds, we need to drop the event
+                // we're holding on the stack. The other events in the event queue will be
+                // handled by `World`'s destructor.
+                impl Drop for EventDropper {
+                    fn drop(&mut self) {
+                        if let (Some(event), Some(drop)) = (NonNull::new(self.event), self.drop) {
+                            unsafe { drop(event) };
+                        }
+                    }
+                }
 
                 let systems: *const [_] = system_list.systems();
 
@@ -177,7 +234,7 @@ impl World {
 
                     let info = unsafe { SystemInfo::ref_from_ptr(info_ptr) };
 
-                    let event_ptr = EventPtr::new(NonNull::from(&mut event));
+                    let event_ptr = EventPtr::new(NonNull::from(&mut event.event));
                     let world_cell = UnsafeWorldCell::new(world);
 
                     unsafe { system.run(info, event_ptr, world_cell) };
@@ -192,7 +249,8 @@ impl World {
                     debug_assert_eq!(world.event_queue.len(), events_before);
 
                     // Did the system take ownership of the event?
-                    if event.is_null() {
+                    if event.event.is_null() {
+                        mem::forget(event);
                         continue 'next_event;
                     }
                 }
@@ -209,6 +267,8 @@ impl World {
                 }
             }
 
+            debug_assert!(queue_start_idx < world.event_queue.len());
+
             unsafe { world.event_queue.set_len(queue_start_idx) };
         }
     }
@@ -217,6 +277,21 @@ impl World {
 impl Default for World {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        // Drop in-flight events in the event queue.
+        for item in self.event_queue.iter() {
+            if let Some(event) = NonNull::new(item.event) {
+                let info = unsafe { self.events.by_index(item.event_idx).unwrap_debug_checked() };
+
+                if let Some(drop) = info.drop() {
+                    unsafe { drop(event) };
+                }
+            }
+        }
     }
 }
 
@@ -266,5 +341,118 @@ impl<'a> UnsafeWorldCell<'a> {
 
     pub fn archetypes(self) -> &'a Archetypes {
         unsafe { &(*self.world).archetypes }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic;
+    use std::sync::Arc;
+
+    use crate::prelude::*;
+
+    #[test]
+    fn world_drops_events() {
+        #[derive(Event)]
+        struct A(Arc<()>);
+
+        impl Drop for A {
+            fn drop(&mut self) {
+                eprintln!("calling A destructor");
+            }
+        }
+
+        #[derive(Event)]
+        struct B(Arc<()>);
+
+        impl Drop for B {
+            fn drop(&mut self) {
+                eprintln!("calling B destructor");
+            }
+        }
+
+        #[derive(Event)]
+        struct C(Arc<()>);
+
+        impl Drop for C {
+            fn drop(&mut self) {
+                eprintln!("calling C destructor");
+            }
+        }
+
+        let mut world = World::new();
+
+        world.add_system(|r: Receiver<A>, mut s: Sender<B>| {
+            s.send(B(r.event.0.clone()));
+            s.send(B(r.event.0.clone()));
+        });
+
+        world.add_system(|r: Receiver<B>, mut s: Sender<C>| {
+            s.send(C(r.event.0.clone()));
+            s.send(C(r.event.0.clone()));
+        });
+
+        world.add_system(|r: Receiver<C>| println!("got C {:?}", Arc::as_ptr(&r.event.0)));
+
+        let arc = Arc::new(());
+
+        world.send(A(arc.clone()));
+
+        drop(world);
+
+        assert_eq!(Arc::strong_count(&arc), 1);
+    }
+
+    #[test]
+    fn world_drops_events_on_panic() {
+        #[derive(Event)]
+        struct A(Arc<()>);
+
+        impl Drop for A {
+            fn drop(&mut self) {
+                eprintln!("calling A destructor");
+            }
+        }
+
+        #[derive(Event)]
+        struct B(Arc<()>);
+
+        impl Drop for B {
+            fn drop(&mut self) {
+                eprintln!("calling B destructor");
+            }
+        }
+
+        #[derive(Event)]
+        struct C(Arc<()>);
+
+        impl Drop for C {
+            fn drop(&mut self) {
+                eprintln!("calling C destructor");
+            }
+        }
+
+        let mut world = World::new();
+
+        world.add_system(|r: Receiver<A>, mut s: Sender<B>| {
+            s.send(B(r.event.0.clone()));
+            s.send(B(r.event.0.clone()));
+        });
+
+        world.add_system(|r: Receiver<B>, mut sender: Sender<C>| {
+            sender.send(C(r.event.0.clone()));
+            sender.send(C(r.event.0.clone()));
+        });
+
+        world.add_system(|_: Receiver<C>| panic!("oops!"));
+
+        let arc = Arc::new(());
+        let arc_cloned = arc.clone();
+
+        let res = panic::catch_unwind(move || world.send(A(arc_cloned)));
+
+        assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
+
+        assert_eq!(Arc::strong_count(&arc), 1);
     }
 }

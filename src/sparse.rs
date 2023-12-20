@@ -18,7 +18,7 @@ macro_rules! impl_sparse_index {
             #[inline]
             fn from_index(idx: usize) -> Self {
                 debug_assert!(TryInto::<Self>::try_into(idx).is_ok(), "{idx} out of range");
-                
+
                 idx as Self
             }
         }

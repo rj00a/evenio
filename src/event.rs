@@ -19,11 +19,11 @@ use crate::component::ComponentIdx;
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
 use crate::fetch::{Fetcher, FetcherState};
-use crate::prelude::Component;
+use crate::prelude::{Component, ComponentId};
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
-use crate::system::{Config, InitError, SystemParam};
+use crate::system::{Config, InitError, SystemId, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl Events {
         }
     }
 
-    pub(crate) fn add(&mut self, desc: EventDescriptor) -> EventId {
+    pub(crate) fn add(&mut self, desc: EventDescriptor) -> (EventId, bool) {
         let target_offset = if let Some(t) = desc.target_offset {
             assert_ne!(t, usize::MAX, "unsupported target offset");
             t
@@ -78,11 +78,11 @@ impl Events {
 
         if let Some(type_id) = desc.type_id {
             match self.by_type_id.entry(type_id) {
-                Entry::Vacant(v) => *v.insert(insert()),
-                Entry::Occupied(o) => *o.get(),
+                Entry::Vacant(v) => (*v.insert(insert()), true),
+                Entry::Occupied(o) => (*o.get(), false),
             }
         } else {
-            insert()
+            (insert(), false)
         }
     }
 
@@ -391,6 +391,10 @@ impl EventQueue {
             event_idx,
             event: self.bump.alloc(event) as *mut _ as *mut u8,
         })
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> {
+        self.items.iter()
     }
 
     /// Clears the event queue and resets the internal bump allocator.
@@ -823,7 +827,16 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
             ));
         }
 
-        Ok(T::new_state(world))
+        let state = T::new_state(world);
+
+        T::for_each_idx(&state, |idx| {
+            match idx {
+                EventIdx::Global(i) => config.sent_global_events.insert(i),
+                EventIdx::Entity(i) => config.sent_entity_events.insert(i),
+            };
+        });
+
+        Ok(state)
     }
 
     unsafe fn get_param<'a>(
@@ -854,6 +867,8 @@ pub unsafe trait EventSet {
     fn new_state(world: &mut World) -> Self::State;
 
     fn event_idx_of<E: Event>(state: &Self::State) -> Option<EventIdx>;
+
+    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, f: F);
 }
 
 unsafe impl<E: Event> EventSet for E {
@@ -874,6 +889,14 @@ unsafe impl<E: Event> EventSet for E {
             } else {
                 EventIdx::Global(GlobalEventIdx(*state))
             }
+        })
+    }
+
+    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, mut f: F) {
+        f(if E::TARGET_OFFSET.is_some() {
+            EventIdx::Entity(EntityEventIdx(*state))
+        } else {
+            EventIdx::Global(GlobalEventIdx(*state))
         })
     }
 }
@@ -900,6 +923,12 @@ macro_rules! impl_event_set_tuple {
                 )*
 
                 None
+            }
+
+            fn for_each_idx<F: FnMut(EventIdx)>(($($e,)*): &Self::State, mut _f: F) {
+                $(
+                    $E::for_each_idx($e, &mut _f);
+                )*
             }
         }
     };
@@ -982,3 +1011,21 @@ unsafe impl Event for Despawn {
 }
 
 // TODO: `Call<E>` event?
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AddComponent(pub ComponentId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoveComponent(pub ComponentId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AddSystem(pub SystemId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoveSystem(pub SystemId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AddEvent(pub EventId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoveEvent(pub EventId);
