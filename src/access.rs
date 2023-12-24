@@ -1,301 +1,94 @@
-use std::{fmt, mem};
+use core::fmt;
+use std::cmp::Ordering;
 
 use crate::bit_set::BitSet;
+use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::sparse::SparseIndex;
 
-#[derive(Clone, Debug)]
-pub struct SystemAccess {
-    pub received_event: Access,
-    pub event_queue: Access,
-    pub reserve_entity: Access,
-    pub components: AccessExpr<ComponentIdx>,
+/// Describes how a particular piece of data is accessed. Used to prevent
+/// aliased mutabliity.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+pub enum Access {
+    /// Cannot read or write to the data.
+    #[default]
+    None,
+    /// Can read, but not write to the data (shared access).
+    Read,
+    /// Can both read and write to the data (exclusive access).
+    ReadWrite,
 }
 
-impl SystemAccess {
-    /// If the two systems described by `self` and `other` can safely run in
-    /// parallel with each other (assuming they don't refer to the same system,
-    /// since systems require `&mut self` to run.)
-    pub fn is_compatible(&self, other: &Self) -> bool {
-        self.received_event.is_compatible(other.received_event)
-            && self.event_queue.is_compatible(other.event_queue)
-            && self.reserve_entity.is_compatible(other.reserve_entity)
-            && self.components.is_compatible(&other.components)
+impl Access {
+    /// Can `self` and `other` be active at the same time without causing
+    /// aliased mutability?
+    ///
+    /// This operation is symmetric.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use evenio::access::Access::*;
+    ///
+    /// assert!(Read.is_compatible(Read));
+    /// assert!(!Read.is_compatible(ReadWrite));
+    /// assert!(ReadWrite.is_compatible(None));
+    /// ```
+    #[must_use]
+    pub const fn is_compatible(self, other: Self) -> bool {
+        match (self, other) {
+            (Access::None, _)
+            | (Access::Read, Access::None | Access::Read)
+            | (Access::ReadWrite, Access::None) => true,
+            _ => false,
+        }
     }
-}
 
-impl Default for SystemAccess {
-    fn default() -> Self {
-        Self {
-            received_event: Default::default(),
-            event_queue: Default::default(),
-            reserve_entity: Default::default(),
-            components: AccessExpr::one(),
+    /// Sets `self` equal to `other` if `self` is [compatible] with `other`.
+    /// Returns whether or not the assignment occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use evenio::access::Access;
+    ///
+    /// let mut access = Access::None;
+    ///
+    /// assert!(access.set_if_compatible(Access::ReadWrite));
+    /// assert_eq!(access, Access::ReadWrite);
+    /// ```
+    ///
+    /// [compatible](Self::is_compatible)
+    #[must_use]
+    pub fn set_if_compatible(&mut self, other: Self) -> bool {
+        if self.is_compatible(other) {
+            *self = other;
+            true
+        } else {
+            false
         }
     }
 }
 
-pub struct AccessExpr<T> {
-    /// Describes the potential Reads and Writes of this expression. This is
-    /// used to prevent queries like `(&mut A, &A)` from being considered valid.
-    access: AccessMap<T>,
-    /// A boolean expression in disjunctive normal form,
-    /// e.g. (A ∧ B ∧ ¬C) ∨ (D ∧ ¬E ∧ ¬F).
-    disjunctions: Vec<Conjunctions<T>>,
-}
-
-impl<T> AccessExpr<T> {
-    /// Returns a new access expression representing `true` or `1`. This is the
-    /// identity element for `∧`.
-    pub fn one() -> Self {
-        Self {
-            access: AccessMap::new(),
-            disjunctions: vec![Conjunctions::default()],
-        }
-    }
-
-    /// Returns a new access expression representing `false` or `0`. This is the
-    /// identity element for `∨`.
-    pub fn zero() -> Self {
-        Self {
-            access: AccessMap::new(),
-            disjunctions: vec![],
-        }
-    }
-}
-
-impl<T> Clone for AccessExpr<T> {
-    fn clone(&self) -> Self {
-        Self {
-            access: self.access.clone(),
-            disjunctions: self.disjunctions.clone(),
-        }
-    }
-}
-
-impl<T: SparseIndex> AccessExpr<T> {
-    pub fn with(value: T, access: Access) -> Self {
-        let mut res = Self::zero();
-
-        res.access.set(value, access);
-
-        let mut conj = Conjunctions::default();
-        conj.with.insert(value);
-        res.disjunctions.push(conj);
-
-        res
-    }
-
-    pub fn without(value: T) -> Self {
-        let mut res = Self::zero();
-
-        let mut conj = Conjunctions::default();
-        conj.without.insert(value);
-        res.disjunctions.push(conj);
-
-        res
-    }
-
-    /// Performs an AND (`∧`) with `self` and `other` and stores the result in
-    /// `self`. `self` is then returned for further chaining.
-    pub fn and(&mut self, other: &Self) -> &mut Self {
-        self.access.union(&other.access);
-
-        let mut new_filters = Vec::new();
-        for filter in &self.disjunctions {
-            for other in &other.disjunctions {
-                let mut new_filter: Conjunctions<T> = filter.clone();
-
-                new_filter.with.union_assign(&other.with);
-                new_filter.without.union_assign(&other.without);
-
-                // Skip contradictions.
-                if new_filter.with.is_disjoint(&new_filter.without) {
-                    new_filters.push(new_filter);
-                }
-            }
-        }
-
-        self.disjunctions = new_filters;
-        self
-    }
-
-    /// Performs an OR (`∨`) with `self` and `other` and stores the result in
-    /// `self`. `self` is then returned for further chaining.
-    pub fn or(&mut self, other: &Self) -> &mut Self {
-        self.access.union(&other.access);
-
-        self.disjunctions.extend(other.disjunctions.iter().cloned());
-
-        self
-    }
-
-    /// Performs a unary NOT (`¬`) on `self` and stores the result in `self`.
-    /// `self` is then returned for further chaining.
-    pub fn not(&mut self) -> &mut Self {
-        // Apply De Morgan's laws and clear the access map.
-
-        let mut res = Self::one();
-
-        for mut conj in mem::take(&mut self.disjunctions) {
-            let mut ors = Self::zero();
-
-            mem::swap(&mut conj.with, &mut conj.without);
-
-            for with in conj.with.iter() {
-                let mut f = Conjunctions::default();
-                f.with.insert(with);
-                ors.disjunctions.push(f);
-            }
-
-            for without in conj.without.iter() {
-                let mut f = Conjunctions::default();
-                f.without.insert(without);
-                ors.disjunctions.push(f);
-            }
-
-            res.and(&ors);
-        }
-
-        *self = res;
-
-        self
-    }
-
-    /// Performs an XOR (`⊻`) with `self` and `other` and stores the result in
-    /// `self`. `self` is then returned for further chaining.
-    pub fn xor(&mut self, other: &Self) -> &mut Self {
-        let mut this = self.clone();
-        let mut other = other.clone();
-
-        // A ⊻ B ≡ (A ∧ ¬B) ∨ (B ∧ ¬A)
-        self.and(other.clone().not()).or(other.and(this.not()))
-    }
-
-    /// Whether these two accesses can be active at the same time without
-    /// conflicting.
-    pub fn is_compatible(&self, other: &Self) -> bool {
-        if self.access.is_compatible(&other.access) {
-            // No need to check the filters if the accesses can't possibly conflict.
-            return true;
-        }
-
-        // The unfiltered accesses are incompatible, so check if the filters would make
-        // the unfiltered access compatible.
-        //
-        // Since the filters are in disjunctive normal form (ORs of ANDs), we need to
-        // check that all pairs of filters from `self` and `other` are disjoint.
-        self.disjunctions.iter().all(|conj| {
-            other
-                .disjunctions
-                .iter()
-                .all(|other_conj| conj.is_disjoint(other_conj))
-        })
-    }
-
-    pub fn clear_access(&mut self) {
-        self.access.clear();
-    }
-
-    pub(crate) fn accessed(&self) -> impl Iterator<Item = T> + '_ {
-        self.access.read.iter()
-    }
-}
-
-impl<T: SparseIndex + fmt::Debug> fmt::Debug for AccessExpr<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct DebugDisjunctions<'a, T>(&'a [Conjunctions<T>]);
-
-        impl<T: fmt::Debug + SparseIndex> fmt::Debug for DebugDisjunctions<'_, T> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                if self.0.is_empty() {
-                    write!(f, "⊥")?;
-                } else {
-                    let mut first = true;
-
-                    for conj in self.0.iter() {
-                        if !first {
-                            write!(f, " ∨ ")?;
-                        }
-                        first = false;
-
-                        if conj.with.is_empty() && conj.without.is_empty() {
-                            write!(f, "⊤")?;
-                        } else {
-                            let mut first = true;
-
-                            for val in conj.with.iter() {
-                                if !first {
-                                    write!(f, " ∧ ")?;
-                                }
-                                first = false;
-
-                                write!(f, "{val:?}")?;
-                            }
-
-                            for val in conj.without.iter() {
-                                if !first {
-                                    write!(f, " ∧ ")?;
-                                }
-                                first = false;
-
-                                write!(f, "¬{val:?}")?;
-                            }
-                        }
-                    }
-                }
-
-                Ok(())
-            }
-        }
-
-        f.debug_struct("FilteredAccessExpr")
-            .field("access", &self.access)
-            .field("filters", &DebugDisjunctions(&self.disjunctions))
-            .finish()
-    }
-}
-
-/// A map from `T` to `Access`.
-struct AccessMap<T> {
+/// Map from `T` to [`Access`] with sparse index keys. Absent keys implicitly
+/// map to [`Access::None`].
+pub struct AccessMap<T> {
     read: BitSet<T>,
     write: BitSet<T>,
 }
 
-impl<T: SparseIndex + fmt::Debug> fmt::Debug for AccessMap<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccessMap")
-            .field("read", &self.read)
-            .field("write", &self.write)
-            .finish()
-    }
-}
-
 impl<T> AccessMap<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             read: BitSet::new(),
             write: BitSet::new(),
         }
     }
 
-    fn clear(&mut self) {
-        self.read.clear();
-        self.write.clear();
-    }
-}
-
-impl<T> Clone for AccessMap<T> {
-    fn clone(&self) -> Self {
-        Self {
-            read: self.read.clone(),
-            write: self.write.clone(),
-        }
-    }
-}
-
-impl<T: SparseIndex> AccessMap<T> {
-    fn get(&self, value: T) -> Access {
+    pub fn get(&self, value: T) -> Access
+    where
+        T: SparseIndex,
+    {
         match (self.read.contains(value), self.write.contains(value)) {
             (true, true) => Access::ReadWrite,
             (true, false) => Access::Read,
@@ -304,7 +97,10 @@ impl<T: SparseIndex> AccessMap<T> {
         }
     }
 
-    fn set(&mut self, value: T, access: Access) {
+    pub fn insert(&mut self, value: T, access: Access)
+    where
+        T: SparseIndex,
+    {
         match access {
             Access::None => {
                 self.read.remove(value);
@@ -321,101 +117,153 @@ impl<T: SparseIndex> AccessMap<T> {
         }
     }
 
-    fn union(&mut self, other: &Self) {
-        self.read.union_assign(&other.read);
-        self.write.union_assign(&other.write);
+    pub fn clear(&mut self) {
+        self.read.clear();
+        self.write.clear();
     }
 
-    /// Whether these two accesses can be active at the same time without
-    /// conflicting.
-    #[must_use]
-    fn is_compatible(&self, other: &Self) -> bool {
+    pub fn is_compatible(&self, other: &Self) -> bool {
         self.read.is_disjoint(&other.write) && self.write.is_disjoint(&other.read)
     }
-}
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub enum Access {
-    /// Cannot read or write to the data.
-    #[default]
-    None,
-    /// Can read, but not write to the data (shared access).
-    Read,
-    /// Can both read and write to the data (exclusive access).
-    ReadWrite,
-}
-
-impl Access {
-    #[must_use]
-    pub const fn is_compatible(self, other: Self) -> bool {
-        match (self, other) {
-            (Access::None, _)
-            | (Access::Read, Access::None | Access::Read)
-            | (Access::ReadWrite, Access::None) => true,
-            _ => false,
-        }
+    pub fn union_assign(&mut self, other: &Self) {
+        self.read |= &other.read;
+        self.write |= &other.write;
     }
+}
 
-    #[must_use]
-    pub fn set_if_compatible(&mut self, other: Self) -> bool {
-        if self.is_compatible(other) {
-            *self = other;
-            true
-        } else {
-            false
+impl<T> Default for AccessMap<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for AccessMap<T> {
+    fn clone(&self) -> Self {
+        Self {
+            read: self.read.clone(),
+            write: self.write.clone(),
         }
     }
 }
 
-/// Sets of `With` and `Without` filters.
-/// Logically, this is set of variables ANDed together, possibly with negations.
-/// Example: `A ∧ B ∧ ¬C ∧ ¬A`.
-struct Conjunctions<T> {
-    with: BitSet<T>,
-    without: BitSet<T>,
-}
-
-impl<T: SparseIndex> Conjunctions<T> {
-    /// Determines if `self` and `other` are disjoint, i.e. if there is no
-    /// combination of values the variables could have to make both expressions
-    /// true at the same time.
-    ///
-    /// Examples:
-    /// - `A` is not disjoint with `B`.
-    /// - `A` is disjoint with `¬A`.
-    /// - `A ∧ ¬A` is disjoint with `B ∧ C`.
-    fn is_disjoint(&self, other: &Self) -> bool {
-        !self.with.is_disjoint(&self.without)
-            || !other.with.is_disjoint(&other.without)
-            || !self.with.is_disjoint(&other.without)
-            || !other.with.is_disjoint(&self.without)
+impl<T: SparseIndex> Ord for AccessMap<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.read
+            .cmp(&other.read)
+            .then_with(|| self.write.cmp(&other.write))
     }
 }
 
-impl<T: SparseIndex + fmt::Debug> fmt::Debug for Conjunctions<T> {
+impl<T: SparseIndex> PartialOrd for AccessMap<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: SparseIndex> PartialEq for AccessMap<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<T: SparseIndex> Eq for AccessMap<T> {}
+
+impl<T> fmt::Debug for AccessMap<T>
+where
+    T: SparseIndex + fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccessFilters")
-            .field("with", &self.with)
-            .field("without", &self.without)
+        f.debug_struct("AccessMap")
+            .field("read", &self.read)
+            .field("write", &self.write)
             .finish()
     }
 }
 
-impl<T> Clone for Conjunctions<T> {
-    fn clone(&self) -> Self {
+#[derive(Clone, Debug)]
+pub struct ComponentAccessExpr {
+    pub expr: BoolExpr<ComponentIdx>,
+    pub access: AccessMap<ComponentIdx>,
+}
+
+impl ComponentAccessExpr {
+    /// Create a new component access expression. The expr is initialized
+    /// matching all archetypes, but with access to no components.
+    pub fn new() -> Self {
         Self {
-            with: self.with.clone(),
-            without: self.without.clone(),
+            expr: BoolExpr::one(),
+            access: AccessMap::new(),
         }
+    }
+
+    pub fn with(component: ComponentIdx, access: Access) -> Self {
+        let mut map = AccessMap::new();
+        map.insert(component, access);
+
+        Self {
+            expr: BoolExpr::with(component),
+            access: map,
+        }
+    }
+
+    pub fn without(component: ComponentIdx) -> Self {
+        Self {
+            expr: BoolExpr::without(component),
+            access: AccessMap::new(),
+        }
+    }
+
+    pub fn is_compatible(&self, other: &Self) -> bool {
+        if self.access.is_compatible(&other.access) {
+            return true;
+        }
+
+        // The component accesses of `self` and `other` are incompatible. However, if
+        // the accesses don't overlap, then there's no incompatibility.
+        //
+        // For instance, `(&mut A, &B)` and `(&mut A, Not<&B>)` are incompatible with
+        // respect to `A`, but are disjoint so there's no overlap.
+        self.expr.is_disjoint(&other.expr)
+    }
+
+    pub fn and(mut self, other: &Self) -> Result<Self, Self> {
+        if !self.is_compatible(other) {
+            return Err(self);
+        }
+
+        self.access.union_assign(&other.access);
+        self.expr = self.expr.and(&other.expr);
+        Ok(self)
+    }
+
+    pub fn or(mut self, other: &Self) -> Result<Self, Self> {
+        if !self.is_compatible(other) {
+            return Err(self);
+        }
+
+        self.access.union_assign(&other.access);
+        self.expr = self.expr.or(&other.expr);
+        Ok(self)
+    }
+
+    pub fn not(mut self) -> Self {
+        self.access.clear();
+
+        self.expr = self.expr.not();
+        self
+    }
+
+    pub fn xor(mut self, other: &Self) -> Self {
+        self.access.union_assign(&other.access);
+        self.expr = self.expr.xor(&other.expr);
+        self
     }
 }
 
-impl<T> Default for Conjunctions<T> {
+impl Default for ComponentAccessExpr {
     fn default() -> Self {
-        Self {
-            with: Default::default(),
-            without: Default::default(),
-        }
+        Self::new()
     }
 }
 
@@ -423,11 +271,16 @@ impl<T> Default for Conjunctions<T> {
 mod tests {
     use super::*;
 
+    type Cae = ComponentAccessExpr;
+    const A: ComponentIdx = ComponentIdx(0);
+    const B: ComponentIdx = ComponentIdx(1);
+    const C: ComponentIdx = ComponentIdx(2);
+
     #[test]
     fn t0() {
-        let expr = AccessExpr::with(0usize, Access::ReadWrite);
+        let expr = Cae::with(A, Access::ReadWrite);
         let expr2 = expr.clone();
-        let expr3 = AccessExpr::<usize>::with(0usize, Access::Read);
+        let expr3 = Cae::with(A, Access::Read);
 
         assert!(!expr.is_compatible(&expr2));
         assert!(!expr.is_compatible(&expr3));
@@ -435,53 +288,42 @@ mod tests {
 
     #[test]
     fn t1() {
-        let mut expr = AccessExpr::with(0u32, Access::Read);
-        expr.and(&AccessExpr::with(1, Access::ReadWrite));
+        let expr = Cae::with(A, Access::Read)
+            .and(&Cae::with(B, Access::ReadWrite))
+            .unwrap();
 
-        let mut expr2 = AccessExpr::with(0, Access::Read);
-        expr2.and(&AccessExpr::with(1, Access::None));
-        expr2.and(&AccessExpr::with(2, Access::ReadWrite));
+        let expr2 = Cae::with(A, Access::Read)
+            .and(&Cae::with(B, Access::None))
+            .unwrap()
+            .and(&Cae::with(C, Access::ReadWrite))
+            .unwrap();
 
         assert!(expr.is_compatible(&expr2));
     }
 
     #[test]
     fn t2() {
-        let mut expr = AccessExpr::<usize>::with(0, Access::ReadWrite);
-        expr.and(&AccessExpr::with(1, Access::None));
+        let expr = Cae::with(A, Access::ReadWrite)
+            .and(&Cae::with(B, Access::None))
+            .unwrap();
 
-        let mut expr2 = AccessExpr::<usize>::with(0, Access::ReadWrite);
-        expr2.and(&AccessExpr::without(1));
+        let expr2 = Cae::with(A, Access::ReadWrite)
+            .and(&Cae::without(B))
+            .unwrap();
 
         assert!(expr.is_compatible(&expr2));
     }
 
     #[test]
     fn t3() {
-        let mut expr = AccessExpr::<usize>::with(0, Access::ReadWrite);
-        expr.and(&AccessExpr::with(1, Access::None));
-        expr.and(&AccessExpr::without(1));
+        let expr = Cae::with(A, Access::ReadWrite)
+            .and(&Cae::with(B, Access::None))
+            .unwrap()
+            .and(&Cae::without(C))
+            .unwrap();
 
-        let expr2 = AccessExpr::with(0, Access::ReadWrite);
+        let expr2 = Cae::with(A, Access::ReadWrite);
 
         assert!(expr.is_compatible(&expr2));
-    }
-
-    #[test]
-    fn negate_true() {
-        let mut expr = AccessExpr::<usize>::one();
-
-        expr.not();
-
-        assert!(expr.disjunctions.is_empty());
-    }
-
-    #[test]
-    fn negate_false() {
-        let mut expr = AccessExpr::<usize>::zero();
-
-        expr.not();
-
-        assert!(expr.disjunctions[0].with.is_empty() && expr.disjunctions[0].without.is_empty());
     }
 }

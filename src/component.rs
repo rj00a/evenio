@@ -3,6 +3,7 @@ use core::alloc::Layout;
 use core::any::TypeId;
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
+use std::ops::Index;
 use std::ptr::NonNull;
 
 pub use evenio_macros::Component;
@@ -62,9 +63,49 @@ impl Components {
         self.sm.get(id.0)
     }
 
+    pub fn by_index(&self, idx: ComponentIdx) -> Option<&ComponentInfo> {
+        self.sm.by_index(idx.0).map(|(_, v)| v)
+    }
+
     pub fn by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
         let id = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(id).unwrap_debug_checked() })
+    }
+}
+
+impl Index<ComponentId> for Components {
+    type Output = ComponentInfo;
+
+    fn index(&self, index: ComponentId) -> &Self::Output {
+        if let Some(info) = self.get(index) {
+            info
+        } else {
+            panic!("no such component with ID of {index:?} exists")
+        }
+    }
+}
+
+impl Index<ComponentIdx> for Components {
+    type Output = ComponentInfo;
+
+    fn index(&self, index: ComponentIdx) -> &Self::Output {
+        if let Some(info) = self.by_index(index) {
+            info
+        } else {
+            panic!("no such component with index of {index:?} exists")
+        }
+    }
+}
+
+impl Index<TypeId> for Components {
+    type Output = ComponentInfo;
+
+    fn index(&self, index: TypeId) -> &Self::Output {
+        if let Some(info) = self.by_type_id(index) {
+            info
+        } else {
+            panic!("no such component with type ID of {index:?} exists")
+        }
     }
 }
 
@@ -75,6 +116,28 @@ pub struct ComponentInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: Option<unsafe fn(NonNull<u8>)>,
+}
+
+impl ComponentInfo {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn id(&self) -> ComponentId {
+        self.id
+    }
+
+    pub fn type_id(&self) -> Option<TypeId> {
+        self.type_id
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
+    pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
+        self.drop
+    }
 }
 
 pub trait Component: Send + Sync + 'static {

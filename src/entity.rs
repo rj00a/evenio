@@ -1,4 +1,5 @@
 use core::num::NonZeroU32;
+use std::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
 use crate::slot_map::{Key, NextKeyIter, SlotMap};
@@ -17,20 +18,48 @@ impl Entities {
         self.sm.get(id.0).copied()
     }
 
+    pub fn by_index(&self, idx: EntityIdx) -> Option<EntityLocation> {
+        self.sm.by_index(idx.0).map(|(_, v)| *v)
+    }
+
     pub fn contains(&self, id: EntityId) -> bool {
         self.get(id).is_some()
     }
 
-    pub(crate) fn add(&mut self, loc: EntityLocation) -> EntityId {
-        let Some(k) = self.sm.insert(loc) else {
+    fn add_with(&mut self, f: impl FnOnce(EntityId) -> EntityLocation) -> EntityId {
+        if let Some(k) = self.sm.insert_with(|k| f(EntityId(k))) {
+            EntityId(k)
+        } else {
             panic!("too many entities")
-        };
-
-        EntityId(k)
+        }
     }
 
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
         self.sm.remove(id.0)
+    }
+}
+
+impl Index<EntityId> for Entities {
+    type Output = EntityLocation;
+
+    fn index(&self, index: EntityId) -> &Self::Output {
+        if let Some(loc) = self.sm.get(index.0) {
+            loc
+        } else {
+            panic!("no such entity with ID of {index:?} exists")
+        }
+    }
+}
+
+impl Index<EntityIdx> for Entities {
+    type Output = EntityLocation;
+
+    fn index(&self, index: EntityIdx) -> &Self::Output {
+        if let Some(loc) = self.sm.by_index(index.0).map(|(_, v)| v) {
+            loc
+        } else {
+            panic!("no such entity with index of {index:?} exists")
+        }
     }
 }
 
@@ -81,11 +110,23 @@ impl ReservedEntities {
 
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {
         if let Some(k) = self.iter.next(&entities.sm) {
+            self.count += 1;
             EntityId(k)
         } else {
             panic!("too many entities")
         }
     }
 
-    // TODO: flush
+    pub(crate) fn flush(
+        &mut self,
+        entities: &mut Entities,
+        mut f: impl FnMut(EntityId) -> EntityLocation,
+    ) {
+        for _ in 0..self.count {
+            entities.add_with(&mut f);
+        }
+
+        self.count = 0;
+        self.iter = entities.sm.next_key_iter();
+    }
 }

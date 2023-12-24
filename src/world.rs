@@ -6,10 +6,10 @@ use std::any::{self, TypeId};
 use std::mem;
 use std::ptr::{self, NonNull};
 
-use crate::archetype::Archetypes;
+use crate::archetype::{ArchetypeIdx, Archetypes};
 use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components};
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::entity::{Entities, EntityId, ReservedEntities};
+use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{
     AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
     EventKind, EventPtr, EventQueue, Events, Spawn,
@@ -45,7 +45,7 @@ impl World {
 
         unsafe { self.event_queue.push(event, event_id.index()) };
 
-        self.process_event_queue();
+        self.flush_event_queue();
     }
 
     pub fn spawn(&mut self) -> EntityId {
@@ -82,16 +82,23 @@ impl World {
         let info = SystemInfo::new(SystemInfoInner {
             name: system.name(),
             received_event,
-            priority: config.priority,
-            access: config.access,
+            received_event_access: config.received_event_access,
+            entity_event_expr: config.entity_event_expr,
             sent_global_events: config.sent_global_events,
             sent_entity_events: config.sent_entity_events,
+            event_queue_access: config.event_queue_access,
+            reserve_entity_access: config.reserve_entity_access,
+            component_access: config.component_access,
+            priority: config.priority,
             id: SystemId::NULL, // Filled in later.
             type_id,
             system,
         });
 
         let id = self.systems.add(info);
+        let info = self.systems.get_mut(id).unwrap();
+
+        self.archetypes.register_system(info);
 
         self.send(AddSystem(id));
 
@@ -181,7 +188,14 @@ impl World {
         &self.events
     }
 
-    fn process_event_queue(&mut self) {
+    /// Send all queued events to systems. The event queue will be empty after
+    /// this call.
+    ///
+    /// Note that methods like [`send`] will automatically flush the event
+    /// queue, so this doesn't ususally neeed to be called directly.
+    ///
+    /// [`send`]: Self::send
+    pub fn flush_event_queue(&mut self) {
         handle_events(0, self);
         debug_assert_eq!(self.event_queue.len(), 0);
 
@@ -195,13 +209,36 @@ impl World {
                 let event_kind = event_info.kind();
 
                 let system_list = match event_idx {
-                    EventIdx::Global(global_idx) => unsafe {
-                        world
-                            .systems
-                            .get_global_list(global_idx)
-                            .unwrap_debug_checked()
+                    EventIdx::Global(idx) => unsafe {
+                        world.systems.get_global_list(idx).unwrap_debug_checked()
                     },
-                    EventIdx::Entity(_) => todo!(),
+                    EventIdx::Entity(idx) => {
+                        // Extract target from event.
+
+                        // SAFETY: event is an entity event, so it must have a target offset.
+                        let target_offset =
+                            unsafe { event_info.target_offset().unwrap_debug_checked() };
+
+                        let entity_id =
+                            unsafe { item.event.add(target_offset).cast::<EntityId>().read() };
+
+                        let Some(location) = world.entities.get(entity_id) else {
+                            continue;
+                        };
+
+                        let arch = unsafe {
+                            world
+                                .archetypes
+                                .get(location.archetype)
+                                .unwrap_debug_checked()
+                        };
+
+                        let Some(list) = arch.system_list_for(idx) else {
+                            continue;
+                        };
+
+                        list
+                    }
                 };
 
                 // Put the event pointer on the stack because pointers into the event queue
@@ -241,7 +278,7 @@ impl World {
                     let info = unsafe { SystemInfo::ref_from_ptr(info_ptr) };
 
                     let event_ptr = EventPtr::new(NonNull::from(&mut event.event));
-                    let world_cell = UnsafeWorldCell::new(world);
+                    let world_cell = world.unsafe_cell_mut();
 
                     unsafe { system.run(info, event_ptr, world_cell) };
 
@@ -266,16 +303,49 @@ impl World {
                     EventKind::Insert {
                         component_idx,
                         component_offset,
-                    } => todo!(),
+                    } => {}
                     EventKind::Remove { component_idx } => todo!(),
-                    EventKind::Spawn => todo!(),
-                    EventKind::Despawn => todo!(),
+                    EventKind::Spawn => {
+                        let empty = world.archetypes.empty_mut();
+
+                        // Flush reserved entities and add them to the empty archetype.
+                        world.reserved_entities.flush(&mut world.entities, |id| {
+                            let (row, _) = unsafe { empty.add_entity(id) };
+
+                            EntityLocation {
+                                archetype: ArchetypeIdx::EMPTY,
+                                row,
+                            }
+                        });
+                    }
+                    EventKind::Despawn => {
+                        // TODO: flush reserved entities _after_ removing the
+                        // entity?
+                    }
                 }
             }
 
             debug_assert!(queue_start_idx < world.event_queue.len());
 
             unsafe { world.event_queue.set_len(queue_start_idx) };
+        }
+    }
+
+    /// Returns a new [`UnsafeWorldCell`] with permission to read all data in
+    /// this world.
+    pub fn unsafe_cell(&self) -> UnsafeWorldCell {
+        UnsafeWorldCell {
+            world: (self as *const World).cast_mut(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns a new [`UnsafeWorldCell`] with permission to read and write all
+    /// data in this world.
+    pub fn unsafe_cell_mut(&mut self) -> UnsafeWorldCell {
+        UnsafeWorldCell {
+            world: self,
+            _marker: PhantomData,
         }
     }
 }
@@ -314,13 +384,6 @@ pub struct UnsafeWorldCell<'a> {
 }
 
 impl<'a> UnsafeWorldCell<'a> {
-    pub(crate) fn new(world: &'a mut World) -> Self {
-        Self {
-            world,
-            _marker: PhantomData,
-        }
-    }
-
     /// # Safety
     ///
     /// - Must have permission to access the event queue mutably.

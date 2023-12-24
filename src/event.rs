@@ -8,6 +8,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::{any, fmt, mem};
 use std::collections::btree_map::Entry;
+use std::ops::Index;
 
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
@@ -43,16 +44,9 @@ impl Events {
     }
 
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (EventId, bool) {
-        let target_offset = if let Some(t) = desc.target_offset {
-            assert_ne!(t, usize::MAX, "unsupported target offset");
-            t
-        } else {
-            usize::MAX
-        };
-
         let info = EventInfo {
             id: EventId::NULL,
-            target_offset,
+            target_offset: desc.target_offset.unwrap_or(0),
             name: desc.name,
             kind: desc.kind,
             type_id: desc.type_id,
@@ -98,20 +92,50 @@ impl Events {
     #[inline]
     pub fn by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
         match idx {
-            EventIdx::Global(idx) => {
-                let k = self.global_events.key_at_occupied_index(idx.0)?;
-                Some(unsafe { self.global_events.get(k).unwrap_debug_checked() })
-            }
-            EventIdx::Entity(idx) => {
-                let k = self.entity_events.key_at_occupied_index(idx.0)?;
-                Some(unsafe { self.entity_events.get(k).unwrap_debug_checked() })
-            }
+            EventIdx::Global(idx) => Some(self.global_events.by_index(idx.0)?.1),
+            EventIdx::Entity(idx) => Some(self.entity_events.by_index(idx.0)?.1),
         }
     }
 
     pub fn by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
         let idx = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
+    }
+}
+
+impl Index<EventId> for Events {
+    type Output = EventInfo;
+
+    fn index(&self, index: EventId) -> &Self::Output {
+        if let Some(info) = self.get(index) {
+            info
+        } else {
+            panic!("no such event with ID of {index:?} exists")
+        }
+    }
+}
+
+impl Index<EventIdx> for Events {
+    type Output = EventInfo;
+
+    fn index(&self, index: EventIdx) -> &Self::Output {
+        if let Some(info) = self.by_index(index) {
+            info
+        } else {
+            panic!("no such event with index of {index:?} exists")
+        }
+    }
+}
+
+impl Index<TypeId> for Events {
+    type Output = EventInfo;
+
+    fn index(&self, index: TypeId) -> &Self::Output {
+        if let Some(info) = self.by_type_id(index) {
+            info
+        } else {
+            panic!("no such event with type ID of {index:?} exists")
+        }
     }
 }
 
@@ -232,6 +256,14 @@ impl EventId {
         }
     }
 
+    pub fn is_global_event(&self) -> bool {
+        matches!(self.to_enum(), EventIdEnum::Global(_))
+    }
+
+    pub fn is_entity_event(&self) -> bool {
+        matches!(self.to_enum(), EventIdEnum::Entity(_))
+    }
+
     pub fn index(self) -> EventIdx {
         self.to_enum().index()
     }
@@ -325,7 +357,8 @@ unsafe impl SparseIndex for EntityEventIdx {
 #[derive(Debug)]
 pub struct EventInfo {
     id: EventId,
-    /// [`Event::TARGET_OFFSET`] of this event, or `usize::MAX` if absent.
+    /// [`Event::TARGET_OFFSET`] of this event. Has no meaning if event is not
+    /// an entity event.
     target_offset: usize,
     name: Cow<'static, str>,
     kind: EventKind,
@@ -337,6 +370,10 @@ pub struct EventInfo {
 impl EventInfo {
     pub fn id(&self) -> EventId {
         self.id
+    }
+
+    pub fn target_offset(&self) -> Option<usize> {
+        self.id.is_entity_event().then_some(self.target_offset)
     }
 
     pub fn name(&self) -> &str {
@@ -534,7 +571,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
 
         config.received_event = Some(id);
 
-        if !config.access.received_event.set_if_compatible(Access::Read) {
+        if !config.received_event_access.set_if_compatible(Access::Read) {
             return Err(InitError(
                 format!(
                     "`{}` has conflicting event access with a previous system parameter",
@@ -583,9 +620,25 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
         let _ = AssertEntityEvent::<E>::ASSERTION;
 
-        todo!();
+        let (expr, state) = Q::init(world, config)?;
 
-        Fetcher::init(world, config)
+        let res = FetcherState::new(world.unsafe_cell(), &expr, state);
+
+        config.entity_event_expr = expr.expr.clone();
+
+        if let Ok(new_component_access) = expr.and(&config.component_access) {
+            config.component_access = new_component_access;
+        } else {
+            return Err(InitError(
+                format!(
+                    "`{}` has incompatible component access with previous queries in this system",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
+        }
+
+        Ok(res)
     }
 
     unsafe fn get_param<'a>(
@@ -597,10 +650,8 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         let event = event_ptr.as_event::<E>();
         let target = get_target(event).unwrap();
 
-        let mut fetcher = Fetcher::new(state, world);
-
         // SAFETY: The target entity is guaranteed to match the query.
-        let query = fetcher.temp(target).unwrap_debug_checked();
+        let query = state.get_mut(world, target).unwrap_debug_checked();
 
         Receiver { event, query }
     }
@@ -608,10 +659,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
     unsafe fn refresh_archetype(
         state: &mut Self::State,
         reason: crate::system::RefreshArchetypeReason,
-        idx: crate::archetype::ArchetypeIdx,
         arch: &crate::archetype::Archetype,
     ) -> bool {
-        Fetcher::refresh_archetype(state, reason, idx, arch)
+        Fetcher::refresh_archetype(state, reason, arch)
     }
 }
 
@@ -652,8 +702,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         config.received_event = Some(id);
 
         if !config
-            .access
-            .received_event
+            .received_event_access
             .set_if_compatible(Access::ReadWrite)
         {
             return Err(InitError(
@@ -713,10 +762,8 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         let event = event_ptr.as_event_mut::<E>();
         let target = get_target(&*event).unwrap();
 
-        let mut fetcher = Fetcher::new(state, world);
-
         // SAFETY: The target entity is guaranteed to match the query.
-        let query = fetcher.temp(target).unwrap_debug_checked();
+        let query = state.get_mut(world, target).unwrap_debug_checked();
 
         ReceiverMut { event, query }
     }
@@ -724,10 +771,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     unsafe fn refresh_archetype(
         state: &mut Self::State,
         reason: crate::system::RefreshArchetypeReason,
-        idx: crate::archetype::ArchetypeIdx,
         arch: &crate::archetype::Archetype,
     ) -> bool {
-        Fetcher::refresh_archetype(state, reason, idx, arch)
+        Fetcher::refresh_archetype(state, reason, arch)
     }
 }
 
@@ -800,8 +846,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
         if !config
-            .access
-            .event_queue
+            .event_queue_access
             .set_if_compatible(Access::ReadWrite)
         {
             return Err(InitError(
@@ -815,8 +860,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
         }
 
         if !config
-            .access
-            .reserve_entity
+            .reserve_entity_access
             .set_if_compatible(Access::ReadWrite)
         {
             return Err(InitError(
@@ -992,7 +1036,7 @@ unsafe impl<C: Component> Event for Remove<C> {
 pub struct Spawn(pub EntityId);
 
 unsafe impl Event for Spawn {
-    const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
+    const TARGET_OFFSET: Option<usize> = None;
 
     fn init(world: &mut World) -> EventKind {
         let _ = world;

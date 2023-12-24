@@ -1,6 +1,8 @@
 use core::fmt;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
+use std::cmp::Ordering;
+use std::ops::{BitOr, BitOrAssign};
 
 use crate::debug_checked::GetDebugChecked;
 use crate::sparse::SparseIndex;
@@ -60,16 +62,6 @@ impl<T> BitSet<T> {
             .iter()
             .zip(other.blocks.iter())
             .all(|(a, b)| a & b == 0)
-    }
-
-    pub fn union_assign(&mut self, other: &Self) {
-        if self.blocks.len() < other.blocks.len() {
-            self.blocks.resize(other.blocks.len(), 0);
-        }
-
-        for (a, b) in self.blocks.iter_mut().zip(other.blocks.iter()) {
-            *a |= *b;
-        }
     }
 
     #[must_use]
@@ -154,6 +146,27 @@ impl<T: SparseIndex> BitSet<T> {
     }
 }
 
+impl<T> BitOrAssign<&Self> for BitSet<T> {
+    fn bitor_assign(&mut self, other: &Self) {
+        if self.blocks.len() < other.blocks.len() {
+            self.blocks.resize(other.blocks.len(), 0);
+        }
+
+        for (a, b) in self.blocks.iter_mut().zip(other.blocks.iter()) {
+            *a |= *b;
+        }
+    }
+}
+
+impl<T> BitOr<&Self> for BitSet<T> {
+    type Output = Self;
+
+    fn bitor(mut self, other: &Self) -> Self::Output {
+        self |= other;
+        self
+    }
+}
+
 impl<T> Default for BitSet<T> {
     fn default() -> Self {
         Self {
@@ -223,6 +236,48 @@ where
     }
 }
 
+impl<T: SparseIndex> Ord for BitSet<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let mut left = self.blocks.iter();
+        let mut right = other.blocks.iter();
+
+        loop {
+            match (left.next(), right.next()) {
+                (None, None) => break Ordering::Equal,
+                (None, Some(&r)) => {
+                    if r != 0 {
+                        break Ordering::Greater;
+                    }
+                }
+                (Some(&l), None) => {
+                    if l != 0 {
+                        break Ordering::Less;
+                    }
+                }
+                (Some(l), Some(r)) => match l.cmp(r) {
+                    Ordering::Less => break Ordering::Less,
+                    Ordering::Equal => {}
+                    Ordering::Greater => break Ordering::Greater,
+                },
+            }
+        }
+    }
+}
+
+impl<T: SparseIndex> PartialOrd for BitSet<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: SparseIndex> PartialEq for BitSet<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<T: SparseIndex> Eq for BitSet<T> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +309,27 @@ mod tests {
         indices.sort_unstable();
 
         assert_eq!(indices.as_slice(), collected);
+    }
+
+    #[test]
+    fn ordering() {
+        let left = BitSet::from_iter([0u32, 1, 2, 3, 4, 0]);
+        let right = BitSet::from_iter([0u32, 1, 2, 3, 4, 0]);
+
+        assert_eq!(left, right);
+
+        let mut left = BitSet::from_iter([0u32, 1, 2]);
+        left.insert(500);
+        left.remove(500);
+        let right = BitSet::from_iter([0u32, 1, 2]);
+
+        assert_eq!(left, right);
+        left.shrink_to_fit();
+        assert_eq!(left, right);
+
+        let left = BitSet::from_iter([0u32, 1, 2]);
+        let right = BitSet::from_iter([0u32, 1, 2, 3]);
+
+        assert_ne!(left < right, left > right);
     }
 }

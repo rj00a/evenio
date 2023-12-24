@@ -9,6 +9,7 @@ pub mod access;
 pub mod archetype;
 pub mod bit_set;
 mod blob_vec;
+pub mod bool_expr;
 pub mod component;
 mod debug_checked;
 pub mod entity;
@@ -33,13 +34,17 @@ pub mod __private {
 pub mod prelude {
     pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;
-    pub use crate::event::{Event, EventId, EventMut, Receiver, Sender};
+    pub use crate::event::{
+        AddComponent, AddEvent, AddSystem, Despawn, Event, EventId, EventMut, Insert, Receiver,
+        Remove, Sender, Spawn,
+    };
     pub use crate::fetch::{FetchError, Fetcher};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::system::{IntoSystem, SystemId};
     pub use crate::world::World;
 }
 
-const _: () = if std::mem::size_of::<usize>() < std::mem::size_of::<u32>() {
-    panic!("unsupported target")
-};
+const _: () = assert!(
+    std::mem::size_of::<usize>() >= std::mem::size_of::<u32>(),
+    "unsupported target"
+);

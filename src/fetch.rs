@@ -2,22 +2,102 @@ use core::fmt;
 use std::marker::PhantomData;
 use std::{any, mem};
 
+use crate::access::ComponentAccessExpr;
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
+use crate::debug_checked::assume_debug_checked;
 use crate::entity::EntityId;
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
 use crate::system::{Config, InitError, RefreshArchetypeReason, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
-pub struct Fetcher<'a, Q: Query> {
-    state: &'a mut FetcherState<Q>,
-    world: UnsafeWorldCell<'a>,
-}
-
 pub struct FetcherState<Q: Query> {
     map: SparseMap<ArchetypeIdx, Q::Fetch>,
     state: Q::State,
+}
+
+impl<Q: Query> FetcherState<Q> {
+    pub(crate) fn new(
+        world: UnsafeWorldCell,
+        expr: &ComponentAccessExpr,
+        mut state: Q::State,
+    ) -> Self {
+        let mut map = SparseMap::new();
+
+        // TODO: use an index to make this faster?
+        for arch in world.archetypes().iter() {
+            if let Some(columns) = Q::init_fetch(arch, &mut state) {
+                map.insert(arch.index(), columns);
+            }
+        }
+
+        Self { map, state }
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get(
+        &self,
+        world: UnsafeWorldCell,
+        entity: EntityId,
+    ) -> Result<Q::Item<'_>, FetchError>
+    where
+        Q: ReadOnlyQuery,
+    {
+        let entities = world.entities();
+
+        let Some(loc) = entities.get(entity) else {
+            return Err(FetchError::NoSuchEntity(entity));
+        };
+
+        // Eliminate a panicking branch.
+        assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
+
+        let Some(fetch) = self.map.get(loc.archetype) else {
+            return Err(FetchError::QueryDoesNotMatch(entity));
+        };
+
+        Ok(Q::fetch(fetch, loc.row))
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_mut(
+        &mut self,
+        world: UnsafeWorldCell,
+        entity: EntityId,
+    ) -> Result<Q::Item<'_>, FetchError> {
+        let entities = world.entities();
+
+        let Some(loc) = entities.get(entity) else {
+            return Err(FetchError::NoSuchEntity(entity));
+        };
+
+        // Eliminate a panicking branch.
+        assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
+
+        // TODO: Resize the sparse array so that all valid archetype indices are in
+        // bounds, and then `assume` it. That would eliminate a bounds check.
+
+        let Some(fetch) = self.map.get_mut(loc.archetype) else {
+            return Err(FetchError::QueryDoesNotMatch(entity));
+        };
+
+        Ok(Q::fetch_mut(fetch, loc.row))
+    }
+
+    pub(crate) unsafe fn refresh_archetype(
+        &mut self,
+        reason: RefreshArchetypeReason,
+        arch: &Archetype,
+    ) {
+        todo!()
+    }
+
+    // TODO: get_many_mut
+}
+
+pub struct Fetcher<'a, Q: Query> {
+    state: &'a mut FetcherState<Q>,
+    world: UnsafeWorldCell<'a>,
 }
 
 impl<'a, Q: Query> Fetcher<'a, Q> {
@@ -25,32 +105,29 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
         Self { state, world }
     }
 
-    pub fn temp(self, entity: EntityId) -> Result<Q::Item<'a>, FetchError> {
-        todo!()
+    #[inline]
+    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, FetchError>
+    where
+        Q: ReadOnlyQuery,
+    {
+        unsafe { self.state.get(self.world, entity) }
     }
 
     #[inline]
     pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
-        let entities = self.world.entities();
-
-        let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
-        };
-
-        // Eliminate a panicking branch.
-        unsafe { assume_debug_checked(loc.archetype != ArchetypeIdx::NULL) };
-
-        // TODO: Resize the sparse array so that all valid archetype indices are in
-        // bounds, and then `assume` it. That would eliminate a bounds check.
-
-        let Some(fetch) = self.state.map.get_mut(loc.archetype) else {
-            return Err(FetchError::QueryDoesNotMatch(entity));
-        };
-
-        Ok(unsafe { Q::fetch_mut(fetch, loc.row) })
+        unsafe { self.state.get_mut(self.world, entity) }
     }
 
-    // TODO: get_many_mut
+    pub fn iter(&self) -> Iter<Q>
+    where
+        Q: ReadOnlyQuery,
+    {
+        Iter {
+            fetches: &self.state.map.values(),
+            row: ArchetypeRow(0),
+            archetypes: self.world.archetypes(),
+        }
+    }
 
     pub fn iter_mut(&mut self) -> IterMut<Q> {
         IterMut {
@@ -58,34 +135,6 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
             row: ArchetypeRow(0),
             archetypes: self.world.archetypes(),
             _marker: PhantomData,
-        }
-    }
-}
-
-impl<Q: ReadOnlyQuery> Fetcher<'_, Q> {
-    #[inline]
-    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
-        let entities = self.world.entities();
-
-        let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
-        };
-
-        // Eliminate a panicking branch.
-        unsafe { assume_debug_checked(loc.archetype != ArchetypeIdx::NULL) };
-
-        let Some(fetch) = self.state.map.get(loc.archetype) else {
-            return Err(FetchError::QueryDoesNotMatch(entity));
-        };
-
-        Ok(unsafe { Q::fetch(fetch, loc.row) })
-    }
-
-    pub fn iter(&self) -> Iter<Q> {
-        Iter {
-            fetches: &self.state.map.values(),
-            row: ArchetypeRow(0),
-            archetypes: self.world.archetypes(),
         }
     }
 }
@@ -123,35 +172,25 @@ where
     type Item<'a> = Fetcher<'a, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        let (expr, mut state) = Q::init(world, config);
+        let (expr, mut state) = Q::init(world, config)?;
 
-        if !config.access.components.is_compatible(&expr) {
-            return Err(InitError(
-                format!(
-                    "`{}` has incompatible component access with other queries in this system",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        }
+        let res = FetcherState::new(world.unsafe_cell_mut(), &expr, state);
 
-        config.access.components.and(&expr);
-
-        let sparse_upper_bound = world.archetypes().max_archetype_index().0 + 1;
-
-        let map = SparseMap::new();
-
-        /*
-        for (id, arch) in world.archetypes().iter() {
-            if let Some(columns) = Q::init_fetch(arch, &mut state) {
-                let idx = dense.len() as u32;
-                dense.push(Dense { fetch: columns, id });
-                *unsafe { sparse.get_debug_checked_mut(id.0 as usize) } = idx;
+        match expr.and(&config.component_access) {
+            Ok(new_component_access) => config.component_access = new_component_access,
+            Err(_) => {
+                return Err(InitError(
+                    format!(
+                        "`{}` has incompatible component access with previous queries in this \
+                         system",
+                        any::type_name::<Self>()
+                    )
+                    .into(),
+                ))
             }
         }
-        */
 
-        Ok(FetcherState { map, state })
+        Ok(res)
     }
 
     unsafe fn get_param<'a>(
@@ -166,7 +205,6 @@ where
     unsafe fn refresh_archetype(
         state: &mut Self::State,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
         todo!()

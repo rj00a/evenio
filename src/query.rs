@@ -1,14 +1,15 @@
 use core::fmt;
+use std::any;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use evenio_macros::all_tuples;
 
-use crate::access::{Access, AccessExpr};
+use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::component::{Component, ComponentId, ComponentIdx};
+use crate::component::{Component, ComponentId};
 use crate::entity::EntityId;
-use crate::system::Config;
+use crate::system::{Config, InitError};
 use crate::world::World;
 pub unsafe trait Query {
     /// The item returned by this query. This is usually same type as `Self`,
@@ -19,7 +20,10 @@ pub unsafe trait Query {
     /// Cached data for fetch initialization. This is stored in [`QueryState`].
     type State: Send + Sync + fmt::Debug + 'static;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError>;
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch>;
 
@@ -37,23 +41,20 @@ unsafe impl<C: Component> Query for &'_ C {
 
     type State = ComponentId;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let id = world.add_component::<C>();
-        let expr = AccessExpr::with(id.index(), Access::Read);
+        let expr = ComponentAccessExpr::with(id.index(), Access::Read);
 
-        (expr, id)
+        Ok((expr, id))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        todo!()
-
-        /*
-        let cols = archetype.columns();
-
-        cols.binary_search_by_key(state, |c| c.component_id())
-            .ok()
-            .map(|idx| ColumnPtr(cols[idx].data().cast()))
-        */
+        archetype
+            .column_of(state.index())
+            .map(|c| ColumnPtr(c.data().cast()))
     }
 
     unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
@@ -74,7 +75,10 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     type State = ComponentId;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         struct AssertMutable<C>(PhantomData<C>);
 
         impl<C: Component> AssertMutable<C> {
@@ -88,9 +92,9 @@ unsafe impl<C: Component> Query for &'_ mut C {
         let _ = AssertMutable::<C>::ASSERTION;
 
         let id = world.add_component::<C>();
-        let expr = AccessExpr::with(id.index(), Access::ReadWrite);
+        let expr = ComponentAccessExpr::with(id.index(), Access::ReadWrite);
 
-        (expr, id)
+        Ok((expr, id))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -111,24 +115,27 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
-            fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
+            fn init(world: &mut World, config: &mut Config) -> Result<(ComponentAccessExpr, Self::State), InitError> {
                 #![allow(unused_variables)]
 
                 #[allow(unused_mut)]
-                let mut res = AccessExpr::one();
+                let mut res = ComponentAccessExpr::new();
 
                 $(
-                    let (expr, $q) = $Q::init(world, config);
-                    if !res.is_compatible(&expr) {
-                        panic!(
-                            "tuple element `{}` is incompatible with previous elements in the tuple",
-                            std::any::type_name::<$Q>()
-                        );
-                    }
-                    res.and(&expr);
+                    let (expr, $q) = $Q::init(world, config)?;
+
+                    let Ok(expr) = res.and(&expr) else {
+                        return Err(InitError(format!(
+                            "conflicting access in tuple `{}`: tuple element `{}` conflicts with previous elements",
+                            any::type_name::<Self>(),
+                            any::type_name::<$Q>(),
+                        ).into()));
+                    };
+
+                    res = expr;
                 )*
 
-                (res, ($($q,)*))
+                Ok((res, ($($q,)*)))
             }
 
             fn init_fetch(archetype: &Archetype, ($($q,)*): &mut Self::State) -> Option<Self::Fetch> {
@@ -170,12 +177,15 @@ unsafe impl<Q: Query> Query for Option<Q> {
 
     type State = Q::State;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (mut expr, state) = Q::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (mut expr, state) = Q::init(world, config)?;
 
-        expr.or(&AccessExpr::one());
+        expr = expr.or(&ComponentAccessExpr::new()).unwrap();
 
-        (expr, state)
+        Ok((expr, state))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -241,19 +251,25 @@ where
 
     type State = (L::State, R::State);
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (mut left_access, left_state) = L::init(world, config);
-        let (right_access, right_state) = R::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (left_expr, left_state) = L::init(world, config)?;
+        let (right_expr, right_state) = R::init(world, config)?;
 
-        // Need to check for compatibility because L and R can be active at the same
-        // time in the `Or::Both` case.
-        if !left_access.is_compatible(&right_access) {
-            todo!("nice error message");
-        }
+        let Ok(expr) = left_expr.or(&right_expr) else {
+            return Err(InitError(
+                format!(
+                    "conflicting query in `{}` (both operands of an OR query may be active at the \
+                     same time)",
+                    any::type_name::<Self>()
+                )
+                .into(),
+            ));
+        };
 
-        left_access.or(&right_access);
-
-        (left_access, (left_state, right_state))
+        Ok((expr, (left_state, right_state)))
     }
 
     fn init_fetch(
@@ -334,15 +350,14 @@ where
 
     type State = (L::State, R::State);
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (mut left_access, left_state) = L::init(world, config);
-        let (right_access, right_state) = R::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (mut left_expr, left_state) = L::init(world, config)?;
+        let (right_expr, right_state) = R::init(world, config)?;
 
-        // No need to check for compatilibity because only one of L and R is active at
-        // the same time.
-        left_access.xor(&right_access);
-
-        (left_access, (left_state, right_state))
+        Ok((left_expr.xor(&right_expr), (left_state, right_state)))
     }
 
     fn init_fetch(
@@ -414,12 +429,13 @@ unsafe impl<Q: Query> Query for Not<Q> {
 
     type State = Q::State;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (mut expr, state) = Q::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (expr, state) = Q::init(world, config)?;
 
-        expr.not();
-
-        (expr, state)
+        Ok((expr.not(), state))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -475,12 +491,15 @@ unsafe impl<Q: Query> Query for With<Q> {
 
     type State = Q::State;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (mut expr, state) = Q::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (mut expr, state) = Q::init(world, config)?;
 
-        expr.clear_access();
+        expr.access.clear();
 
-        (expr, state)
+        Ok((expr, state))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -549,10 +568,13 @@ unsafe impl<Q: Query> Query for Has<Q> {
 
     type State = Q::State;
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        let (_, state) = Q::init(world, config);
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        let (_, state) = Q::init(world, config)?;
 
-        (AccessExpr::one(), state)
+        Ok((ComponentAccessExpr::new(), state))
     }
 
     fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
@@ -577,8 +599,11 @@ unsafe impl Query for EntityId {
 
     type State = ();
 
-    fn init(world: &mut World, config: &mut Config) -> (AccessExpr<ComponentIdx>, Self::State) {
-        (AccessExpr::one(), ())
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        Ok((ComponentAccessExpr::new(), ()))
     }
 
     fn init_fetch(archetype: &Archetype, (): &mut Self::State) -> Option<Self::Fetch> {

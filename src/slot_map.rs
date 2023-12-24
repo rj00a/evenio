@@ -118,6 +118,21 @@ impl<T> SlotMap<T> {
         Some(unsafe { &mut slot.union.value })
     }
 
+    pub(crate) fn by_index(&self, index: u32) -> Option<(Key, &T)> {
+        let slot = self.slots.get(index as usize)?;
+
+        if slot.is_vacant() {
+            return None;
+        }
+
+        let key = unsafe { Key::new_unchecked(index, slot.generation) };
+
+        let value = unsafe { &slot.union.value };
+
+        Some((key, value))
+    }
+
+    /*
     pub(crate) fn key_at_occupied_index(&self, idx: u32) -> Option<Key> {
         let slot = self.slots.get(idx as usize)?;
 
@@ -126,7 +141,7 @@ impl<T> SlotMap<T> {
         }
 
         Some(unsafe { Key::new_unchecked(idx, slot.generation) })
-    }
+    }*/
 
     pub(crate) fn next_key_iter(&self) -> NextKeyIter<T> {
         NextKeyIter {
@@ -436,18 +451,9 @@ mod tests {
 
         let mut iter = sm.next_key_iter();
 
-        assert_eq!(
-            iter.next(&sm),
-            Some(Key::new(1, NonZeroU32::new(3).unwrap()).unwrap())
-        );
-        assert_eq!(
-            iter.next(&sm),
-            Some(Key::new(3, NonZeroU32::new(1).unwrap()).unwrap())
-        );
-        assert_eq!(
-            iter.next(&sm),
-            Some(Key::new(4, NonZeroU32::new(1).unwrap()).unwrap())
-        );
+        assert_eq!(iter.next(&sm), sm.insert(0),);
+        assert_eq!(iter.next(&sm), sm.insert(0));
+        assert_eq!(iter.next(&sm), sm.insert(0));
     }
 
     #[test]
@@ -459,13 +465,7 @@ mod tests {
 
         let mut iter = sm.next_key_iter();
 
-        assert_eq!(
-            iter.next(&sm),
-            Some(Key::new(2, NonZeroU32::new(1).unwrap()).unwrap())
-        );
-        assert_eq!(
-            iter.next(&sm),
-            Some(Key::new(3, NonZeroU32::new(1).unwrap()).unwrap())
-        );
+        assert_eq!(iter.next(&sm), sm.insert(0),);
+        assert_eq!(iter.next(&sm), sm.insert(0));
     }
 }

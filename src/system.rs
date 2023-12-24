@@ -5,12 +5,15 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use std::any;
 use std::borrow::Cow;
+use std::ops::Index;
 
 use evenio_macros::all_tuples;
 
-use crate::access::SystemAccess;
-use crate::archetype::{Archetype, ArchetypeIdx};
+use crate::access::{Access, ComponentAccessExpr};
+use crate::archetype::Archetype;
 use crate::bit_set::BitSet;
+use crate::bool_expr::BoolExpr;
+use crate::component::ComponentIdx;
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventIdx, EventPtr, GlobalEventIdx};
 use crate::exclusive::Exclusive;
@@ -88,10 +91,54 @@ impl Systems {
         self.sm.get(id.0)
     }
 
+    pub(crate) fn get_mut(&mut self, id: SystemId) -> Option<&mut SystemInfo> {
+        self.sm.get_mut(id.0)
+    }
+
+    pub fn by_index(&self, idx: SystemIdx) -> Option<&SystemInfo> {
+        self.sm.by_index(idx.0).map(|(_, v)| v)
+    }
+
     pub fn by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
         self.by_type_id
             .get(&id)
             .map(|p| unsafe { SystemInfo::ref_from_ptr(p) })
+    }
+}
+
+impl Index<SystemId> for Systems {
+    type Output = SystemInfo;
+
+    fn index(&self, index: SystemId) -> &Self::Output {
+        if let Some(info) = self.get(index) {
+            info
+        } else {
+            panic!("no such system with ID of {index:?} exists")
+        }
+    }
+}
+
+impl Index<SystemIdx> for Systems {
+    type Output = SystemInfo;
+
+    fn index(&self, index: SystemIdx) -> &Self::Output {
+        if let Some(info) = self.by_index(index) {
+            info
+        } else {
+            panic!("no such system with index of {index:?} exists")
+        }
+    }
+}
+
+impl Index<TypeId> for Systems {
+    type Output = SystemInfo;
+
+    fn index(&self, index: TypeId) -> &Self::Output {
+        if let Some(info) = self.by_type_id(index) {
+            info
+        } else {
+            panic!("no such system with type ID of {index:?} exists")
+        }
     }
 }
 
@@ -114,14 +161,17 @@ pub struct SystemInfo {
 pub(crate) type SystemInfoPtr = NonNull<SystemInfoInner>;
 
 // This is generic over `S` so that we can do an unsizing coercion.
-#[derive(Debug)]
 pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) name: Cow<'static, str>,
     pub(crate) received_event: EventId,
+    pub(crate) received_event_access: Access,
+    pub(crate) entity_event_expr: BoolExpr<ComponentIdx>,
     pub(crate) sent_global_events: BitSet<GlobalEventIdx>,
     pub(crate) sent_entity_events: BitSet<EntityEventIdx>,
+    pub(crate) event_queue_access: Access,
+    pub(crate) reserve_entity_access: Access,
+    pub(crate) component_access: ComponentAccessExpr,
     pub(crate) priority: Priority,
-    pub(crate) access: SystemAccess,
     pub(crate) id: SystemId,
     pub(crate) type_id: Option<TypeId>,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
@@ -146,6 +196,17 @@ impl SystemInfo {
         unsafe { (*self.inner.as_ptr()).received_event }
     }
 
+    pub fn received_event_access(&self) -> Access {
+        unsafe { (*self.inner.as_ptr()).received_event_access }
+    }
+
+    pub fn entity_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
+        match self.received_event().to_enum() {
+            EventIdEnum::Global(_) => None,
+            EventIdEnum::Entity(_) => Some(unsafe { &(*self.inner.as_ptr()).entity_event_expr }),
+        }
+    }
+
     pub fn sent_global_events(&self) -> &BitSet<GlobalEventIdx> {
         unsafe { &(*self.inner.as_ptr()).sent_global_events }
     }
@@ -154,13 +215,21 @@ impl SystemInfo {
         unsafe { &(*self.inner.as_ptr()).sent_entity_events }
     }
 
+    pub fn event_queue_access(&self) -> Access {
+        unsafe { (*self.inner.as_ptr()).event_queue_access }
+    }
+
+    pub fn reserve_entity_access(&self) -> Access {
+        unsafe { (*self.inner.as_ptr()).reserve_entity_access }
+    }
+
+    pub fn component_access(&self) -> &ComponentAccessExpr {
+        unsafe { &(*self.inner.as_ptr()).component_access }
+    }
+
     pub fn priority(&self) -> Priority {
         // SAFETY: Type ensures inner pointer is valid.
         unsafe { (*self.inner.as_ptr()).priority }
-    }
-
-    pub fn access(&self) -> &SystemAccess {
-        unsafe { &(*self.inner.as_ptr()).access }
     }
 
     pub fn id(&self) -> SystemId {
@@ -184,6 +253,10 @@ impl SystemInfo {
         // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
         &*(this as *const _ as *const Self)
     }
+
+    pub(crate) fn system_mut(&mut self) -> &mut dyn System {
+        unsafe { &mut (*self.inner.as_ptr()).system }
+    }
 }
 
 unsafe impl Send for SystemInfo {}
@@ -194,12 +267,16 @@ impl fmt::Debug for SystemInfo {
         f.debug_struct("SystemInfo")
             .field("name", &self.name())
             .field("received_event", &self.received_event())
+            .field("received_event_access", &self.received_event_access())
+            .field("entity_event_expr", &self.entity_event_expr())
             .field("sent_global_events", &self.sent_global_events())
             .field("sent_entity_events", &self.sent_entity_events())
+            .field("event_queue_access", &self.event_queue_access())
+            .field("reserve_entity_access", &self.reserve_entity_access())
             .field("priority", &self.priority())
-            .field("access", &self.access())
             .field("id", &self.id())
             .field("type_id", &self.type_id())
+            // Don't access the `system` field.
             .finish_non_exhaustive()
     }
 }
@@ -220,7 +297,11 @@ pub(crate) struct SystemList {
 }
 
 impl SystemList {
-    fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
+    pub(crate) fn new() -> SystemList {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
         assert!(self.entries.len() < u32::MAX as usize);
 
         match priority {
@@ -239,7 +320,7 @@ impl SystemList {
         }
     }
 
-    fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
+    pub fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
         if let Some(idx) = self.entries.iter().position(|&p| p == ptr) {
             self.entries.remove(idx);
 
@@ -378,10 +459,9 @@ unsafe impl<S: System> System for NoTypeId<S> {
     unsafe fn refresh_archetype(
         &mut self,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
-        self.0.refresh_archetype(reason, idx, arch)
+        self.0.refresh_archetype(reason, arch)
     }
 }
 
@@ -410,10 +490,9 @@ unsafe impl<S: System> System for Before<S> {
     unsafe fn refresh_archetype(
         &mut self,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
-        self.0.refresh_archetype(reason, idx, arch)
+        self.0.refresh_archetype(reason, arch)
     }
 }
 
@@ -442,10 +521,9 @@ unsafe impl<S: System> System for After<S> {
     unsafe fn refresh_archetype(
         &mut self,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
-        self.0.refresh_archetype(reason, idx, arch)
+        self.0.refresh_archetype(reason, arch)
     }
 }
 
@@ -466,7 +544,6 @@ pub unsafe trait System: Send + Sync + 'static {
     unsafe fn refresh_archetype(
         &mut self,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool;
 }
@@ -491,7 +568,7 @@ pub struct InitError(pub Box<str>);
 
 impl fmt::Display for InitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to initialize system: {}", &self.0)
+        write!(f, "{}", &self.0)
     }
 }
 
@@ -507,17 +584,42 @@ pub enum Priority {
 }
 
 /// Configuration for a system, accessible during system initialization.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Config {
-    pub access: SystemAccess,
     pub priority: Priority,
     /// The event type to be received by the system. Is `None` when the value
     /// has not yet been assigned.
     pub received_event: Option<EventId>,
+    pub received_event_access: Access,
+    pub entity_event_expr: BoolExpr<ComponentIdx>,
     pub sent_global_events: BitSet<GlobalEventIdx>,
     pub sent_entity_events: BitSet<EntityEventIdx>,
-    pub is_parallel: bool,
+    pub event_queue_access: Access,
+    pub reserve_entity_access: Access,
+    pub component_access: ComponentAccessExpr,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Self {
+            priority: Default::default(),
+            received_event: Default::default(),
+            received_event_access: Default::default(),
+            entity_event_expr: BoolExpr::one(),
+            sent_global_events: Default::default(),
+            sent_entity_events: Default::default(),
+            event_queue_access: Default::default(),
+            reserve_entity_access: Default::default(),
+            component_access: Default::default(),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub trait SystemParam {
@@ -536,10 +638,9 @@ pub trait SystemParam {
     unsafe fn refresh_archetype(
         state: &mut Self::State,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
-        let _ = (state, reason, idx, arch);
+        let _ = (state, reason, arch);
         false
     }
 }
@@ -577,7 +678,6 @@ macro_rules! impl_system_param_tuple {
             unsafe fn refresh_archetype(
                 ($($s,)*): &mut Self::State,
                 reason: RefreshArchetypeReason,
-                idx: ArchetypeIdx,
                 arch: &Archetype
             ) -> bool
             {
@@ -585,7 +685,7 @@ macro_rules! impl_system_param_tuple {
                 let mut res = false;
 
                 $(
-                    if $P::refresh_archetype($s, reason, idx, arch) {
+                    if $P::refresh_archetype($s, reason, arch) {
                         res = true;
                     }
                 )*
@@ -663,7 +763,6 @@ where
     unsafe fn refresh_archetype(
         &mut self,
         reason: RefreshArchetypeReason,
-        idx: ArchetypeIdx,
         arch: &Archetype,
     ) -> bool {
         let state = unsafe {
@@ -672,7 +771,7 @@ where
                 .expect_debug_checked("system must be initialized")
         };
 
-        F::Param::refresh_archetype(state, reason, idx, arch)
+        F::Param::refresh_archetype(state, reason, arch)
     }
 }
 
