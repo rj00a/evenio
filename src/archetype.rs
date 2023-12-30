@@ -1,14 +1,17 @@
 use alloc::collections::BTreeMap;
 use core::ptr::NonNull;
+use std::cmp::Ordering;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeSet;
+use std::ptr;
 
 use slab::Slab;
 
+use crate::access::Access;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
-use crate::entity::EntityId;
+use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EntityEventIdx, EventIdx};
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
@@ -18,7 +21,6 @@ use crate::system::{RefreshArchetypeReason, SystemInfo, SystemInfoPtr, SystemLis
 pub struct Archetypes {
     archetypes: Slab<Archetype>,
     by_components: BTreeMap<Box<[ComponentIdx]>, ArchetypeIdx>,
-    // indices: BinaryHeap<ArchetypeIdx>,
 }
 
 impl Archetypes {
@@ -44,7 +46,7 @@ impl Archetypes {
         self.archetypes.get(idx.0 as usize)
     }
 
-    pub fn by_components(&self, components: &[ComponentIdx]) -> Option<&Archetype> {
+    pub fn get_by_components(&self, components: &[ComponentIdx]) -> Option<&Archetype> {
         let idx = *self.by_components.get(components)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
@@ -77,30 +79,30 @@ impl Archetypes {
     /// Returns the destination archetype.
     pub(crate) unsafe fn traverse_insert(
         &mut self,
-        current_arch_idx: ArchetypeIdx,
+        src_arch_idx: ArchetypeIdx,
         component_idx: ComponentIdx,
         components: &mut Components,
         systems: &mut Systems,
     ) -> ArchetypeIdx {
         let next_arch_idx = self.archetypes.vacant_key();
 
-        let current_arch = unsafe {
+        let src_arch = unsafe {
             self.archetypes
-                .get_debug_checked_mut(current_arch_idx.0 as usize)
+                .get_debug_checked_mut(src_arch_idx.0 as usize)
         };
 
-        match current_arch.insert_components.entry(component_idx) {
+        match src_arch.insert_components.entry(component_idx) {
             Entry::Vacant(vacant_insert_components) => {
-                let Err(idx) = current_arch
+                let Err(idx) = src_arch
                     .columns
                     .binary_search_by_key(&component_idx, |c| c.component_idx)
                 else {
-                    // If this archetype already has the component, then stop here.
-                    return current_arch_idx;
+                    // Archetype already has this component.
+                    return src_arch_idx;
                 };
 
-                let mut new_components = Vec::with_capacity(current_arch.columns.len() + 1);
-                new_components.extend(current_arch.columns.iter().map(|c| c.component_idx));
+                let mut new_components = Vec::with_capacity(src_arch.columns.len() + 1);
+                new_components.extend(src_arch.columns.iter().map(|c| c.component_idx));
                 new_components.insert(idx, component_idx);
 
                 match self.by_components.entry(new_components.into_boxed_slice()) {
@@ -119,31 +121,11 @@ impl Archetypes {
 
                         new_arch
                             .remove_components
-                            .insert(component_idx, current_arch_idx);
+                            .insert(component_idx, src_arch_idx);
 
-                        /*
-                        for &component_idx in vacant_by_components.key().iter() {
-                            let info =
-                                unsafe { components.by_index(component_idx).unwrap_debug_checked() };
-
-                            assert!(info.member_of.insert(arch_id));
+                        for info in systems.iter_mut() {
+                            new_arch.register_system(info);
                         }
-
-                        for ptr in systems.iter() {
-                            let info = unsafe { &mut (*ptr.as_ptr()) };
-
-                            let interested = unsafe {
-                                info.system.refresh_archetype(
-                                    RefreshArchetypeReason::New,
-                                    arch_id,
-                                    &new_arch,
-                                )
-                            };
-
-                            if interested {
-                                new_arch.subscribe(ptr);
-                            }
-                        }*/
 
                         vacant_by_components.insert(arch_id);
 
@@ -158,6 +140,222 @@ impl Archetypes {
             }
             Entry::Occupied(o) => *o.get(),
         }
+    }
+
+    /// Traverses one edge of the archetype graph in the remove direction.
+    /// Returns the destination archetype.
+    pub(crate) unsafe fn traverse_remove(
+        &mut self,
+        src_arch_idx: ArchetypeIdx,
+        component_idx: ComponentIdx,
+        components: &mut Components,
+        systems: &mut Systems,
+    ) -> ArchetypeIdx {
+        let next_arch_idx = self.archetypes.vacant_key();
+
+        let src_arch = unsafe {
+            self.archetypes
+                .get_debug_checked_mut(src_arch_idx.0 as usize)
+        };
+
+        match src_arch.remove_components.entry(component_idx) {
+            Entry::Vacant(vacant_remove_components) => {
+                if src_arch
+                    .columns
+                    .binary_search_by_key(&component_idx, |c| c.component_idx)
+                    .is_err()
+                {
+                    // Archetype already doesn't have the component.
+                    return src_arch_idx;
+                }
+
+                let mut new_components = Vec::with_capacity(src_arch.columns.len() - 1);
+                new_components.extend(
+                    src_arch
+                        .columns
+                        .iter()
+                        .map(|c| c.component_idx)
+                        .filter(|&c| c != component_idx),
+                );
+
+                match self.by_components.entry(new_components.into_boxed_slice()) {
+                    Entry::Vacant(vacant_by_components) => {
+                        if next_arch_idx >= u32::MAX as usize {
+                            panic!("too many archetypes");
+                        }
+
+                        let arch_id = ArchetypeIdx(next_arch_idx as u32);
+
+                        let mut new_arch = Archetype::new(
+                            arch_id,
+                            vacant_by_components.key().iter().copied(),
+                            components,
+                        );
+
+                        new_arch
+                            .insert_components
+                            .insert(component_idx, src_arch_idx);
+
+                        for info in systems.iter_mut() {
+                            new_arch.register_system(info);
+                        }
+
+                        vacant_by_components.insert(arch_id);
+
+                        vacant_remove_components.insert(arch_id);
+
+                        self.archetypes.insert(new_arch);
+
+                        arch_id
+                    }
+                    Entry::Occupied(o) => *vacant_remove_components.insert(*o.get()),
+                }
+            }
+            Entry::Occupied(o) => *o.get(),
+        }
+    }
+
+    /// Move an entity from one archetype to another. Returns the entity's row
+    /// in the new archetype.
+    pub(crate) unsafe fn move_entity(
+        &mut self,
+        src: EntityLocation,
+        dst: ArchetypeIdx,
+        new_components: impl IntoIterator<Item = (ComponentIdx, *mut u8)>,
+        entities: &mut Entities,
+    ) -> ArchetypeRow {
+        if src.archetype == dst {
+            return src.row;
+        }
+
+        let (src_arch, dst_arch) = self
+            .archetypes
+            .get2_mut(src.archetype.0 as usize, dst.0 as usize)
+            .unwrap();
+
+        let dst_row = ArchetypeRow(dst_arch.entity_ids.len() as u32);
+
+        // Will the columns of the destination archetype reallocate once we move the
+        // entity to it? All columns should have the same capacity and length,
+        // so we only need to look at one of them. The `Vec` holding the Entity IDs
+        // might have a different reallocation strategy, so check that too.
+        //
+        // Note that we cannot just compare pointers before and after to check for
+        // reallocation, as that would lead to Undefined Behavior.
+        // `std::alloc::GlobalAlloc::realloc` says:
+        // > Any access to the old `ptr` is Undefined Behavior, even if the allocation
+        // > remained in-place.
+        let dst_arch_reallocated = dst_arch
+            .columns
+            .first()
+            .map_or(false, |col| col.data.len() == col.data.capacity())
+            || dst_arch.entity_ids.capacity() == dst_arch.entity_ids.len();
+
+        let mut src_it = src_arch.columns.iter_mut().peekable();
+        let mut dst_it = dst_arch.columns.iter_mut().peekable();
+
+        let mut new_components = new_components.into_iter();
+
+        // TODO: does this optimize better with raw pointers?
+        loop {
+            match (src_it.peek_mut(), dst_it.peek_mut()) {
+                (None, None) => break,
+                (None, Some(dst_col)) => {
+                    let (component_id, component_ptr) =
+                        new_components.next().unwrap_debug_checked();
+
+                    debug_assert_eq!(component_id, dst_col.component_index());
+
+                    ptr::copy_nonoverlapping(
+                        component_ptr,
+                        dst_col.data.push().as_ptr(),
+                        dst_col.data.elem_layout().size(),
+                    );
+
+                    dst_it.next();
+                }
+                (Some(src_col), None) => {
+                    src_col.data.swap_remove(src.row.0 as usize);
+                    src_it.next();
+                }
+                (Some(src_col), Some(dst_col)) => {
+                    match src_col.component_index().cmp(&dst_col.component_index()) {
+                        Ordering::Less => {
+                            src_col.data.swap_remove(src.row.0 as usize);
+                            src_it.next();
+                        }
+                        Ordering::Equal => {
+                            src_col
+                                .data
+                                .transfer_elem(&mut dst_col.data, src.row.0 as usize);
+
+                            src_it.next();
+                            dst_it.next();
+                        }
+                        Ordering::Greater => {
+                            let (component_id, component_ptr) =
+                                new_components.next().unwrap_debug_checked();
+
+                            debug_assert_eq!(component_id, dst_col.component_index());
+
+                            ptr::copy_nonoverlapping(
+                                component_ptr,
+                                dst_col.data.push().as_ptr(),
+                                dst_col.data.elem_layout().size(),
+                            );
+
+                            dst_it.next();
+                        }
+                    }
+                }
+            }
+        }
+
+        debug_assert!(new_components.next().is_none());
+
+        let entity_id = src_arch.entity_ids.swap_remove(src.row.0 as usize);
+        dst_arch.entity_ids.push(entity_id);
+
+        *unsafe { entities.get_mut(entity_id).unwrap_debug_checked() } = EntityLocation {
+            archetype: dst,
+            row: dst_row,
+        };
+
+        if let Some(&swapped_entity_id) = src_arch.entity_ids.get(src.row.0 as usize) {
+            unsafe { entities.get_mut(swapped_entity_id).unwrap_debug_checked() }.row = src.row;
+        }
+
+        if src_arch.entity_ids.is_empty() {
+            for &sys in src_arch.refresh_listeners.iter() {
+                unsafe {
+                    (*sys.as_ptr())
+                        .system
+                        .refresh_archetype(RefreshArchetypeReason::Empty, src_arch);
+                }
+            }
+        }
+
+        if dst_arch_reallocated {
+            for &sys in dst_arch.refresh_listeners.iter() {
+                unsafe {
+                    (*sys.as_ptr())
+                        .system
+                        .refresh_archetype(RefreshArchetypeReason::RefreshPointers, dst_arch);
+                }
+            }
+        }
+
+        if dst_arch.entity_ids.len() == 1 {
+            for &sys in dst_arch.refresh_listeners.iter() {
+                unsafe {
+                    (*sys.as_ptr())
+                        .system
+                        .refresh_archetype(RefreshArchetypeReason::Nonempty, dst_arch);
+                }
+            }
+        }
+
+        dst_row
     }
 }
 
@@ -230,7 +428,7 @@ impl Archetype {
                 .map(|idx| {
                     let comp = unsafe {
                         comps
-                            .by_index(idx)
+                            .get_by_index(idx)
                             .expect_debug_checked("invalid component ID")
                     };
 
@@ -266,16 +464,21 @@ impl Archetype {
     }
 
     fn register_system(&mut self, info: &mut SystemInfo) {
-        if info
-            .component_access()
-            .expr
-            .eval(|idx| self.column_of(idx).is_some())
+        if self
+            .columns
+            .iter()
+            .any(|c| info.component_access().access.get(c.component_idx) != Access::None)
+            && info
+                .component_access()
+                .expr
+                .eval(|idx| self.column_of(idx).is_some())
         {
-            self.refresh_listeners.insert(info.ptr());
             unsafe {
                 info.system_mut()
                     .refresh_archetype(RefreshArchetypeReason::New, self)
             };
+
+            self.refresh_listeners.insert(info.ptr());
         }
 
         if let (Some(expr), EventIdx::Entity(entity_event_idx)) =

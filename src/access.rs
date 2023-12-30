@@ -322,7 +322,7 @@ mod tests {
             .and(&Cae::without(C))
             .unwrap();
 
-        let expr2 = Cae::with(A, Access::ReadWrite);
+        let expr2 = Cae::with(A, Access::None);
 
         assert!(expr.is_compatible(&expr2));
     }

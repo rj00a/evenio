@@ -14,7 +14,10 @@ use crate::event::{
     AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
     EventKind, EventPtr, EventQueue, Events, Spawn,
 };
-use crate::system::{Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, Systems};
+use crate::system::{
+    Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList, Systems,
+};
+use crate::DropFn;
 
 #[derive(Debug)]
 pub struct World {
@@ -28,6 +31,13 @@ pub struct World {
 }
 
 impl World {
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// let mut world = World::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             entities: Entities::new(),
@@ -40,6 +50,23 @@ impl World {
         }
     }
 
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Event)]
+    /// struct MyEvent(i32);
+    ///
+    /// fn my_system(r: Receiver<MyEvent>) {
+    ///     println!("got event: {}", r.event.0);
+    /// }
+    ///
+    /// let mut world = World::new();
+    ///
+    /// world.add_system(my_system);
+    /// world.send(MyEvent(123));
+    /// ```
     pub fn send<E: Event>(&mut self, event: E) {
         let event_id = self.add_event::<E>();
 
@@ -54,6 +81,18 @@ impl World {
         id
     }
 
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    /// # #[derive(Event)]
+    /// # struct MyEvent;
+    ///
+    /// fn my_system(_: Receiver<MyEvent>) {};
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_system(my_system);
+    /// ```
     #[track_caller]
     pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> SystemId {
         let mut system = system.into_system();
@@ -62,7 +101,7 @@ impl World {
         let type_id = system.type_id();
 
         if let Some(type_id) = type_id {
-            if let Some(info) = self.systems.by_type_id(type_id) {
+            if let Some(info) = self.systems.get_by_type_id(type_id) {
                 return info.id();
             }
         }
@@ -109,6 +148,21 @@ impl World {
         todo!()
     }
 
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Component)]
+    /// struct MyComponent;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_component::<MyComponent>();
+    ///
+    /// assert_eq!(id, world.add_component::<MyComponent>());
+    ///
+    /// println!("{}", world.components()[id].name());
+    /// ```
     pub fn add_component<C: Component>(&mut self) -> ComponentId {
         let desc = ComponentDescriptor {
             name: any::type_name::<C>().into(),
@@ -138,6 +192,21 @@ impl World {
         todo!()
     }
 
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Event)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_event::<MyEvent>();
+    ///
+    /// assert_eq!(id, world.add_event::<MyEvent>());
+    ///
+    /// println!("{}", world.events()[id].name());
+    /// ```
     pub fn add_event<E: Event>(&mut self) -> EventId {
         let desc = EventDescriptor {
             name: any::type_name::<E>().into(),
@@ -205,8 +274,45 @@ impl World {
             'next_event: for queue_idx in queue_start_idx..world.event_queue.len() {
                 let item = unsafe { world.event_queue.get_debug_checked_mut(queue_idx) };
                 let event_idx = item.event_idx;
-                let event_info = unsafe { world.events.by_index(event_idx).unwrap_debug_checked() };
+                let event_info =
+                    unsafe { world.events.get_by_index(event_idx).unwrap_debug_checked() };
                 let event_kind = event_info.kind();
+
+                // Put the event pointer on the stack because pointers into the event queue
+                // would be invalidated by pushes.
+                let mut event = EventDropper {
+                    // Set pointer to null so the `World`'s destructor will know we've taken
+                    // ownership of the event.
+                    event: mem::replace(&mut item.event, ptr::null_mut()),
+                    drop: event_info.drop(),
+                };
+
+                struct EventDropper {
+                    event: *mut u8,
+                    drop: DropFn,
+                }
+
+                impl EventDropper {
+                    /// Extracts the event pointer and drop fn without running
+                    /// the destructor.
+                    #[inline]
+                    fn unpack(self) -> (*mut u8, DropFn) {
+                        let Self { event, drop } = self;
+                        (event, drop)
+                    }
+                }
+
+                // In case `System::run` or `handle_events` unwinds, we need to drop the event
+                // we're holding on the stack. The other events in the event queue will be
+                // handled by `World`'s destructor.
+                impl Drop for EventDropper {
+                    #[inline]
+                    fn drop(&mut self) {
+                        if let (Some(event), Some(drop)) = (NonNull::new(self.event), self.drop) {
+                            unsafe { drop(event) };
+                        }
+                    }
+                }
 
                 let system_list = match event_idx {
                     EventIdx::Global(idx) => unsafe {
@@ -220,7 +326,7 @@ impl World {
                             unsafe { event_info.target_offset().unwrap_debug_checked() };
 
                         let entity_id =
-                            unsafe { item.event.add(target_offset).cast::<EntityId>().read() };
+                            unsafe { event.event.add(target_offset).cast::<EntityId>().read() };
 
                         let Some(location) = world.entities.get(entity_id) else {
                             continue;
@@ -233,40 +339,11 @@ impl World {
                                 .unwrap_debug_checked()
                         };
 
-                        let Some(list) = arch.system_list_for(idx) else {
-                            continue;
-                        };
+                        static EMPTY: SystemList = SystemList::new();
 
-                        list
+                        arch.system_list_for(idx).unwrap_or(&EMPTY)
                     }
                 };
-
-                // Put the event pointer on the stack because pointers into the event queue
-                // would be invalidated by pushes.
-                let mut event = EventDropper {
-                    event: item.event,
-                    drop: event_info.drop(),
-                };
-
-                // Mark this pointer so the `World`'s destructor will know we've taken ownership
-                // of the event.
-                item.event = ptr::null_mut();
-
-                struct EventDropper {
-                    event: *mut u8,
-                    drop: Option<unsafe fn(NonNull<u8>)>,
-                }
-
-                // In case `System::run` or `handle_events` unwinds, we need to drop the event
-                // we're holding on the stack. The other events in the event queue will be
-                // handled by `World`'s destructor.
-                impl Drop for EventDropper {
-                    fn drop(&mut self) {
-                        if let (Some(event), Some(drop)) = (NonNull::new(self.event), self.drop) {
-                            unsafe { drop(event) };
-                        }
-                    }
-                }
 
                 let systems: *const [_] = system_list.systems();
 
@@ -293,7 +370,9 @@ impl World {
 
                     // Did the system take ownership of the event?
                     if event.event.is_null() {
-                        mem::forget(event);
+                        // Event is null; destructor wouldn't do anything.
+                        event.unpack();
+
                         continue 'next_event;
                     }
                 }
@@ -303,8 +382,59 @@ impl World {
                     EventKind::Insert {
                         component_idx,
                         component_offset,
-                    } => {}
-                    EventKind::Remove { component_idx } => todo!(),
+                    } => {
+                        let entity_id = unsafe { *event.event.cast::<EntityId>() };
+
+                        if let Some(loc) = world.entities.get(entity_id) {
+                            let dst = unsafe {
+                                world.archetypes.traverse_insert(
+                                    loc.archetype,
+                                    component_idx,
+                                    &mut world.components,
+                                    &mut world.systems,
+                                )
+                            };
+
+                            let component_ptr = unsafe { event.event.add(component_offset) };
+
+                            unsafe {
+                                world.archetypes.move_entity(
+                                    loc,
+                                    dst,
+                                    [(component_idx, component_ptr)],
+                                    &mut world.entities,
+                                )
+                            };
+
+                            // Inserted component is owned by the archetype now.
+                            event.unpack();
+                        }
+                    }
+                    EventKind::Remove { component_idx } => {
+                        // `Remove` doesn't need drop.
+                        let (event, _) = event.unpack();
+
+                        // SAFETY: `Remove` is `repr(transparent)` with the first field being the
+                        // `EntityId`, so we can safely reinterpret this pointer.
+                        let entity_id = unsafe { *event.cast::<EntityId>() };
+
+                        if let Some(loc) = world.entities.get(entity_id) {
+                            let dst = unsafe {
+                                world.archetypes.traverse_remove(
+                                    loc.archetype,
+                                    component_idx,
+                                    &mut world.components,
+                                    &mut world.systems,
+                                )
+                            };
+
+                            unsafe {
+                                world
+                                    .archetypes
+                                    .move_entity(loc, dst, [], &mut world.entities)
+                            };
+                        }
+                    }
                     EventKind::Spawn => {
                         let empty = world.archetypes.empty_mut();
 
@@ -361,7 +491,11 @@ impl Drop for World {
         // Drop in-flight events in the event queue.
         for item in self.event_queue.iter() {
             if let Some(event) = NonNull::new(item.event) {
-                let info = unsafe { self.events.by_index(item.event_idx).unwrap_debug_checked() };
+                let info = unsafe {
+                    self.events
+                        .get_by_index(item.event_idx)
+                        .unwrap_debug_checked()
+                };
 
                 if let Some(drop) = info.drop() {
                     unsafe { drop(event) };

@@ -95,14 +95,22 @@ impl Systems {
         self.sm.get_mut(id.0)
     }
 
-    pub fn by_index(&self, idx: SystemIdx) -> Option<&SystemInfo> {
-        self.sm.by_index(idx.0).map(|(_, v)| v)
+    pub fn get_by_index(&self, idx: SystemIdx) -> Option<&SystemInfo> {
+        self.sm.get_by_index(idx.0).map(|(_, v)| v)
     }
 
-    pub fn by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
+    pub fn get_by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
         self.by_type_id
             .get(&id)
             .map(|p| unsafe { SystemInfo::ref_from_ptr(p) })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
+        self.sm.iter().map(|(_, v)| v)
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut SystemInfo> {
+        self.sm.iter_mut().map(|(_, v)| v)
     }
 }
 
@@ -122,7 +130,7 @@ impl Index<SystemIdx> for Systems {
     type Output = SystemInfo;
 
     fn index(&self, index: SystemIdx) -> &Self::Output {
-        if let Some(info) = self.by_index(index) {
+        if let Some(info) = self.get_by_index(index) {
             info
         } else {
             panic!("no such system with index of {index:?} exists")
@@ -134,7 +142,7 @@ impl Index<TypeId> for Systems {
     type Output = SystemInfo;
 
     fn index(&self, index: TypeId) -> &Self::Output {
-        if let Some(info) = self.by_type_id(index) {
+        if let Some(info) = self.get_by_type_id(index) {
             info
         } else {
             panic!("no such system with type ID of {index:?} exists")
@@ -296,9 +304,15 @@ pub(crate) struct SystemList {
     entries: Vec<SystemInfoPtr>,
 }
 
+unsafe impl Sync for SystemList {}
+
 impl SystemList {
-    pub(crate) fn new() -> SystemList {
-        Self::default()
+    pub(crate) const fn new() -> SystemList {
+        Self {
+            before_divider: 0,
+            after_divider: 0,
+            entries: vec![],
+        }
     }
 
     pub fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
@@ -456,11 +470,7 @@ unsafe impl<S: System> System for NoTypeId<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) -> bool {
+    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
         self.0.refresh_archetype(reason, arch)
     }
 }
@@ -487,11 +497,7 @@ unsafe impl<S: System> System for Before<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) -> bool {
+    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
         self.0.refresh_archetype(reason, arch)
     }
 }
@@ -518,11 +524,7 @@ unsafe impl<S: System> System for After<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) -> bool {
+    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
         self.0.refresh_archetype(reason, arch)
     }
 }
@@ -541,11 +543,7 @@ pub unsafe trait System: Send + Sync + 'static {
 
     unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
 
-    unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) -> bool;
+    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -554,7 +552,7 @@ pub enum RefreshArchetypeReason {
     New,
     /// The archetype columns were reallocated and any pointers to them are now
     /// invalid.
-    InvalidColumns,
+    RefreshPointers,
     /// The archetype previously had entities in it, but is now empty.
     Empty,
     /// The archetype was previously empty, but has gained at least one entity.
@@ -639,9 +637,8 @@ pub trait SystemParam {
         state: &mut Self::State,
         reason: RefreshArchetypeReason,
         arch: &Archetype,
-    ) -> bool {
+    ) {
         let _ = (state, reason, arch);
-        false
     }
 }
 
@@ -679,18 +676,11 @@ macro_rules! impl_system_param_tuple {
                 ($($s,)*): &mut Self::State,
                 reason: RefreshArchetypeReason,
                 arch: &Archetype
-            ) -> bool
+            )
             {
-                #[allow(unused_mut)]
-                let mut res = false;
-
                 $(
-                    if $P::refresh_archetype($s, reason, arch) {
-                        res = true;
-                    }
+                    $P::refresh_archetype($s, reason, arch);
                 )*
-
-                res
             }
         }
     }
@@ -760,11 +750,7 @@ where
         self.func.run(param);
     }
 
-    unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) -> bool {
+    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
         let state = unsafe {
             self.state
                 .as_mut()

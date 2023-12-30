@@ -89,7 +89,18 @@ impl<Q: Query> FetcherState<Q> {
         reason: RefreshArchetypeReason,
         arch: &Archetype,
     ) {
-        todo!()
+        match reason {
+            RefreshArchetypeReason::New
+            | RefreshArchetypeReason::RefreshPointers
+            | RefreshArchetypeReason::Nonempty => {
+                if let Some(fetch) = Q::init_fetch(arch, &mut self.state) {
+                    self.map.insert(arch.index(), fetch);
+                }
+            }
+            RefreshArchetypeReason::Empty => {
+                self.map.remove(arch.index());
+            }
+        }
     }
 
     // TODO: get_many_mut
@@ -206,72 +217,8 @@ where
         state: &mut Self::State,
         reason: RefreshArchetypeReason,
         arch: &Archetype,
-    ) -> bool {
-        todo!()
-
-        /*
-        match reason {
-            RefreshArchetypeReason::New => {
-                // Resize the sparse array so that all valid archetype IDs are in bounds.
-                if idx.0 >= state.sparse.len() as u32 {
-                    state.sparse.resize(idx.0 as usize + 1, u32::MAX);
-                }
-
-                debug_assert!(arch.is_empty());
-
-                Q::init_fetch(arch, &mut state.state).is_some()
-            }
-            RefreshArchetypeReason::InvalidColumns => {
-                let idx = *unsafe { state.sparse.get_debug_checked(idx.0 as usize) };
-
-                if idx == u32::MAX {
-                    return false;
-                }
-
-                let dense = unsafe { state.dense.get_debug_checked_mut(idx as usize) };
-
-                dense.fetch =
-                    unsafe { Q::init_fetch(arch, &mut state.state).unwrap_debug_checked() };
-
-                true
-            }
-            RefreshArchetypeReason::Empty => {
-                let idx = mem::replace(
-                    unsafe { state.sparse.get_debug_checked_mut(id.0 as usize) },
-                    u32::MAX,
-                );
-
-                if idx == u32::MAX {
-                    return false;
-                }
-
-                state.dense.swap_remove(idx as usize);
-
-                if let Some(swapped) = state.dense.get(idx as usize) {
-                    *unsafe { state.sparse.get_debug_checked_mut(swapped.id.0 as usize) } = idx;
-                }
-
-                true
-            }
-            RefreshArchetypeReason::Nonempty => {
-                if let Some(fetch) = Q::init_fetch(arch, &mut state.state) {
-                    let idx = unsafe { state.sparse.get_debug_checked_mut(id.0 as usize) };
-
-                    debug_assert_eq!(*idx, u32::MAX);
-
-                    let new_idx = state.dense.len() as u32;
-
-                    state.dense.push(Dense { fetch, id });
-
-                    *idx = new_idx;
-
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-        */
+    ) {
+        state.refresh_archetype(reason, arch)
     }
 }
 

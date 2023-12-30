@@ -16,10 +16,13 @@ struct Foo;
 #[derive(Component)]
 struct MyComponent(i32);
 
-fn spawn_some_entities(_: Receiver<Foo>, mut sender: Sender<(Spawn, Insert<MyComponent>)>) {
+fn spawn_some_entities(
+    _: Receiver<Foo>,
+    mut sender: Sender<(Spawn, Insert<MyComponent>, Remove<MyComponent>)>,
+) {
     println!("spawning entities");
 
     let e = sender.spawn();
-    let e = sender.spawn();
-    // sender.send(Insert::new(e, MyComponent(123)));
+    sender.send(Insert::new(e, MyComponent(123)));
+    sender.send(Remove::<MyComponent>::new(e));
 }

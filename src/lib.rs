@@ -45,6 +45,16 @@ pub mod prelude {
 }
 
 const _: () = assert!(
-    std::mem::size_of::<usize>() >= std::mem::size_of::<u32>(),
+    core::mem::size_of::<usize>() >= core::mem::size_of::<u32>(),
     "unsupported target"
 );
+
+/// Drop function for some erased type.
+///
+/// In order to be safe to call, the input pointer must be correctly aligned and
+/// point to an initialized value of the erased type. The pointed-to memory
+/// should be considered uninitialized after the call.
+///
+/// If the function pointer is `None`, then the erased type is considered
+/// trivially droppable and no destructor needs to run.
+type DropFn = Option<unsafe fn(core::ptr::NonNull<u8>)>;

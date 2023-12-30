@@ -26,6 +26,7 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemId, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
+use crate::DropFn;
 
 #[derive(Debug)]
 pub struct Events {
@@ -90,14 +91,14 @@ impl Events {
     }
 
     #[inline]
-    pub fn by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
+    pub fn get_by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
         match idx {
-            EventIdx::Global(idx) => Some(self.global_events.by_index(idx.0)?.1),
-            EventIdx::Entity(idx) => Some(self.entity_events.by_index(idx.0)?.1),
+            EventIdx::Global(idx) => Some(self.global_events.get_by_index(idx.0)?.1),
+            EventIdx::Entity(idx) => Some(self.entity_events.get_by_index(idx.0)?.1),
         }
     }
 
-    pub fn by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
+    pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
         let idx = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
@@ -119,7 +120,7 @@ impl Index<EventIdx> for Events {
     type Output = EventInfo;
 
     fn index(&self, index: EventIdx) -> &Self::Output {
-        if let Some(info) = self.by_index(index) {
+        if let Some(info) = self.get_by_index(index) {
             info
         } else {
             panic!("no such event with index of {index:?} exists")
@@ -131,7 +132,7 @@ impl Index<TypeId> for Events {
     type Output = EventInfo;
 
     fn index(&self, index: TypeId) -> &Self::Output {
-        if let Some(info) = self.by_type_id(index) {
+        if let Some(info) = self.get_by_type_id(index) {
             info
         } else {
             panic!("no such event with type ID of {index:?} exists")
@@ -364,7 +365,7 @@ pub struct EventInfo {
     kind: EventKind,
     type_id: Option<TypeId>,
     layout: Layout,
-    drop: Option<unsafe fn(NonNull<u8>)>,
+    drop: DropFn,
 }
 
 impl EventInfo {
@@ -392,7 +393,7 @@ impl EventInfo {
         self.layout
     }
 
-    pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
+    pub fn drop(&self) -> DropFn {
         self.drop
     }
 }
@@ -404,7 +405,7 @@ pub struct EventDescriptor {
     pub target_offset: Option<usize>,
     pub kind: EventKind,
     pub layout: Layout,
-    pub drop: Option<unsafe fn(NonNull<u8>)>,
+    pub drop: DropFn,
 }
 
 #[derive(Debug)]
@@ -660,7 +661,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         state: &mut Self::State,
         reason: crate::system::RefreshArchetypeReason,
         arch: &crate::archetype::Archetype,
-    ) -> bool {
+    ) {
         Fetcher::refresh_archetype(state, reason, arch)
     }
 }
@@ -772,7 +773,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         state: &mut Self::State,
         reason: crate::system::RefreshArchetypeReason,
         arch: &crate::archetype::Archetype,
-    ) -> bool {
+    ) {
         Fetcher::refresh_archetype(state, reason, arch)
     }
 }

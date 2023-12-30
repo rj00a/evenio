@@ -118,7 +118,7 @@ impl<T> SlotMap<T> {
         Some(unsafe { &mut slot.union.value })
     }
 
-    pub(crate) fn by_index(&self, index: u32) -> Option<(Key, &T)> {
+    pub(crate) fn get_by_index(&self, index: u32) -> Option<(Key, &T)> {
         let slot = self.slots.get(index as usize)?;
 
         if slot.is_vacant() {
@@ -161,6 +161,28 @@ impl<T> SlotMap<T> {
 
     pub(crate) const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
+        self.slots.iter().enumerate().filter_map(|(idx, slot)| {
+            (!slot.is_vacant()).then(|| {
+                let key = unsafe { Key::new_unchecked(idx as u32, slot.generation) };
+                let value = unsafe { &*slot.union.value };
+
+                (key, value)
+            })
+        })
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Key, &mut T)> {
+        self.slots.iter_mut().enumerate().filter_map(|(idx, slot)| {
+            (!slot.is_vacant()).then(|| {
+                let key = unsafe { Key::new_unchecked(idx as u32, slot.generation) };
+                let value = unsafe { &mut *slot.union.value };
+
+                (key, value)
+            })
+        })
     }
 }
 
@@ -437,6 +459,21 @@ mod tests {
         drop(sm);
 
         assert_eq!(count.get(), 3);
+    }
+
+    #[test]
+    fn iter() {
+        let mut sm = SlotMap::new();
+
+        let k0 = sm.insert(123).unwrap();
+        let k1 = sm.insert(456).unwrap();
+        let k2 = sm.insert(789).unwrap();
+
+        let mut it = sm.iter();
+        assert_eq!(it.next(), Some((k0, &123)));
+        assert_eq!(it.next(), Some((k1, &456)));
+        assert_eq!(it.next(), Some((k2, &789)));
+        assert_eq!(it.next(), None);
     }
 
     #[test]

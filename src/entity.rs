@@ -18,8 +18,12 @@ impl Entities {
         self.sm.get(id.0).copied()
     }
 
-    pub fn by_index(&self, idx: EntityIdx) -> Option<EntityLocation> {
-        self.sm.by_index(idx.0).map(|(_, v)| *v)
+    pub(crate) fn get_mut(&mut self, id: EntityId) -> Option<&mut EntityLocation> {
+        self.sm.get_mut(id.0)
+    }
+
+    pub fn get_by_index(&self, idx: EntityIdx) -> Option<EntityLocation> {
+        self.sm.get_by_index(idx.0).map(|(_, v)| *v)
     }
 
     pub fn contains(&self, id: EntityId) -> bool {
@@ -55,7 +59,7 @@ impl Index<EntityIdx> for Entities {
     type Output = EntityLocation;
 
     fn index(&self, index: EntityIdx) -> &Self::Output {
-        if let Some(loc) = self.sm.by_index(index.0).map(|(_, v)| v) {
+        if let Some(loc) = self.sm.get_by_index(index.0).map(|(_, v)| v) {
             loc
         } else {
             panic!("no such entity with index of {index:?} exists")

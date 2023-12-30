@@ -5,6 +5,7 @@ use core::ptr::NonNull;
 
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::layout_util::{padding_needed_for, repeat_layout};
+use crate::DropFn;
 
 /// Like `Vec<T>`, but `T` is erased.
 #[derive(Debug)]
@@ -17,22 +18,25 @@ pub(crate) struct BlobVec {
     /// Pointer to the element array.
     data: NonNull<u8>,
     /// The erased element type's drop function, if any.
-    drop: Option<unsafe fn(NonNull<u8>)>,
+    drop: DropFn,
 }
 
 impl BlobVec {
     /// # Safety
     /// - `layout`'s size must be evenly divisble by its alignment.
-    /// - If `Some`, `drop` must be safe to call with an aligned pointer to an
-    ///   ErasedVec's element.
-    pub(crate) unsafe fn new(layout: Layout, drop: Option<unsafe fn(NonNull<u8>)>) -> Self {
+    /// - `drop` must be safe to call with elements of this `BlobVec` as
+    ///   described by [`DropFn`]'s documentation.
+    pub(crate) unsafe fn new(layout: Layout, drop: DropFn) -> Self {
         debug_assert_eq!(padding_needed_for(&layout, layout.align()), 0);
+
+        // SAFETY: `Layout` guarantees alignment is non-zero.
+        let data = NonNull::new(layout.align() as *mut u8).unwrap_debug_checked();
 
         Self {
             elem_layout: layout,
             len: 0,
             cap: if layout.size() == 0 { usize::MAX } else { 0 },
-            data: NonNull::dangling(),
+            data,
             drop,
         }
     }
@@ -91,7 +95,12 @@ impl BlobVec {
         self.data.as_ptr().add(idx * self.elem_layout.size())
     }
 
-    /// Move an element from `self` to `other`.
+    /// Move an element from `self` to `other`. The element at `src_idx` is
+    /// swap removed from `self` and pushed onto the end of `other`.
+    ///
+    /// # Safety
+    /// - `src_idx` must be in bounds within `self`.
+    /// - Underlying types of `self` and `other` must be interchangeable.
     pub(crate) unsafe fn transfer_elem(&mut self, other: &mut Self, src_idx: usize) {
         debug_assert_eq!(
             self.elem_layout, other.elem_layout,

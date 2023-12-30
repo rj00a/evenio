@@ -11,6 +11,7 @@ pub use evenio_macros::Component;
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
+use crate::DropFn;
 
 #[derive(Debug)]
 pub struct Components {
@@ -63,11 +64,11 @@ impl Components {
         self.sm.get(id.0)
     }
 
-    pub fn by_index(&self, idx: ComponentIdx) -> Option<&ComponentInfo> {
-        self.sm.by_index(idx.0).map(|(_, v)| v)
+    pub fn get_by_index(&self, idx: ComponentIdx) -> Option<&ComponentInfo> {
+        self.sm.get_by_index(idx.0).map(|(_, v)| v)
     }
 
-    pub fn by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
+    pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
         let id = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(id).unwrap_debug_checked() })
     }
@@ -89,7 +90,7 @@ impl Index<ComponentIdx> for Components {
     type Output = ComponentInfo;
 
     fn index(&self, index: ComponentIdx) -> &Self::Output {
-        if let Some(info) = self.by_index(index) {
+        if let Some(info) = self.get_by_index(index) {
             info
         } else {
             panic!("no such component with index of {index:?} exists")
@@ -101,7 +102,7 @@ impl Index<TypeId> for Components {
     type Output = ComponentInfo;
 
     fn index(&self, index: TypeId) -> &Self::Output {
-        if let Some(info) = self.by_type_id(index) {
+        if let Some(info) = self.get_by_type_id(index) {
             info
         } else {
             panic!("no such component with type ID of {index:?} exists")
@@ -115,7 +116,7 @@ pub struct ComponentInfo {
     id: ComponentId,
     type_id: Option<TypeId>,
     layout: Layout,
-    drop: Option<unsafe fn(NonNull<u8>)>,
+    drop: DropFn,
 }
 
 impl ComponentInfo {
@@ -135,7 +136,7 @@ impl ComponentInfo {
         self.layout
     }
 
-    pub fn drop(&self) -> Option<unsafe fn(NonNull<u8>)> {
+    pub fn drop(&self) -> DropFn {
         self.drop
     }
 }
@@ -168,7 +169,7 @@ pub struct ComponentDescriptor {
     pub name: Cow<'static, str>,
     pub type_id: Option<TypeId>,
     pub layout: Layout,
-    pub drop: Option<unsafe fn(NonNull<u8>)>,
+    pub drop: DropFn,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]

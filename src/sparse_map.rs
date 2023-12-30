@@ -158,6 +158,11 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
     }
 
     #[inline]
+    pub(crate) fn contains_key(&self, key: K) -> bool {
+        self.get(key).is_some()
+    }
+
+    #[inline]
     pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut V> {
         if is_zst::<V>() {
             let this = unsafe { &mut self.union.zst };
