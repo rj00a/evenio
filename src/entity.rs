@@ -41,6 +41,10 @@ impl Entities {
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
         self.sm.remove(id.0)
     }
+
+    pub fn len(&self) -> u32 {
+        self.sm.len()
+    }
 }
 
 impl Index<EntityId> for Entities {

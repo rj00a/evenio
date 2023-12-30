@@ -16,6 +16,7 @@ pub use evenio_macros::Event;
 use memoffset::offset_of;
 
 use crate::access::Access;
+use crate::archetype::Archetype;
 use crate::component::ComponentIdx;
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
@@ -164,7 +165,7 @@ pub enum EventKind {
         component_idx: ComponentIdx,
         /// Cached offset from the beginning of the event to the
         /// [`Insert::component`] field.
-        component_offset: usize,
+        component_offset: u32,
     },
     /// The [`Remove`] event.
     Remove {
@@ -175,7 +176,18 @@ pub enum EventKind {
     Spawn,
     /// The [`Despawn`] event.
     Despawn,
+    /// The [`Call`] event.
+    Call {
+        /// The [`EventId`] of the event to send.
+        event_id: EventId,
+        /// Cached offset from the beginning of the event to the
+        /// [`Call::event`] field.
+        event_offset: u32,
+    },
 }
+
+// TODO: remove me.
+const _: () = assert!(mem::size_of::<EventKind>() == mem::size_of::<usize>() * 2);
 
 /// Performs sanity checks on [`Entity::TARGET_OFFSET`]. Returns true if `E`'s
 /// `TARGET_OFFSET` might be correct, and false if it's definitely incorrect.
@@ -623,7 +635,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
         let (expr, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(world.unsafe_cell(), &expr, state);
+        let res = FetcherState::new(state);
 
         config.entity_event_expr = expr.expr.clone();
 
@@ -657,12 +669,12 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         Receiver { event, query }
     }
 
-    unsafe fn refresh_archetype(
-        state: &mut Self::State,
-        reason: crate::system::RefreshArchetypeReason,
-        arch: &crate::archetype::Archetype,
-    ) {
-        Fetcher::refresh_archetype(state, reason, arch)
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        Fetcher::refresh_archetype(state, arch)
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        Fetcher::remove_archetype(state, arch)
     }
 }
 
@@ -769,12 +781,12 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         ReceiverMut { event, query }
     }
 
-    unsafe fn refresh_archetype(
-        state: &mut Self::State,
-        reason: crate::system::RefreshArchetypeReason,
-        arch: &crate::archetype::Archetype,
-    ) {
-        Fetcher::refresh_archetype(state, reason, arch)
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        Fetcher::refresh_archetype(state, arch)
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        Fetcher::remove_archetype(state, arch)
     }
 }
 
@@ -1002,7 +1014,9 @@ unsafe impl<C: Component> Event for Insert<C> {
     fn init(world: &mut World) -> EventKind {
         EventKind::Insert {
             component_idx: world.add_component::<C>().index(),
-            component_offset: offset_of!(Self, component),
+            component_offset: offset_of!(Self, component)
+                .try_into()
+                .expect("component offset should fit in a `u32`"),
         }
     }
 }
@@ -1057,7 +1071,76 @@ unsafe impl Event for Despawn {
     }
 }
 
-// TODO: `Call<E>` event?
+/// An [`Event`] which sends an event to a specific system.
+///
+/// `Call` allows users to bypass the usual event propagation behavior in order
+/// to send an event to exactly one system, identified by a [`SystemId`] value.
+/// Here are a few scenarios where this could be useful:
+/// - A function-like system needs to "return" a value to a "caller".
+/// - An event sender has ahead-of-time knowledge about which systems are
+///   interested in the event, and would like to choose which systems receive
+///   the event for performance reasons.
+/// - Interacting with code outside the user's control in a hacky way.
+///
+/// Note that `Call<E>` is itself an event which can be listened for and
+/// intercepted as usual. The inner event `E` is only sent once `Call<E>` has
+/// finished propagating without being intercepted.
+///
+/// # Examples
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// let mut world = World::new();
+///
+/// #[derive(Event)]
+/// struct Foo;
+///
+/// fn system_1(_: Receiver<Foo>) {
+///     println!("OK");
+/// }
+/// fn system_2(_: Receiver<Foo>) {
+///     panic!("not OK");
+/// }
+///
+/// let system_1_id = world.add_system(system_1);
+/// world.add_system(system_2);
+///
+/// // Although both `system_1` and `system_2` listen for `Foo`, only `system_1`
+/// // will receive this event.
+/// world.send(Call {
+///     system: system_1_id,
+///     event: Foo,
+/// });
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(C)] // Field order is significant!
+pub struct Call<E> {
+    /// Identifier of the system that will receive the event. If the ID is
+    /// invalid, then no system will receive the event.
+    pub system: SystemId,
+    /// The event to send to the system.
+    pub event: E,
+}
+
+impl<E> Call<E> {
+    pub const fn new(system: SystemId, event: E) -> Self {
+        Self { system, event }
+    }
+}
+
+unsafe impl<E: Event> Event for Call<E> {
+    const TARGET_OFFSET: Option<usize> = None;
+
+    fn init(world: &mut World) -> EventKind {
+        EventKind::Call {
+            event_id: world.add_event::<E>(),
+            event_offset: offset_of!(Self, event)
+                .try_into()
+                .expect("event offset should fit in a `u32`"),
+        }
+    }
+}
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddComponent(pub ComponentId);

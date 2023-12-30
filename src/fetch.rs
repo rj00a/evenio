@@ -1,6 +1,5 @@
-use core::fmt;
-use std::marker::PhantomData;
-use std::{any, mem};
+use core::marker::PhantomData;
+use core::{any, fmt, mem};
 
 use crate::access::ComponentAccessExpr;
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
@@ -8,7 +7,7 @@ use crate::debug_checked::assume_debug_checked;
 use crate::entity::EntityId;
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
-use crate::system::{Config, InitError, RefreshArchetypeReason, SystemParam};
+use crate::system::{Config, InitError, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
 pub struct FetcherState<Q: Query> {
@@ -17,21 +16,11 @@ pub struct FetcherState<Q: Query> {
 }
 
 impl<Q: Query> FetcherState<Q> {
-    pub(crate) fn new(
-        world: UnsafeWorldCell,
-        expr: &ComponentAccessExpr,
-        mut state: Q::State,
-    ) -> Self {
-        let mut map = SparseMap::new();
-
-        // TODO: use an index to make this faster?
-        for arch in world.archetypes().iter() {
-            if let Some(columns) = Q::init_fetch(arch, &mut state) {
-                map.insert(arch.index(), columns);
-            }
+    pub(crate) fn new(state: Q::State) -> Self {
+        Self {
+            map: SparseMap::new(),
+            state,
         }
-
-        Self { map, state }
     }
 
     #[inline]
@@ -84,23 +73,14 @@ impl<Q: Query> FetcherState<Q> {
         Ok(Q::fetch_mut(fetch, loc.row))
     }
 
-    pub(crate) unsafe fn refresh_archetype(
-        &mut self,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) {
-        match reason {
-            RefreshArchetypeReason::New
-            | RefreshArchetypeReason::RefreshPointers
-            | RefreshArchetypeReason::Nonempty => {
-                if let Some(fetch) = Q::init_fetch(arch, &mut self.state) {
-                    self.map.insert(arch.index(), fetch);
-                }
-            }
-            RefreshArchetypeReason::Empty => {
-                self.map.remove(arch.index());
-            }
+    pub(crate) unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
+        if let Some(fetch) = Q::init_fetch(arch, &mut self.state) {
+            self.map.insert(arch.index(), fetch);
         }
+    }
+
+    pub(crate) unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+        self.map.remove(arch.index());
     }
 
     // TODO: get_many_mut
@@ -185,7 +165,7 @@ where
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
         let (expr, mut state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(world.unsafe_cell_mut(), &expr, state);
+        let res = FetcherState::new(state);
 
         match expr.and(&config.component_access) {
             Ok(new_component_access) => config.component_access = new_component_access,
@@ -213,12 +193,12 @@ where
         Fetcher { state, world }
     }
 
-    unsafe fn refresh_archetype(
-        state: &mut Self::State,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) {
-        state.refresh_archetype(reason, arch)
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.remove_archetype(arch)
     }
 }
 

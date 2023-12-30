@@ -10,12 +10,12 @@ use slab::Slab;
 use crate::access::Access;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
-use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
+use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EntityEventIdx, EventIdx};
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
-use crate::system::{RefreshArchetypeReason, SystemInfo, SystemInfoPtr, SystemList, Systems};
+use crate::system::{SystemInfo, SystemInfoPtr, SystemList, Systems};
 
 #[derive(Debug)]
 pub struct Archetypes {
@@ -37,6 +37,7 @@ impl Archetypes {
         unsafe { self.archetypes.get_debug_checked(0) }
     }
 
+    /// Returns a mutable reference to the empty archetype.
     pub(crate) fn empty_mut(&mut self) -> &mut Archetype {
         // SAFETY: The empty archetype is always at index 0.
         unsafe { self.archetypes.get_debug_checked_mut(0) }
@@ -51,6 +52,29 @@ impl Archetypes {
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
 
+    /// Spawns a new entity into the empty archetype with the given ID and
+    /// returns its location.
+    pub(crate) fn spawn(&mut self, id: EntityId) -> EntityLocation {
+        let empty = self.empty_mut();
+
+        let rellocated = empty.push_would_reallocate();
+
+        let row = ArchetypeRow(empty.entity_count());
+        empty.entity_ids.push(id);
+
+        if empty.entity_count() == 1 || rellocated {
+            for &ptr in empty.refresh_listeners.iter() {
+                let system = unsafe { &mut (*ptr.as_ptr()).system };
+                unsafe { system.refresh_archetype(empty) };
+            }
+        }
+
+        EntityLocation {
+            archetype: ArchetypeIdx::EMPTY,
+            row,
+        }
+    }
+
     /*
     pub fn max_archetype_index(&self) -> ArchetypeIdx {
         // SAFETY: `indices` is nonempty because the empty archetype is always present.
@@ -61,12 +85,6 @@ impl Archetypes {
     pub fn iter(&self) -> impl Iterator<Item = &Archetype> {
         self.archetypes.iter().map(|(_, v)| v)
     }
-
-    /*
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Archetype> {
-        self.archetypes.iter_mut().map(|(_, v)| v)
-    }
-    */
 
     pub(crate) fn register_system(&mut self, info: &mut SystemInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
@@ -235,21 +253,7 @@ impl Archetypes {
 
         let dst_row = ArchetypeRow(dst_arch.entity_ids.len() as u32);
 
-        // Will the columns of the destination archetype reallocate once we move the
-        // entity to it? All columns should have the same capacity and length,
-        // so we only need to look at one of them. The `Vec` holding the Entity IDs
-        // might have a different reallocation strategy, so check that too.
-        //
-        // Note that we cannot just compare pointers before and after to check for
-        // reallocation, as that would lead to Undefined Behavior.
-        // `std::alloc::GlobalAlloc::realloc` says:
-        // > Any access to the old `ptr` is Undefined Behavior, even if the allocation
-        // > remained in-place.
-        let dst_arch_reallocated = dst_arch
-            .columns
-            .first()
-            .map_or(false, |col| col.data.len() == col.data.capacity())
-            || dst_arch.entity_ids.capacity() == dst_arch.entity_ids.len();
+        let dst_arch_reallocated = dst_arch.push_would_reallocate();
 
         let mut src_it = src_arch.columns.iter_mut().peekable();
         let mut dst_it = dst_arch.columns.iter_mut().peekable();
@@ -326,36 +330,48 @@ impl Archetypes {
         }
 
         if src_arch.entity_ids.is_empty() {
-            for &sys in src_arch.refresh_listeners.iter() {
-                unsafe {
-                    (*sys.as_ptr())
-                        .system
-                        .refresh_archetype(RefreshArchetypeReason::Empty, src_arch);
-                }
+            for &ptr in src_arch.refresh_listeners.iter() {
+                let system = unsafe { &mut (*ptr.as_ptr()).system };
+                unsafe { system.remove_archetype(src_arch) };
             }
         }
 
-        if dst_arch_reallocated {
-            for &sys in dst_arch.refresh_listeners.iter() {
-                unsafe {
-                    (*sys.as_ptr())
-                        .system
-                        .refresh_archetype(RefreshArchetypeReason::RefreshPointers, dst_arch);
-                }
-            }
-        }
-
-        if dst_arch.entity_ids.len() == 1 {
-            for &sys in dst_arch.refresh_listeners.iter() {
-                unsafe {
-                    (*sys.as_ptr())
-                        .system
-                        .refresh_archetype(RefreshArchetypeReason::Nonempty, dst_arch);
-                }
+        if dst_arch_reallocated || dst_arch.entity_count() == 1 {
+            for &ptr in dst_arch.refresh_listeners.iter() {
+                let system = unsafe { &mut (*ptr.as_ptr()).system };
+                unsafe { system.refresh_archetype(dst_arch) };
             }
         }
 
         dst_row
+    }
+
+    pub(crate) fn remove_entity(&mut self, entity: EntityId, entities: &mut Entities) {
+        let Some(loc) = entities.remove(entity) else {
+            return;
+        };
+
+        let arch = unsafe {
+            self.archetypes
+                .get_debug_checked_mut(loc.archetype.0 as usize)
+        };
+
+        for col in arch.columns.iter_mut() {
+            unsafe { col.data.swap_remove(loc.row.0 as usize) };
+        }
+
+        unsafe {
+            assume_debug_checked((loc.row.0 as usize) < arch.entity_ids.len());
+        };
+
+        arch.entity_ids.swap_remove(loc.row.0 as usize);
+
+        if arch.entity_count() == 0 {
+            for &ptr in arch.refresh_listeners.iter() {
+                let system = unsafe { &mut (*ptr.as_ptr()).system };
+                unsafe { system.remove_archetype(arch) };
+            }
+        }
     }
 }
 
@@ -446,23 +462,6 @@ impl Archetype {
         }
     }
 
-    /// Add an entity to this archetype.
-    pub(crate) unsafe fn add_entity(
-        &mut self,
-        id: EntityId,
-    ) -> (ArchetypeRow, impl Iterator<Item = NonNull<u8>> + '_) {
-        debug_assert!(self.entity_ids.len() <= u32::MAX as usize);
-
-        let row = ArchetypeRow(self.entity_ids.len() as u32);
-        self.entity_ids.push(id);
-
-        // TODO: refresh archetype notification for systems?
-
-        let iter = self.columns.iter_mut().map(|col| col.data.push());
-
-        (row, iter)
-    }
-
     fn register_system(&mut self, info: &mut SystemInfo) {
         if self
             .columns
@@ -473,10 +472,7 @@ impl Archetype {
                 .expr
                 .eval(|idx| self.column_of(idx).is_some())
         {
-            unsafe {
-                info.system_mut()
-                    .refresh_archetype(RefreshArchetypeReason::New, self)
-            };
+            unsafe { info.system_mut().refresh_archetype(self) };
 
             self.refresh_listeners.insert(info.ptr());
         }
@@ -506,6 +502,7 @@ impl Archetype {
     }
 
     pub fn entity_count(&self) -> u32 {
+        debug_assert!(self.entity_ids.len() <= u32::MAX as usize);
         self.entity_ids.len() as u32
     }
 
@@ -520,6 +517,18 @@ impl Archetype {
             .ok()?;
 
         Some(unsafe { self.columns.get_debug_checked(idx) })
+    }
+
+    /// Would the columns of this archetype reallocate if an entity were added
+    /// to it?
+    fn push_would_reallocate(&self) -> bool {
+        // All columns should have the same capacity and length, so we only need to look
+        // at one of them. The `Vec` holding the Entity IDs might have a different
+        // reallocation strategy, so check that too.
+        self.columns
+            .first()
+            .map_or(false, |col| col.data.len() == col.data.capacity())
+            || self.entity_ids.capacity() == self.entity_ids.len()
     }
 }
 

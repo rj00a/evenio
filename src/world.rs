@@ -6,10 +6,10 @@ use std::any::{self, TypeId};
 use std::mem;
 use std::ptr::{self, NonNull};
 
-use crate::archetype::{ArchetypeIdx, Archetypes};
+use crate::archetype::Archetypes;
 use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components};
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
+use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
     EventKind, EventPtr, EventQueue, Events, Spawn,
@@ -261,7 +261,7 @@ impl World {
     /// this call.
     ///
     /// Note that methods like [`send`] will automatically flush the event
-    /// queue, so this doesn't ususally neeed to be called directly.
+    /// queue, so this doesn't ususally need to be called directly.
     ///
     /// [`send`]: Self::send
     pub fn flush_event_queue(&mut self) {
@@ -319,8 +319,6 @@ impl World {
                         world.systems.get_global_list(idx).unwrap_debug_checked()
                     },
                     EventIdx::Entity(idx) => {
-                        // Extract target from event.
-
                         // SAFETY: event is an entity event, so it must have a target offset.
                         let target_offset =
                             unsafe { event_info.target_offset().unwrap_debug_checked() };
@@ -341,6 +339,8 @@ impl World {
 
                         static EMPTY: SystemList = SystemList::new();
 
+                        // Return an empty system instead of continuing in case this event is
+                        // special.
                         arch.system_list_for(idx).unwrap_or(&EMPTY)
                     }
                 };
@@ -378,7 +378,9 @@ impl World {
                 }
 
                 match event_kind {
-                    EventKind::Other => {}
+                    EventKind::Other => {
+                        // Ordinary event. Run event dropper destructor.
+                    }
                     EventKind::Insert {
                         component_idx,
                         component_offset,
@@ -395,7 +397,8 @@ impl World {
                                 )
                             };
 
-                            let component_ptr = unsafe { event.event.add(component_offset) };
+                            let component_ptr =
+                                unsafe { event.event.add(component_offset as usize) };
 
                             unsafe {
                                 world.archetypes.move_entity(
@@ -406,7 +409,8 @@ impl World {
                                 )
                             };
 
-                            // Inserted component is owned by the archetype now.
+                            // Inserted component is owned by the archetype now. We wait to unpack
+                            // in case one of the above functions panics.
                             event.unpack();
                         }
                     }
@@ -436,21 +440,70 @@ impl World {
                         }
                     }
                     EventKind::Spawn => {
-                        let empty = world.archetypes.empty_mut();
+                        // `Spawn` doesn't need drop.
+                        let _ = event.unpack();
 
                         // Flush reserved entities and add them to the empty archetype.
-                        world.reserved_entities.flush(&mut world.entities, |id| {
-                            let (row, _) = unsafe { empty.add_entity(id) };
-
-                            EntityLocation {
-                                archetype: ArchetypeIdx::EMPTY,
-                                row,
-                            }
-                        });
+                        world
+                            .reserved_entities
+                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
                     }
                     EventKind::Despawn => {
-                        // TODO: flush reserved entities _after_ removing the
-                        // entity?
+                        // `Despawn` doesn't need drop.
+                        let (event, _) = event.unpack();
+
+                        // Flush reserved entities and add them to the empty archetype.
+                        world
+                            .reserved_entities
+                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
+
+                        let entity_id = unsafe { *event.cast::<EntityId>() };
+
+                        world
+                            .archetypes
+                            .remove_entity(entity_id, &mut world.entities);
+                    }
+                    EventKind::Call {
+                        event_id,
+                        event_offset,
+                    } => {
+                        let system_id = unsafe { *event.event.cast::<SystemId>() };
+
+                        if let Some(info) = world.systems.get_mut(system_id) {
+                            if info.received_event() == event_id {
+                                let info_ptr = info.ptr();
+
+                                let events_before = world.event_queue.len();
+
+                                let mut event_ptr =
+                                    unsafe { event.event.add(event_offset as usize) };
+
+                                let event_ptr_ptr = EventPtr::new(NonNull::from(&mut event_ptr));
+                                let world_cell = world.unsafe_cell_mut();
+                                let info = unsafe { SystemInfo::ref_from_ptr(&info_ptr) };
+
+                                unsafe {
+                                    (*info_ptr.as_ptr())
+                                        .system
+                                        .run(info, event_ptr_ptr, world_cell)
+                                };
+
+                                let events_after = world.event_queue.len();
+
+                                if events_before < events_after {
+                                    // Eagerly handle any events produced by the system.
+                                    handle_events(events_before, world);
+                                }
+
+                                debug_assert_eq!(world.event_queue.len(), events_before);
+
+                                if event_ptr.is_null() {
+                                    // System took ownership of the event. Don't
+                                    // run destructor for Call<E>.
+                                    event.unpack();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -461,7 +514,7 @@ impl World {
         }
     }
 
-    /// Returns a new [`UnsafeWorldCell`] with permission to read all data in
+    /// Returns a new [`UnsafeWorldCell`] with permission to _read_ all data in
     /// this world.
     pub fn unsafe_cell(&self) -> UnsafeWorldCell {
         UnsafeWorldCell {
@@ -470,8 +523,8 @@ impl World {
         }
     }
 
-    /// Returns a new [`UnsafeWorldCell`] with permission to read and write all
-    /// data in this world.
+    /// Returns a new [`UnsafeWorldCell`] with permission to _read and write_
+    /// all data in this world.
     pub fn unsafe_cell_mut(&mut self) -> UnsafeWorldCell {
         UnsafeWorldCell {
             world: self,

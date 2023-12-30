@@ -470,8 +470,12 @@ unsafe impl<S: System> System for NoTypeId<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
-        self.0.refresh_archetype(reason, arch)
+    unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
+        self.0.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+        self.0.remove_archetype(arch)
     }
 }
 
@@ -497,8 +501,12 @@ unsafe impl<S: System> System for Before<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
-        self.0.refresh_archetype(reason, arch)
+    unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
+        self.0.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+        self.0.remove_archetype(arch)
     }
 }
 
@@ -524,8 +532,12 @@ unsafe impl<S: System> System for After<S> {
         self.0.run(info, event_ptr, world)
     }
 
-    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
-        self.0.refresh_archetype(reason, arch)
+    unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
+        self.0.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+        self.0.remove_archetype(arch)
     }
 }
 
@@ -543,20 +555,9 @@ pub unsafe trait System: Send + Sync + 'static {
 
     unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
 
-    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype);
-}
+    unsafe fn refresh_archetype(&mut self, arch: &Archetype);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RefreshArchetypeReason {
-    /// The archetype is newly created.
-    New,
-    /// The archetype columns were reallocated and any pointers to them are now
-    /// invalid.
-    RefreshPointers,
-    /// The archetype previously had entities in it, but is now empty.
-    Empty,
-    /// The archetype was previously empty, but has gained at least one entity.
-    Nonempty,
+    unsafe fn remove_archetype(&mut self, arch: &Archetype);
 }
 
 /// The error message is not stable and should not be used for distinguishing
@@ -633,12 +634,12 @@ pub trait SystemParam {
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a>;
 
-    unsafe fn refresh_archetype(
-        state: &mut Self::State,
-        reason: RefreshArchetypeReason,
-        arch: &Archetype,
-    ) {
-        let _ = (state, reason, arch);
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        let _ = (state, arch);
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        let _ = (state, arch);
     }
 }
 
@@ -674,12 +675,21 @@ macro_rules! impl_system_param_tuple {
 
             unsafe fn refresh_archetype(
                 ($($s,)*): &mut Self::State,
-                reason: RefreshArchetypeReason,
                 arch: &Archetype
             )
             {
                 $(
-                    $P::refresh_archetype($s, reason, arch);
+                    $P::refresh_archetype($s, arch);
+                )*
+            }
+
+            unsafe fn remove_archetype(
+                ($($s,)*): &mut Self::State,
+                arch: &Archetype
+            )
+            {
+                $(
+                    $P::remove_archetype($s, arch);
                 )*
             }
         }
@@ -750,14 +760,24 @@ where
         self.func.run(param);
     }
 
-    unsafe fn refresh_archetype(&mut self, reason: RefreshArchetypeReason, arch: &Archetype) {
+    unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
         let state = unsafe {
             self.state
                 .as_mut()
                 .expect_debug_checked("system must be initialized")
         };
 
-        F::Param::refresh_archetype(state, reason, arch)
+        F::Param::refresh_archetype(state, arch)
+    }
+
+    unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+        let state = unsafe {
+            self.state
+                .as_mut()
+                .expect_debug_checked("system must be initialized")
+        };
+
+        F::Param::remove_archetype(state, arch)
     }
 }
 
