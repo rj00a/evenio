@@ -105,6 +105,10 @@ impl Systems {
             .map(|p| unsafe { SystemInfo::ref_from_ptr(p) })
     }
 
+    pub fn contains(&self, id: SystemId) -> bool {
+        self.get(id).is_some()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
         self.sm.iter().map(|(_, v)| v)
     }
@@ -147,6 +151,25 @@ impl Index<TypeId> for Systems {
         } else {
             panic!("no such system with type ID of {index:?} exists")
         }
+    }
+}
+
+impl SystemParam for &'_ Systems {
+    type State = ();
+
+    type Item<'a> = &'a Systems;
+
+    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        world.systems()
     }
 }
 

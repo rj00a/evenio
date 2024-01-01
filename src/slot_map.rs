@@ -328,7 +328,7 @@ const ONE: NonZeroU32 = match NonZeroU32::new(1) {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NextKeyIter<T> {
     index: u32,
-    _marker: PhantomData<fn(T)>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T> NextKeyIter<T> {

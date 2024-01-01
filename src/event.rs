@@ -25,7 +25,7 @@ use crate::prelude::{Component, ComponentId};
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
-use crate::system::{Config, InitError, SystemId, SystemParam};
+use crate::system::{Config, InitError, SystemId, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 use crate::DropFn;
 
@@ -103,6 +103,10 @@ impl Events {
         let idx = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
+
+    pub fn contains(&self, id: EventId) -> bool {
+        self.get(id).is_some()
+    }
 }
 
 impl Index<EventId> for Events {
@@ -138,6 +142,25 @@ impl Index<TypeId> for Events {
         } else {
             panic!("no such event with type ID of {index:?} exists")
         }
+    }
+}
+
+impl SystemParam for &'_ Events {
+    type State = ();
+
+    type Item<'a> = &'a Events;
+
+    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        world.events()
     }
 }
 
@@ -599,7 +622,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a crate::system::SystemInfo,
+        _system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -656,7 +679,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
+        system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -664,7 +687,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         let target = get_target(event).unwrap();
 
         // SAFETY: The target entity is guaranteed to match the query.
-        let query = state.get_mut(world, target).unwrap_debug_checked();
+        let query = state
+            .get_mut(world.entities(), target)
+            .unwrap_debug_checked();
 
         Receiver { event, query }
     }
@@ -732,7 +757,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
+        system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -768,7 +793,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
+        system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -776,7 +801,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         let target = get_target(&*event).unwrap();
 
         // SAFETY: The target entity is guaranteed to match the query.
-        let query = state.get_mut(world, target).unwrap_debug_checked();
+        let query = state
+            .get_mut(world.entities(), target)
+            .unwrap_debug_checked();
 
         ReceiverMut { event, query }
     }
@@ -850,6 +877,26 @@ impl<T: EventSet> Sender<'_, T> {
         self.send(Spawn(id));
         id
     }
+
+    #[track_caller]
+    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
+        self.send(Insert::new(entity, component))
+    }
+
+    #[track_caller]
+    pub fn remove<C: Component>(&mut self, entity: EntityId) {
+        self.send(Remove::<C>::new(entity))
+    }
+
+    #[track_caller]
+    pub fn despawn(&mut self, entity: EntityId) {
+        self.send(Despawn(entity))
+    }
+
+    #[track_caller]
+    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
+        self.send(Call::new(system, event))
+    }
 }
 
 impl<T: EventSet> SystemParam for Sender<'_, T> {
@@ -900,7 +947,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
+        system_info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -1025,7 +1072,7 @@ unsafe impl<C: Component> Event for Insert<C> {
 #[repr(transparent)]
 pub struct Remove<C> {
     pub entity: EntityId,
-    _marker: PhantomData<fn(C)>,
+    _marker: PhantomData<fn() -> C>,
 }
 
 impl<C> Remove<C> {
@@ -1047,33 +1094,62 @@ unsafe impl<C: Component> Event for Remove<C> {
     }
 }
 
+/// An [`Event`] which signals the creation of an entity.
+///
+/// Note that the contained [`EntityId`] may or may not refer to a live entity
+/// at the time the event is sent.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Spawn(pub EntityId);
 
 unsafe impl Event for Spawn {
     const TARGET_OFFSET: Option<usize> = None;
 
-    fn init(world: &mut World) -> EventKind {
-        let _ = world;
+    // TODO: const MUTABLE: bool = false;
+
+    fn init(_world: &mut World) -> EventKind {
         EventKind::Spawn
     }
 }
 
+/// An [`Event`] which removes an entity from the [`World`].
+///
+/// `Despawn` has no effect if the target entity does not exist or the event is
+/// consumed before it finishes broadcasting. All components of the target
+/// entity are dropped.
+///
+/// # Examples
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// let mut world = World::new();
+///
+/// let id = world.spawn();
+///
+/// assert!(world.entities().contains(id));
+///
+/// world.add_system(|r: Receiver<Despawn, ()>| {
+///     println!("{:?} is about to despawn!", r.event.0);
+/// });
+///
+/// world.send(Despawn(id));
+///
+/// assert!(!world.entities().contains(id));
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Despawn(pub EntityId);
 
 unsafe impl Event for Despawn {
     const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
 
-    fn init(world: &mut World) -> EventKind {
-        let _ = world;
+    fn init(_world: &mut World) -> EventKind {
         EventKind::Despawn
     }
 }
 
 /// An [`Event`] which sends an event to a specific system.
 ///
-/// `Call` allows users to bypass the usual event propagation behavior in order
+/// `Call` allows users to bypass the usual event broadcasting behavior in order
 /// to send an event to exactly one system, identified by a [`SystemId`] value.
 /// Here are a few scenarios where this could be useful:
 /// - A function-like system needs to "return" a value to a "caller".
@@ -1083,8 +1159,8 @@ unsafe impl Event for Despawn {
 /// - Interacting with code outside the user's control in a hacky way.
 ///
 /// Note that `Call<E>` is itself an event which can be listened for and
-/// intercepted as usual. The inner event `E` is only sent once `Call<E>` has
-/// finished propagating without being intercepted.
+/// consumed as usual. The inner event `E` is only sent once `Call<E>` has
+/// finished broadcasting without being consumed.
 ///
 /// # Examples
 ///

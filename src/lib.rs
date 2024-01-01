@@ -38,7 +38,7 @@ pub mod prelude {
         AddComponent, AddEvent, AddSystem, Call, Despawn, Event, EventId, EventMut, Insert,
         Receiver, Remove, Sender, Spawn,
     };
-    pub use crate::fetch::{FetchError, Fetcher};
+    pub use crate::fetch::{FetchError, FetchOne, Fetcher, TryFetchOne};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::system::{IntoSystem, SystemId};
     pub use crate::world::World;
@@ -49,7 +49,7 @@ const _: () = assert!(
     "unsupported target"
 );
 
-/// Drop function for some erased type.
+/// Drop function for some erased (and sized) type.
 ///
 /// In order to be safe to call, the input pointer must be correctly aligned and
 /// point to an initialized value of the erased type. The pointed-to memory
@@ -58,3 +58,14 @@ const _: () = assert!(
 /// If the function pointer is `None`, then the erased type is considered
 /// trivially droppable and no destructor needs to run.
 type DropFn = Option<unsafe fn(core::ptr::NonNull<u8>)>;
+
+const fn drop_fn_of<T>() -> DropFn {
+    use core::mem::needs_drop;
+    use core::ptr::drop_in_place;
+
+    if needs_drop::<T>() {
+        Some(|ptr| unsafe { drop_in_place(ptr.cast::<T>().as_ptr()) })
+    } else {
+        None
+    }
+}

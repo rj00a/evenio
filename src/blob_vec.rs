@@ -248,15 +248,10 @@ mod tests {
     use std::{mem, ptr};
 
     use super::*;
+    use crate::drop_fn_of;
 
     fn new_erased_vec<T>() -> BlobVec {
-        unsafe {
-            BlobVec::new(
-                Layout::new::<T>(),
-                mem::needs_drop::<T>()
-                    .then_some(|ptr| ptr::drop_in_place(ptr.cast::<T>().as_ptr())),
-            )
-        }
+        unsafe { BlobVec::new(Layout::new::<T>(), drop_fn_of::<T>()) }
     }
 
     #[test]

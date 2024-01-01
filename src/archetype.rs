@@ -12,10 +12,14 @@ use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
-use crate::event::{EntityEventIdx, EventIdx};
+use crate::event::{EntityEventIdx, EventIdx, EventPtr};
+use crate::prelude::World;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
-use crate::system::{SystemInfo, SystemInfoPtr, SystemList, Systems};
+use crate::system::{
+    Config, InitError, SystemInfo, SystemInfoPtr, SystemList, SystemParam, Systems,
+};
+use crate::world::UnsafeWorldCell;
 
 #[derive(Debug)]
 pub struct Archetypes {
@@ -375,6 +379,25 @@ impl Archetypes {
     }
 }
 
+impl SystemParam for &'_ Archetypes {
+    type State = ();
+
+    type Item<'a> = &'a Archetypes;
+
+    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        world.archetypes()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ArchetypeIdx(pub u32);
 
@@ -503,6 +526,7 @@ impl Archetype {
 
     pub fn entity_count(&self) -> u32 {
         debug_assert!(self.entity_ids.len() <= u32::MAX as usize);
+        // This doesn't truncate because entity indices are less than u32::MAX.
         self.entity_ids.len() as u32
     }
 
@@ -517,6 +541,10 @@ impl Archetype {
             .ok()?;
 
         Some(unsafe { self.columns.get_debug_checked(idx) })
+    }
+
+    pub fn entity_id_data(&self) -> NonNull<EntityId> {
+        unsafe { NonNull::new(self.entity_ids.as_ptr().cast_mut()).unwrap_debug_checked() }
     }
 
     /// Would the columns of this archetype reallocate if an entity were added

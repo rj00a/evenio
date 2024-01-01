@@ -11,13 +11,14 @@ use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInf
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    AddComponent, AddEvent, AddSystem, Event, EventDescriptor, EventId, EventIdx, EventInfo,
-    EventKind, EventPtr, EventQueue, Events, Spawn,
+    AddComponent, AddEvent, AddSystem, Call, Despawn, Event, EventDescriptor, EventId, EventIdx,
+    EventInfo, EventKind, EventPtr, EventQueue, Events, Insert, Remove, Spawn,
 };
+use crate::query::Query;
 use crate::system::{
     Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList, Systems,
 };
-use crate::DropFn;
+use crate::{drop_fn_of, DropFn};
 
 #[derive(Debug)]
 pub struct World {
@@ -75,11 +76,39 @@ impl World {
         self.flush_event_queue();
     }
 
+    /// Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.spawn();
+    ///
+    /// assert!(world.entities().contains(id));
+    /// ```
     pub fn spawn(&mut self) -> EntityId {
         let id = self.reserved_entities.reserve(&self.entities);
         self.send(Spawn(id));
         id
     }
+
+    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
+        self.send(Insert::new(entity, component))
+    }
+
+    pub fn remove<C: Component>(&mut self, entity: EntityId) {
+        self.send(Remove::<C>::new(entity))
+    }
+
+    pub fn despawn(&mut self, entity: EntityId) {
+        self.send(Despawn(entity))
+    }
+
+    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
+        self.send(Call::new(system, event))
+    }
+
+    pub fn get<Q: Query>(&mut self) {}
 
     /// # Examples
     ///
@@ -168,8 +197,7 @@ impl World {
             name: any::type_name::<C>().into(),
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
-            drop: mem::needs_drop::<C>()
-                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<C>()) }),
+            drop: drop_fn_of::<C>(),
         };
 
         unsafe { self.add_component_with_descriptor(desc) }
@@ -214,8 +242,7 @@ impl World {
             target_offset: E::TARGET_OFFSET,
             kind: E::init(self),
             layout: Layout::new::<E>(),
-            drop: mem::needs_drop::<E>()
-                .then_some(|ptr| unsafe { ptr::drop_in_place(ptr.as_ptr().cast::<E>()) }),
+            drop: drop_fn_of::<E>(),
         };
 
         unsafe { self.add_event_with_descriptor(desc) }
@@ -339,7 +366,7 @@ impl World {
 
                         static EMPTY: SystemList = SystemList::new();
 
-                        // Return an empty system instead of continuing in case this event is
+                        // Return an empty system list instead of continuing in case this event is
                         // special.
                         arch.system_list_for(idx).unwrap_or(&EMPTY)
                     }
@@ -457,7 +484,7 @@ impl World {
                             .reserved_entities
                             .flush(&mut world.entities, |id| world.archetypes.spawn(id));
 
-                        let entity_id = unsafe { *event.cast::<EntityId>() };
+                        let entity_id = unsafe { *event.cast::<Despawn>() }.0;
 
                         world
                             .archetypes
@@ -598,6 +625,18 @@ impl<'a> UnsafeWorldCell<'a> {
     pub fn archetypes(self) -> &'a Archetypes {
         unsafe { &(*self.world).archetypes }
     }
+
+    pub fn events(self) -> &'a Events {
+        unsafe { &(*self.world).events }
+    }
+
+    pub fn world(self) -> &'a World {
+        unsafe { &*self.world }
+    }
+
+    pub unsafe fn world_mut(self) -> &'a mut World {
+        &mut *self.world
+    }
 }
 
 #[cfg(test)]
@@ -710,5 +749,14 @@ mod tests {
         assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
         assert_eq!(Arc::strong_count(&arc), 1);
+    }
+
+    #[test]
+    fn unsafe_world_cell_access() {
+        let mut world = World::new();
+
+        let cell = world.unsafe_cell_mut();
+
+        todo!()
     }
 }

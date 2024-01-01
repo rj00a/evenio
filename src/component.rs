@@ -4,13 +4,16 @@ use core::any::TypeId;
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::ops::Index;
-use std::ptr::NonNull;
 
 pub use evenio_macros::Component;
 
 use crate::debug_checked::UnwrapDebugChecked;
+use crate::event::EventPtr;
+use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
+use crate::system::{Config, InitError, SystemInfo, SystemParam};
+use crate::world::UnsafeWorldCell;
 use crate::DropFn;
 
 #[derive(Debug)]
@@ -72,6 +75,10 @@ impl Components {
         let id = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(id).unwrap_debug_checked() })
     }
+
+    pub fn contains(&self, id: ComponentId) -> bool {
+        self.get(id).is_some()
+    }
 }
 
 impl Index<ComponentId> for Components {
@@ -107,6 +114,25 @@ impl Index<TypeId> for Components {
         } else {
             panic!("no such component with type ID of {index:?} exists")
         }
+    }
+}
+
+impl SystemParam for &'_ Components {
+    type State = ();
+
+    type Item<'a> = &'a Components;
+
+    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        world.components()
     }
 }
 
@@ -148,11 +174,9 @@ pub trait Component: Send + Sync + 'static {
     /// ```compile_fail
     /// use evenio::prelude::*;
     ///
+    /// #[derive(Component)]
+    /// #[mutable = false]
     /// struct MyComponent;
-    ///
-    /// impl Component for MyComponent {
-    ///     const MUTABLE: bool = false;
-    /// }
     ///
     /// fn my_system(_: Fetcher<&mut MyComponent>) {}
     ///

@@ -131,7 +131,7 @@ pub(crate) unsafe fn unreachable_debug_checked() -> ! {
     unreachable!();
 
     #[cfg(not(debug_assertions))]
-    std::hint::unreachable_unchecked();
+    core::hint::unreachable_unchecked();
 }
 
 #[inline]

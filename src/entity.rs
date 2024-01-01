@@ -2,7 +2,11 @@ use core::num::NonZeroU32;
 use std::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
+use crate::event::EventPtr;
+use crate::prelude::World;
 use crate::slot_map::{Key, NextKeyIter, SlotMap};
+use crate::system::{Config, InitError, SystemInfo, SystemParam};
+use crate::world::UnsafeWorldCell;
 
 #[derive(Debug)]
 pub struct Entities {
@@ -68,6 +72,25 @@ impl Index<EntityIdx> for Entities {
         } else {
             panic!("no such entity with index of {index:?} exists")
         }
+    }
+}
+
+impl SystemParam for &'_ Entities {
+    type State = ();
+
+    type Item<'a> = &'a Entities;
+
+    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+        Ok(())
+    }
+
+    unsafe fn get_param<'a>(
+        _state: &'a mut Self::State,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        world.entities()
     }
 }
 

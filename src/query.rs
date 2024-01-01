@@ -12,12 +12,13 @@ use crate::entity::EntityId;
 use crate::system::{Config, InitError};
 use crate::world::World;
 pub unsafe trait Query {
-    /// The item returned by this query. This is usually same type as `Self`,
-    /// but with a transformed lifetime.
+    /// The item returned by this query. This is usually the same type as
+    /// `Self`, but with a modified lifetime.
     type Item<'a>;
     /// Per-archetype state.
-    type Fetch: Send + Sync + fmt::Debug + 'static;
-    /// Cached data for fetch initialization. This is stored in [`QueryState`].
+    type ArchState: Send + Sync + fmt::Debug + 'static;
+    /// Cached data for fetch initialization. This is stored in
+    /// [`FetcherState`].
     type State: Send + Sync + fmt::Debug + 'static;
 
     fn init(
@@ -25,19 +26,19 @@ pub unsafe trait Query {
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError>;
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch>;
+    fn new_state(world: &mut World) -> Self::State;
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a>;
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState>;
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
-pub trait ReadOnlyQuery: Query {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a>;
-}
+pub unsafe trait ReadOnlyQuery: Query {}
 
 unsafe impl<C: Component> Query for &'_ C {
     type Item<'a> = &'a C;
 
-    type Fetch = ColumnPtr<C>;
+    type ArchState = ColumnPtr<C>;
 
     type State = ComponentId;
 
@@ -45,33 +46,32 @@ unsafe impl<C: Component> Query for &'_ C {
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let id = world.add_component::<C>();
+        let id = Self::new_state(world);
         let expr = ComponentAccessExpr::with(id.index(), Access::Read);
 
         Ok((expr, id))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        archetype
-            .column_of(state.index())
+    fn new_state(world: &mut World) -> Self::State {
+        world.add_component::<C>()
+    }
+
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        arch.column_of(state.index())
             .map(|c| ColumnPtr(c.data().cast()))
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        Self::fetch(fetch, row)
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        &*state.0.as_ptr().cast_const().add(row.0 as usize)
     }
 }
 
-impl<C: Component> ReadOnlyQuery for &'_ C {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        &*fetch.0.as_ptr().cast_const().add(row.0 as usize)
-    }
-}
+unsafe impl<C: Component> ReadOnlyQuery for &'_ C {}
 
 unsafe impl<C: Component> Query for &'_ mut C {
     type Item<'a> = &'a mut C;
 
-    type Fetch = ColumnPtr<C>;
+    type ArchState = ColumnPtr<C>;
 
     type State = ComponentId;
 
@@ -91,18 +91,22 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
         let _ = AssertMutable::<C>::ASSERTION;
 
-        let id = world.add_component::<C>();
+        let id = Self::new_state(world);
         let expr = ComponentAccessExpr::with(id.index(), Access::ReadWrite);
 
         Ok((expr, id))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        <&C>::init_fetch(archetype, state)
+    fn new_state(world: &mut World) -> Self::State {
+        world.add_component::<C>()
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        &mut *fetch.0.as_ptr().add(row.0 as usize)
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        <&C>::new_arch_state(arch, state)
+    }
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        &mut *state.0.as_ptr().add(row.0 as usize)
     }
 }
 
@@ -111,7 +115,7 @@ macro_rules! impl_query_tuple {
         unsafe impl<$($Q: Query),*> Query for ($($Q,)*) {
             type Item<'a> = ($($Q::Item<'a>,)*);
 
-            type Fetch = ($($Q::Fetch,)*);
+            type ArchState = ($($Q::ArchState,)*);
 
             type State = ($($Q::State,)*);
 
@@ -138,25 +142,23 @@ macro_rules! impl_query_tuple {
                 Ok((res, ($($q,)*)))
             }
 
-            fn init_fetch(archetype: &Archetype, ($($q,)*): &mut Self::State) -> Option<Self::Fetch> {
+            fn new_state(world: &mut World) -> Self::State {
+                (
+                    $(
+                        $Q::new_state(world),
+                    )*
+                )
+            }
+
+            fn new_arch_state(arch: &Archetype, ($($q,)*): &mut Self::State) -> Option<Self::ArchState> {
                 Some((
                     $(
-                        $Q::init_fetch(archetype, $q)?,
+                        $Q::new_arch_state(arch, $q)?,
                     )*
                 ))
             }
 
-            unsafe fn fetch_mut<'a>(($($q,)*): &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-                (
-                    $(
-                        $Q::fetch_mut($q, row),
-                    )*
-                )
-            }
-        }
-
-        impl<$($Q: ReadOnlyQuery),*> ReadOnlyQuery for ($($Q,)*) {
-            unsafe fn fetch<'a>(($($q,)*): &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
+            unsafe fn fetch<'a>(($($q,)*): &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
                 (
                     $(
                         $Q::fetch($q, row),
@@ -164,6 +166,8 @@ macro_rules! impl_query_tuple {
                 )
             }
         }
+
+        unsafe impl<$($Q: ReadOnlyQuery),*> ReadOnlyQuery for ($($Q,)*) {}
     }
 }
 
@@ -173,7 +177,7 @@ all_tuples!(impl_query_tuple, 0, 12, Q, q);
 unsafe impl<Q: Query> Query for Option<Q> {
     type Item<'a> = Option<Q::Item<'a>>;
 
-    type Fetch = Option<Q::Fetch>;
+    type ArchState = Option<Q::ArchState>;
 
     type State = Q::State;
 
@@ -188,20 +192,20 @@ unsafe impl<Q: Query> Query for Option<Q> {
         Ok((expr, state))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        Some(Q::init_fetch(archetype, state))
+    fn new_state(world: &mut World) -> Self::State {
+        Q::new_state(world)
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch.as_mut().map(|f| Q::fetch_mut(f, row))
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        Some(Q::new_arch_state(arch, state))
+    }
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state.as_ref().map(|f| Q::fetch(f, row))
     }
 }
 
-impl<Q: ReadOnlyQuery> ReadOnlyQuery for Option<Q> {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch.as_ref().map(|f| Q::fetch(f, row))
-    }
-}
+unsafe impl<Q: ReadOnlyQuery> ReadOnlyQuery for Option<Q> {}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Or<L, R> {
@@ -247,7 +251,7 @@ where
 {
     type Item<'a> = Or<L::Item<'a>, R::Item<'a>>;
 
-    type Fetch = Or<L::Fetch, R::Fetch>;
+    type ArchState = Or<L::ArchState, R::ArchState>;
 
     type State = (L::State, R::State);
 
@@ -272,13 +276,17 @@ where
         Ok((expr, (left_state, right_state)))
     }
 
-    fn init_fetch(
-        archetype: &Archetype,
+    fn new_state(world: &mut World) -> Self::State {
+        (L::new_state(world), R::new_state(world))
+    }
+
+    fn new_arch_state(
+        arch: &Archetype,
         (left_state, right_state): &mut Self::State,
-    ) -> Option<Self::Fetch> {
+    ) -> Option<Self::ArchState> {
         match (
-            L::init_fetch(archetype, left_state),
-            R::init_fetch(archetype, right_state),
+            L::new_arch_state(arch, left_state),
+            R::new_arch_state(arch, right_state),
         ) {
             (None, None) => None,
             (None, Some(r)) => Some(Or::Right(r)),
@@ -287,23 +295,18 @@ where
         }
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch
-            .as_mut()
-            .map(|l| L::fetch_mut(l, row), |r| R::fetch_mut(r, row))
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state
+            .as_ref()
+            .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
     }
 }
 
-impl<L, R> ReadOnlyQuery for Or<L, R>
+unsafe impl<L, R> ReadOnlyQuery for Or<L, R>
 where
     L: ReadOnlyQuery,
     R: ReadOnlyQuery,
 {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch
-            .as_ref()
-            .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -346,7 +349,7 @@ where
 {
     type Item<'a> = Xor<L::Item<'a>, R::Item<'a>>;
 
-    type Fetch = Xor<L::Fetch, R::Fetch>;
+    type ArchState = Xor<L::ArchState, R::ArchState>;
 
     type State = (L::State, R::State);
 
@@ -360,13 +363,17 @@ where
         Ok((left_expr.xor(&right_expr), (left_state, right_state)))
     }
 
-    fn init_fetch(
-        archetype: &Archetype,
+    fn new_state(world: &mut World) -> Self::State {
+        (L::new_state(world), R::new_state(world))
+    }
+
+    fn new_arch_state(
+        arch: &Archetype,
         (left_state, right_state): &mut Self::State,
-    ) -> Option<Self::Fetch> {
+    ) -> Option<Self::ArchState> {
         match (
-            L::init_fetch(archetype, left_state),
-            R::init_fetch(archetype, right_state),
+            L::new_arch_state(arch, left_state),
+            R::new_arch_state(arch, right_state),
         ) {
             (None, None) => None,
             (None, Some(r)) => Some(Xor::Right(r)),
@@ -375,26 +382,21 @@ where
         }
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch
-            .as_mut()
-            .map(|l| L::fetch_mut(l, row), |r| R::fetch_mut(r, row))
-    }
-}
-
-impl<L, R> ReadOnlyQuery for Xor<L, R>
-where
-    L: ReadOnlyQuery,
-    R: ReadOnlyQuery,
-{
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        fetch
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state
             .as_ref()
             .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
     }
 }
 
-pub struct Not<Q>(PhantomData<fn(Q)>);
+unsafe impl<L, R> ReadOnlyQuery for Xor<L, R>
+where
+    L: ReadOnlyQuery,
+    R: ReadOnlyQuery,
+{
+}
+
+pub struct Not<Q>(PhantomData<fn() -> Q>);
 
 impl<Q> Not<Q> {
     pub const fn new() -> Self {
@@ -425,7 +427,7 @@ impl<Q> fmt::Debug for Not<Q> {
 unsafe impl<Q: Query> Query for Not<Q> {
     type Item<'a> = Self;
 
-    type Fetch = ();
+    type ArchState = ();
 
     type State = Q::State;
 
@@ -438,25 +440,25 @@ unsafe impl<Q: Query> Query for Not<Q> {
         Ok((expr.not(), state))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        match Q::init_fetch(archetype, state) {
+    fn new_state(world: &mut World) -> Self::State {
+        Q::new_state(world)
+    }
+
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        match Q::new_arch_state(arch, state) {
             Some(_) => None,
             None => Some(()),
         }
     }
 
-    unsafe fn fetch_mut<'a>(_fetch: &mut Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         Not::new()
     }
 }
 
-impl<Q: Query> ReadOnlyQuery for Not<Q> {
-    unsafe fn fetch<'a>(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
-        Not::new()
-    }
-}
+unsafe impl<Q: Query> ReadOnlyQuery for Not<Q> {}
 
-pub struct With<Q>(PhantomData<fn(Q)>);
+pub struct With<Q>(PhantomData<fn() -> Q>);
 
 impl<Q> With<Q> {
     pub const fn new() -> Self {
@@ -487,7 +489,7 @@ impl<Q> fmt::Debug for With<Q> {
 unsafe impl<Q: Query> Query for With<Q> {
     type Item<'a> = Self;
 
-    type Fetch = ();
+    type ArchState = ();
 
     type State = Q::State;
 
@@ -502,24 +504,24 @@ unsafe impl<Q: Query> Query for With<Q> {
         Ok((expr, state))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        Q::init_fetch(archetype, state).map(|_| ())
+    fn new_state(world: &mut World) -> Self::State {
+        Q::new_state(world)
     }
 
-    unsafe fn fetch_mut<'a>(_fetch: &mut Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        Q::new_arch_state(arch, state).map(|_| ())
+    }
+
+    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         With::new()
     }
 }
 
-impl<Q: Query> ReadOnlyQuery for With<Q> {
-    unsafe fn fetch<'a>(_fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
-        With::new()
-    }
-}
+unsafe impl<Q: Query> ReadOnlyQuery for With<Q> {}
 
 pub struct Has<Q> {
     has: bool,
-    _marker: PhantomData<fn(Q)>,
+    _marker: PhantomData<fn() -> Q>,
 }
 
 impl<Q> Has<Q> {
@@ -564,7 +566,7 @@ impl<Q> fmt::Debug for Has<Q> {
 unsafe impl<Q: Query> Query for Has<Q> {
     type Item<'a> = Self;
 
-    type Fetch = bool;
+    type ArchState = bool;
 
     type State = Q::State;
 
@@ -577,25 +579,25 @@ unsafe impl<Q: Query> Query for Has<Q> {
         Ok((ComponentAccessExpr::new(), state))
     }
 
-    fn init_fetch(archetype: &Archetype, state: &mut Self::State) -> Option<Self::Fetch> {
-        Some(Q::init_fetch(archetype, state).is_some())
+    fn new_state(world: &mut World) -> Self::State {
+        Q::new_state(world)
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        Self::fetch(fetch, row)
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        Some(Q::new_arch_state(arch, state).is_some())
+    }
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        Self::fetch(state, row)
     }
 }
 
-impl<Q: Query> ReadOnlyQuery for Has<Q> {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, _row: ArchetypeRow) -> Self::Item<'a> {
-        Has::new(*fetch)
-    }
-}
+unsafe impl<Q: Query> ReadOnlyQuery for Has<Q> {}
 
 unsafe impl Query for EntityId {
     type Item<'a> = Self;
 
-    type Fetch = ColumnPtr<EntityId>;
+    type ArchState = ColumnPtr<EntityId>;
 
     type State = ();
 
@@ -606,23 +608,20 @@ unsafe impl Query for EntityId {
         Ok((ComponentAccessExpr::new(), ()))
     }
 
-    fn init_fetch(archetype: &Archetype, (): &mut Self::State) -> Option<Self::Fetch> {
-        todo!()
-        /*
-        Some(ColumnPtr(archetype.entity_ids()))
-        */
+    fn new_state(_world: &mut World) -> Self::State {
+        ()
     }
 
-    unsafe fn fetch_mut<'a>(fetch: &mut Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        *fetch.0.as_ptr().add(row.0 as usize)
+    fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
+        Some(ColumnPtr(arch.entity_id_data()))
+    }
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        *state.0.as_ptr().add(row.0 as usize)
     }
 }
 
-impl ReadOnlyQuery for EntityId {
-    unsafe fn fetch<'a>(fetch: &Self::Fetch, row: ArchetypeRow) -> Self::Item<'a> {
-        *fetch.0.as_ptr().cast_const().add(row.0 as usize)
-    }
-}
+unsafe impl ReadOnlyQuery for EntityId {}
 
 pub struct ColumnPtr<T>(NonNull<T>);
 
@@ -636,7 +635,7 @@ impl<T> Copy for ColumnPtr<T> {}
 
 impl<T> fmt::Debug for ColumnPtr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Column").field(&self.0).finish()
+        f.debug_tuple("ColumnPtr").field(&self.0).finish()
     }
 }
 

@@ -192,7 +192,7 @@ pub(crate) struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
-    _marker: PhantomData<fn(T)>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {
