@@ -24,17 +24,9 @@ impl<T> Ands<T> {
 }
 
 impl<T> BoolExpr<T> {
-    /// Returns an access expression representing `false` or `0`. This is the
-    /// identity element for `∨`.
-    pub fn zero() -> Self {
-        Self { ands: vec![] }
-    }
-
-    /// Returns a new expression representing `true` or `1`. This is the
-    /// identity element for `∧`.
-    pub fn one() -> Self {
+    pub fn new(b: bool) -> Self {
         Self {
-            ands: vec![Ands::new()],
+            ands: if b { vec![Ands::new()] } else { vec![] },
         }
     }
 
@@ -158,11 +150,11 @@ impl<T> BoolExpr<T> {
     where
         T: SparseIndex,
     {
-        let mut res = Self::one();
+        let mut res = Self::new(true);
 
         // Apply De Morgan's laws.
         for mut ands in mem::take(&mut self.ands) {
-            let mut ors = Self::zero();
+            let mut ors = Self::new(false);
 
             mem::swap(&mut ands.vars, &mut ands.negated_vars);
 

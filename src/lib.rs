@@ -38,7 +38,7 @@ pub mod prelude {
         AddComponent, AddEvent, AddSystem, Call, Despawn, Event, EventId, EventMut, Insert,
         Receiver, Remove, Sender, Spawn,
     };
-    pub use crate::fetch::{FetchError, FetchOne, Fetcher, TryFetchOne};
+    pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::system::{IntoSystem, SystemId};
     pub use crate::world::World;

@@ -10,24 +10,24 @@ use crate::world::UnsafeWorldCell;
 
 #[derive(Debug)]
 pub struct Entities {
-    sm: SlotMap<EntityLocation>,
+    locs: SlotMap<EntityLocation>,
 }
 
 impl Entities {
     pub(crate) fn new() -> Self {
-        Self { sm: SlotMap::new() }
+        Self { locs: SlotMap::new() }
     }
 
     pub fn get(&self, id: EntityId) -> Option<EntityLocation> {
-        self.sm.get(id.0).copied()
+        self.locs.get(id.0).copied()
     }
 
     pub(crate) fn get_mut(&mut self, id: EntityId) -> Option<&mut EntityLocation> {
-        self.sm.get_mut(id.0)
+        self.locs.get_mut(id.0)
     }
 
     pub fn get_by_index(&self, idx: EntityIdx) -> Option<EntityLocation> {
-        self.sm.get_by_index(idx.0).map(|(_, v)| *v)
+        self.locs.get_by_index(idx.0).map(|(_, v)| *v)
     }
 
     pub fn contains(&self, id: EntityId) -> bool {
@@ -35,7 +35,7 @@ impl Entities {
     }
 
     fn add_with(&mut self, f: impl FnOnce(EntityId) -> EntityLocation) -> EntityId {
-        if let Some(k) = self.sm.insert_with(|k| f(EntityId(k))) {
+        if let Some(k) = self.locs.insert_with(|k| f(EntityId(k))) {
             EntityId(k)
         } else {
             panic!("too many entities")
@@ -43,11 +43,11 @@ impl Entities {
     }
 
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
-        self.sm.remove(id.0)
+        self.locs.remove(id.0)
     }
 
     pub fn len(&self) -> u32 {
-        self.sm.len()
+        self.locs.len()
     }
 }
 
@@ -55,7 +55,7 @@ impl Index<EntityId> for Entities {
     type Output = EntityLocation;
 
     fn index(&self, index: EntityId) -> &Self::Output {
-        if let Some(loc) = self.sm.get(index.0) {
+        if let Some(loc) = self.locs.get(index.0) {
             loc
         } else {
             panic!("no such entity with ID of {index:?} exists")
@@ -67,7 +67,7 @@ impl Index<EntityIdx> for Entities {
     type Output = EntityLocation;
 
     fn index(&self, index: EntityIdx) -> &Self::Output {
-        if let Some(loc) = self.sm.get_by_index(index.0).map(|(_, v)| v) {
+        if let Some(loc) = self.locs.get_by_index(index.0).map(|(_, v)| v) {
             loc
         } else {
             panic!("no such entity with index of {index:?} exists")
@@ -92,6 +92,10 @@ impl SystemParam for &'_ Entities {
     ) -> Self::Item<'a> {
         world.entities()
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &crate::archetype::Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &crate::archetype::Archetype) {}
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -140,7 +144,7 @@ impl ReservedEntities {
     }
 
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {
-        if let Some(k) = self.iter.next(&entities.sm) {
+        if let Some(k) = self.iter.next(&entities.locs) {
             self.count += 1;
             EntityId(k)
         } else {
@@ -158,6 +162,6 @@ impl ReservedEntities {
         }
 
         self.count = 0;
-        self.iter = entities.sm.next_key_iter();
+        self.iter = entities.locs.next_key_iter();
     }
 }

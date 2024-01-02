@@ -18,14 +18,14 @@ use crate::DropFn;
 
 #[derive(Debug)]
 pub struct Components {
-    sm: SlotMap<ComponentInfo>,
+    infos: SlotMap<ComponentInfo>,
     by_type_id: BTreeMap<TypeId, ComponentId>,
 }
 
 impl Components {
     pub(crate) fn new() -> Self {
         Self {
-            sm: SlotMap::new(),
+            infos: SlotMap::new(),
             by_type_id: BTreeMap::new(),
         }
     }
@@ -34,7 +34,7 @@ impl Components {
         if let Some(type_id) = desc.type_id {
             return match self.by_type_id.entry(type_id) {
                 Entry::Vacant(v) => {
-                    let Some(k) = self.sm.insert_with(|k| ComponentInfo {
+                    let Some(k) = self.infos.insert_with(|k| ComponentInfo {
                         name: desc.name,
                         id: ComponentId(k),
                         type_id: desc.type_id,
@@ -50,7 +50,7 @@ impl Components {
             };
         }
 
-        let Some(k) = self.sm.insert_with(|k| ComponentInfo {
+        let Some(k) = self.infos.insert_with(|k| ComponentInfo {
             name: desc.name,
             id: ComponentId(k),
             type_id: desc.type_id,
@@ -64,11 +64,11 @@ impl Components {
     }
 
     pub fn get(&self, id: ComponentId) -> Option<&ComponentInfo> {
-        self.sm.get(id.0)
+        self.infos.get(id.0)
     }
 
     pub fn get_by_index(&self, idx: ComponentIdx) -> Option<&ComponentInfo> {
-        self.sm.get_by_index(idx.0).map(|(_, v)| v)
+        self.infos.get_by_index(idx.0).map(|(_, v)| v)
     }
 
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
@@ -134,6 +134,10 @@ impl SystemParam for &'_ Components {
     ) -> Self::Item<'a> {
         world.components()
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 }
 
 #[derive(Debug)]

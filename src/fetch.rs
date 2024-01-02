@@ -6,9 +6,10 @@ use std::ptr::NonNull;
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
 use crate::debug_checked::{assume_debug_checked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId};
+use crate::event::EventPtr;
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
-use crate::system::{Config, InitError, SystemParam};
+use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
 pub struct FetcherState<Q: Query> {
@@ -29,7 +30,7 @@ impl<Q: Query> FetcherState<Q> {
 
         let res = FetcherState::new(state);
 
-        match expr.and(&config.component_access) {
+        match expr.or(&config.component_access) {
             Ok(new_component_access) => config.component_access = new_component_access,
             Err(_) => {
                 return Err(InitError(
@@ -51,19 +52,19 @@ impl<Q: Query> FetcherState<Q> {
         &self,
         entities: &Entities,
         entity: EntityId,
-    ) -> Result<Q::Item<'_>, FetchError>
+    ) -> Result<Q::Item<'_>, GetError>
     where
         Q: ReadOnlyQuery,
     {
         let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
+            return Err(GetError::NoSuchEntity(entity));
         };
 
         // Eliminate a panicking branch.
         assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
 
         let Some(state) = self.map.get(loc.archetype) else {
-            return Err(FetchError::QueryDoesNotMatch(entity));
+            return Err(GetError::QueryDoesNotMatch(entity));
         };
 
         Ok(Q::fetch(state, loc.row))
@@ -74,9 +75,9 @@ impl<Q: Query> FetcherState<Q> {
         &mut self,
         entities: &Entities,
         entity: EntityId,
-    ) -> Result<Q::Item<'_>, FetchError> {
+    ) -> Result<Q::Item<'_>, GetError> {
         let Some(loc) = entities.get(entity) else {
-            return Err(FetchError::NoSuchEntity(entity));
+            return Err(GetError::NoSuchEntity(entity));
         };
 
         // Eliminate a panicking branch.
@@ -86,7 +87,7 @@ impl<Q: Query> FetcherState<Q> {
         // bounds, and then `assume` it. That would eliminate a bounds check.
 
         let Some(state) = self.map.get_mut(loc.archetype) else {
-            return Err(FetchError::QueryDoesNotMatch(entity));
+            return Err(GetError::QueryDoesNotMatch(entity));
         };
 
         Ok(Q::fetch(state, loc.row))
@@ -159,7 +160,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     }
 
     #[inline]
-    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, FetchError>
+    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError>
     where
         Q: ReadOnlyQuery,
     {
@@ -167,7 +168,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     }
 
     #[inline]
-    pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, FetchError> {
+    pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
         unsafe { self.state.get_mut(self.world.entities(), entity) }
     }
 
@@ -213,29 +214,38 @@ impl<'a, Q: Query> IntoIterator for &'a mut Fetcher<'_, Q> {
     }
 }
 
+impl<'a, Q: Query> fmt::Debug for Fetcher<'a, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Fetcher")
+            .field("state", &self.state)
+            .field("world", &self.world)
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FetchError {
+pub enum GetError {
     NoSuchEntity(EntityId),
     QueryDoesNotMatch(EntityId),
     AliasedMutability(EntityId),
 }
 
-impl fmt::Display for FetchError {
+impl fmt::Display for GetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FetchError::NoSuchEntity(id) => write!(f, "the entity {id:?} does not exist"),
-            FetchError::QueryDoesNotMatch(id) => {
-                write!(f, "the components of entity {id:?} do not match the query")
+            GetError::NoSuchEntity(id) => write!(f, "entity {id:?} does not exist"),
+            GetError::QueryDoesNotMatch(id) => {
+                write!(f, "entity {id:?} does not match the query")
             }
-            FetchError::AliasedMutability(id) => {
-                write!(f, "the entity {id:?} was requested mutably more than once")
+            GetError::AliasedMutability(id) => {
+                write!(f, "entity {id:?} was requested mutably more than once")
             }
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for FetchError {}
+impl std::error::Error for GetError {}
 
 impl<Q> SystemParam for Fetcher<'_, Q>
 where
@@ -251,8 +261,8 @@ where
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
-        event_ptr: crate::event::EventPtr<'a>,
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Fetcher { state, world }
@@ -268,12 +278,51 @@ where
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub struct FetchOne<'a, Q: Query>(pub Q::Item<'a>);
+pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
 
-impl<Q: Query + 'static> SystemParam for FetchOne<'_, Q> {
+impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     type State = FetcherState<Q>;
 
-    type Item<'a> = FetchOne<'a, Q>;
+    type Item<'a> = Single<'a, Q>;
+
+    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        FetcherState::init(world, config)
+    }
+
+    #[track_caller]
+    unsafe fn get_param<'a>(
+        state: &'a mut Self::State,
+        system_info: &'a SystemInfo,
+        event_ptr: EventPtr<'a>,
+        world: UnsafeWorldCell<'a>,
+    ) -> Self::Item<'a> {
+        match TrySingle::get_param(state, system_info, event_ptr, world) {
+            TrySingle(Ok(item)) => Single(item),
+            TrySingle(Err(e)) => {
+                panic!(
+                    "failed to fetch exactly one entity matching the query `{}`: {e}",
+                    any::type_name::<Q>()
+                )
+            }
+        }
+    }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.remove_archetype(arch)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
+
+impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
+    type State = FetcherState<Q>;
+
+    type Item<'a> = TrySingle<'a, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -281,17 +330,55 @@ impl<Q: Query + 'static> SystemParam for FetchOne<'_, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a crate::system::SystemInfo,
-        event_ptr: crate::event::EventPtr<'a>,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        todo!()
+        let mut it = state.iter_mut(world.archetypes());
+
+        let Some(item) = it.next() else {
+            return TrySingle(Err(SingleError::QueryDoesNotMatch));
+        };
+
+        if it.next().is_some() {
+            return TrySingle(Err(SingleError::MoreThanOneMatch));
+        }
+
+        TrySingle(Ok(item))
+    }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.refresh_archetype(arch)
+    }
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        state.refresh_archetype(arch)
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub struct TryFetchOne<'a, Q: Query>(pub Option<Q::Item<'a>>);
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum SingleError {
+    QueryDoesNotMatch,
+    MoreThanOneMatch,
+}
 
+impl fmt::Display for SingleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let msg = match self {
+            SingleError::QueryDoesNotMatch => "query does not match any entities",
+            SingleError::MoreThanOneMatch => "more than one entity matched the query",
+        };
+
+        write!(f, "{msg}")
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SingleError {}
+
+/// Iterator over entities matching the cached query `Q`.
+///
+/// Entities are visited in a deterministic but otherwise unspecified order.
 pub struct Iter<'a, Q: Query> {
     /// Pointer into the array of archetype states. This pointer moves forward
     /// until it reaches `state_last`.
@@ -329,6 +416,9 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
 
             self.row = ArchetypeRow(0);
             self.len = arch.entity_count();
+
+            // SAFETY: Fetcher state only contains nonempty archetypes.
+            unsafe { assume_debug_checked(self.len > 0) };
         }
 
         let state = unsafe { &*self.state.as_ptr().cast_const() };
@@ -401,6 +491,24 @@ impl<'a, Q: Query> fmt::Debug for Iter<'a, Q> {
 
 // TODO `Send` and `Sync` impls for `Iter`.
 
+#[track_caller]
+#[cold]
+pub(crate) fn fetch_one_no_entity_matches<Q: Query>() -> ! {
+    panic!(
+        "failed to fetch single entity: no entity matches the query `{}`",
+        any::type_name::<Q>()
+    )
+}
+
+#[track_caller]
+#[cold]
+pub(crate) fn fetch_one_more_than_one_entity_matches<Q: Query>() -> ! {
+    panic!(
+        "failed to fetch single entity: more than one entity matches the query `{}`",
+        any::type_name::<Q>()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -417,13 +525,13 @@ mod tests {
     struct E3;
 
     #[derive(Component, PartialEq, Eq, Debug)]
-    struct C1(i32);
+    struct C1(u32);
 
     #[derive(Component, PartialEq, Eq, Debug)]
-    struct C2(i32);
+    struct C2(u32);
 
     #[derive(Component, PartialEq, Eq, Debug)]
-    struct C3(i32);
+    struct C3(u32);
 
     #[test]
     fn random_access_cached() {
@@ -451,14 +559,14 @@ mod tests {
         world.add_system(|_: Receiver<E2>, f: Fetcher<&C1>| {
             assert_eq!(
                 f.get(EntityId::NULL),
-                Err(FetchError::NoSuchEntity(EntityId::NULL))
+                Err(GetError::NoSuchEntity(EntityId::NULL))
             );
         });
 
         world.send(E2);
 
         world.add_system(move |_: Receiver<E3>, f: Fetcher<&C2>| {
-            assert_eq!(f.get(e), Err(FetchError::QueryDoesNotMatch(e)))
+            assert_eq!(f.get(e), Err(GetError::QueryDoesNotMatch(e)))
         });
 
         world.send(E3);
@@ -470,7 +578,7 @@ mod tests {
 
         let mut set = BTreeSet::new();
 
-        for i in 0..100_i32 {
+        for i in 0..100_u32 {
             let e = world.spawn();
             world.insert(e, C1(i.pow(2)));
 
@@ -487,10 +595,114 @@ mod tests {
 
         world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             for c in f {
-                assert_eq!(set.take(&c.0), None);
+                assert!(set.remove(&c.0));
             }
 
             assert!(set.is_empty());
         });
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn iter_cached_len() {
+        let mut world = World::new();
+
+        let count = 100;
+
+        for i in 1..=count {
+            let e = world.spawn();
+            world.insert(e, C1(i));
+
+            if i % 2 == 0 {
+                world.insert(e, C2(i));
+            }
+
+            if i % 3 == 0 {
+                world.insert(e, C3(i));
+            }
+        }
+
+        world.add_system(
+            move |_: Receiver<E1>, f1: Fetcher<&C1>, f2: Fetcher<&C2>, f3: Fetcher<&C3>| {
+                dbg!(&f1);
+
+                assert_eq!(f1.iter().len(), count as usize);
+                assert_eq!(f2.iter().len(), count as usize / 2);
+                assert_eq!(f3.iter().len(), count as usize / 3);
+            },
+        );
+
+        // dbg!(world.archetypes());
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn single_param() {
+        let mut world = World::new();
+
+        {
+            let e = world.spawn();
+            world.insert(e, C1(123));
+        }
+
+        world.add_system(|_: Receiver<E1>, Single(&C1(n)): Single<&C1>| {
+            assert_eq!(n, 123);
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn single_param_panics_on_zero() {
+        let mut world = World::new();
+
+        world.add_system(|_: Receiver<E1>, _: Single<&C1>| {});
+
+        world.send(E1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn single_param_panics_on_many() {
+        let mut world = World::new();
+
+        {
+            let e = world.spawn();
+            world.insert(e, C1(123));
+            let e = world.spawn();
+            world.insert(e, C1(456));
+        }
+
+        world.add_system(|_: Receiver<E1>, _: Single<&C1>| {});
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn try_single_param() {
+        let mut world = World::new();
+
+        {
+            let e = world.spawn();
+            world.insert(e, C2(123));
+
+            let e = world.spawn();
+            world.insert(e, C3(123));
+            let e = world.spawn();
+            world.insert(e, C3(456));
+        }
+
+        world.add_system(
+            |_: Receiver<E1>, s1: TrySingle<&C1>, s2: TrySingle<&C2>, s3: TrySingle<&C3>| {
+                assert_eq!(s1.0, Err(SingleError::QueryDoesNotMatch));
+                assert_eq!(s2.0, Ok(&C2(123)));
+                assert_eq!(s3.0, Err(SingleError::MoreThanOneMatch));
+            },
+        );
+
+        world.send(E1);
     }
 }

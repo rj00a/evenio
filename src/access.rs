@@ -188,11 +188,9 @@ pub struct ComponentAccessExpr {
 }
 
 impl ComponentAccessExpr {
-    /// Create a new component access expression. The expr is initialized
-    /// matching all archetypes, but with access to no components.
-    pub fn new() -> Self {
+    pub fn new(b: bool) -> Self {
         Self {
-            expr: BoolExpr::one(),
+            expr: BoolExpr::new(b),
             access: AccessMap::new(),
         }
     }
@@ -258,12 +256,6 @@ impl ComponentAccessExpr {
         self.access.union_assign(&other.access);
         self.expr = self.expr.xor(&other.expr);
         self
-    }
-}
-
-impl Default for ComponentAccessExpr {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

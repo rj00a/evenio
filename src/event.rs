@@ -162,6 +162,10 @@ impl SystemParam for &'_ Events {
     ) -> Self::Item<'a> {
         world.events()
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
 }
 
 pub unsafe trait Event: Send + Sync + 'static {
@@ -590,32 +594,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        let id = world.add_event::<E>();
-
-        if let Some(received_event) = config.received_event {
-            if received_event != id {
-                return Err(InitError(
-                    format!(
-                        "`{}` conflicts with a previous system parameter; systems must listen for \
-                         exactly one event type",
-                        any::type_name::<Self>()
-                    )
-                    .into(),
-                ));
-            }
-        }
-
-        config.received_event = Some(id);
-
-        if !config.received_event_access.set_if_compatible(Access::Read) {
-            return Err(InitError(
-                format!(
-                    "`{}` has conflicting event access with a previous system parameter",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        }
+        set_received_event::<E>(world, config, Access::Read)?;
 
         Ok(())
     }
@@ -634,6 +613,10 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
             query: (),
         }
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
@@ -656,19 +639,22 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
         let _ = AssertEntityEvent::<E>::ASSERTION;
 
+        set_received_event::<E>(world, config, Access::Read)?;
+
         let (expr, state) = Q::init(world, config)?;
 
         let res = FetcherState::new(state);
 
         config.entity_event_expr = expr.expr.clone();
 
-        if let Ok(new_component_access) = expr.and(&config.component_access) {
+        if let Ok(new_component_access) = expr.or(&config.component_access) {
             config.component_access = new_component_access;
         } else {
             return Err(InitError(
                 format!(
-                    "`{}` has incompatible component access with previous queries in this system",
-                    any::type_name::<Self>()
+                    "query `{}` has incompatible component access with previous queries in this \
+                     system",
+                    any::type_name::<Q>()
                 )
                 .into(),
             ));
@@ -695,11 +681,11 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
     }
 
     unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
-        Fetcher::refresh_archetype(state, arch)
+        state.refresh_archetype(arch)
     }
 
     unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        Fetcher::remove_archetype(state, arch)
+        state.remove_archetype(arch)
     }
 }
 
@@ -722,35 +708,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        let id = world.add_event::<E>();
-
-        if let Some(received_event) = config.received_event {
-            if received_event != id {
-                return Err(InitError(
-                    format!(
-                        "`{}` conflicts with a previous system parameter; systems must listen for \
-                         exactly one event type",
-                        any::type_name::<Self>()
-                    )
-                    .into(),
-                ));
-            }
-        }
-
-        config.received_event = Some(id);
-
-        if !config
-            .received_event_access
-            .set_if_compatible(Access::ReadWrite)
-        {
-            return Err(InitError(
-                format!(
-                    "`{}` has conflicting event access with a previous system parameter",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        }
+        set_received_event::<E>(world, config, Access::ReadWrite);
 
         Ok(())
     }
@@ -766,6 +724,10 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
             query: (),
         }
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
 }
 
 impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
@@ -788,7 +750,28 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
 
         let _ = AssertEntityEvent::<E>::ASSERTION;
 
-        Fetcher::init(world, config)
+        set_received_event::<E>(world, config, Access::ReadWrite)?;
+
+        let (expr, state) = Q::init(world, config)?;
+
+        let res = FetcherState::new(state);
+
+        config.entity_event_expr = expr.expr.clone();
+
+        if let Ok(new_component_access) = expr.or(&config.component_access) {
+            config.component_access = new_component_access;
+        } else {
+            return Err(InitError(
+                format!(
+                    "query `{}` has incompatible component access with previous queries in this \
+                     system",
+                    any::type_name::<Q>()
+                )
+                .into(),
+            ));
+        }
+
+        Ok(res)
     }
 
     unsafe fn get_param<'a>(
@@ -809,12 +792,55 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     }
 
     unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
-        Fetcher::refresh_archetype(state, arch)
+        state.refresh_archetype(arch)
     }
 
     unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        Fetcher::remove_archetype(state, arch)
+        state.refresh_archetype(arch)
     }
+}
+
+fn set_received_event<E: Event>(
+    world: &mut World,
+    config: &mut Config,
+    access: Access,
+) -> Result<EventId, InitError> {
+    let id = world.add_event::<E>();
+
+    if let Some(received_event) = config.received_event {
+        if received_event != id {
+            let other = world
+                .events()
+                .get(received_event)
+                .map(|info| info.name())
+                .unwrap_or("<unknown>");
+
+            return Err(InitError(
+                format!(
+                    "tried to set `{}` as the received event for this system, but the system was \
+                     already configured to receive `{other}`. Systems must listen for exactly one \
+                     event type",
+                    any::type_name::<E>(),
+                )
+                .into(),
+            ));
+        }
+    }
+
+    config.received_event = Some(id);
+
+    if !config.received_event_access.set_if_compatible(access) {
+        return Err(InitError(
+            format!(
+                "tried to set `{access:?}` as the received event access for this system, but it \
+                 was already set to `{:?}`",
+                config.received_event_access
+            )
+            .into(),
+        ));
+    }
+
+    Ok(id)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -953,6 +979,10 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
     ) -> Self::Item<'a> {
         Sender { state, world }
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
 }
 
 impl<T: EventSet> fmt::Debug for Sender<'_, T>
@@ -978,6 +1008,7 @@ pub unsafe trait EventSet {
 }
 
 unsafe impl<E: Event> EventSet for E {
+    // Either an entity event index or global event index.
     type State = u32;
 
     fn new_state(world: &mut World) -> Self::State {

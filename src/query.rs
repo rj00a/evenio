@@ -123,7 +123,7 @@ macro_rules! impl_query_tuple {
                 #![allow(unused_variables)]
 
                 #[allow(unused_mut)]
-                let mut res = ComponentAccessExpr::new();
+                let mut res = ComponentAccessExpr::new(true);
 
                 $(
                     let (expr, $q) = $Q::init(world, config)?;
@@ -187,7 +187,7 @@ unsafe impl<Q: Query> Query for Option<Q> {
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let (mut expr, state) = Q::init(world, config)?;
 
-        expr = expr.or(&ComponentAccessExpr::new()).unwrap();
+        expr = expr.or(&ComponentAccessExpr::new(true)).unwrap();
 
         Ok((expr, state))
     }
@@ -576,7 +576,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let (_, state) = Q::init(world, config)?;
 
-        Ok((ComponentAccessExpr::new(), state))
+        Ok((ComponentAccessExpr::new(true), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -605,7 +605,7 @@ unsafe impl Query for EntityId {
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        Ok((ComponentAccessExpr::new(), ()))
+        Ok((ComponentAccessExpr::new(true), ()))
     }
 
     fn new_state(_world: &mut World) -> Self::State {
@@ -669,10 +669,10 @@ mod tests {
 
     /// Test for query access conflicts.
     macro_rules! t {
-        ($name:ident, $succeed:expr, $q:ty) => {
+        ($name:ident, $succeed:expr, $Q:ty) => {
             #[test]
             fn $name() {
-                assert_eq!(check_query::<$q>(), $succeed);
+                assert_eq!(check_query::<$Q>(), $succeed);
             }
         };
     }

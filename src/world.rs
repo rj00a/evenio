@@ -751,6 +751,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&arc), 1);
     }
 
+    /*
     #[test]
     fn unsafe_world_cell_access() {
         let mut world = World::new();
@@ -759,4 +760,5 @@ mod tests {
 
         todo!()
     }
+    */
 }

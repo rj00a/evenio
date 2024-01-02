@@ -23,7 +23,7 @@ use crate::world::{UnsafeWorldCell, World};
 
 #[derive(Debug)]
 pub struct Systems {
-    sm: SlotMap<SystemInfo>,
+    infos: SlotMap<SystemInfo>,
     /// Maps global event indices to the ordered list of systems that handle the
     /// event.
     by_global_event: Vec<SystemList>,
@@ -33,7 +33,7 @@ pub struct Systems {
 impl Systems {
     pub(crate) fn new() -> Self {
         Self {
-            sm: SlotMap::new(),
+            infos: SlotMap::new(),
             by_global_event: vec![],
             by_type_id: BTreeMap::new(),
         }
@@ -46,7 +46,7 @@ impl Systems {
             assert!(self.by_type_id.insert(type_id, ptr).is_none());
         }
 
-        let Some(k) = self.sm.insert_with(|k| {
+        let Some(k) = self.infos.insert_with(|k| {
             let id = SystemId(k);
 
             unsafe { (*ptr.as_ptr()).id = id };
@@ -88,15 +88,15 @@ impl Systems {
     }
 
     pub fn get(&self, id: SystemId) -> Option<&SystemInfo> {
-        self.sm.get(id.0)
+        self.infos.get(id.0)
     }
 
     pub(crate) fn get_mut(&mut self, id: SystemId) -> Option<&mut SystemInfo> {
-        self.sm.get_mut(id.0)
+        self.infos.get_mut(id.0)
     }
 
     pub fn get_by_index(&self, idx: SystemIdx) -> Option<&SystemInfo> {
-        self.sm.get_by_index(idx.0).map(|(_, v)| v)
+        self.infos.get_by_index(idx.0).map(|(_, v)| v)
     }
 
     pub fn get_by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
@@ -110,11 +110,11 @@ impl Systems {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
-        self.sm.iter().map(|(_, v)| v)
+        self.infos.iter().map(|(_, v)| v)
     }
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut SystemInfo> {
-        self.sm.iter_mut().map(|(_, v)| v)
+        self.infos.iter_mut().map(|(_, v)| v)
     }
 }
 
@@ -171,6 +171,10 @@ impl SystemParam for &'_ Systems {
     ) -> Self::Item<'a> {
         world.systems()
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
 }
 
 #[repr(transparent)]
@@ -338,7 +342,7 @@ impl SystemList {
         }
     }
 
-    pub fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
+    pub(crate) fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
         assert!(self.entries.len() < u32::MAX as usize);
 
         match priority {
@@ -357,7 +361,7 @@ impl SystemList {
         }
     }
 
-    pub fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
+    pub(crate) fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
         if let Some(idx) = self.entries.iter().position(|&p| p == ptr) {
             self.entries.remove(idx);
 
@@ -628,12 +632,12 @@ impl Config {
             priority: Default::default(),
             received_event: Default::default(),
             received_event_access: Default::default(),
-            entity_event_expr: BoolExpr::one(),
+            entity_event_expr: BoolExpr::new(false),
             sent_global_events: Default::default(),
             sent_entity_events: Default::default(),
             event_queue_access: Default::default(),
             reserve_entity_access: Default::default(),
-            component_access: Default::default(),
+            component_access: ComponentAccessExpr::new(false),
         }
     }
 }
@@ -657,13 +661,9 @@ pub trait SystemParam {
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a>;
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
-        let _ = (state, arch);
-    }
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype);
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        let _ = (state, arch);
-    }
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype);
 }
 
 macro_rules! impl_system_param_tuple {
@@ -698,21 +698,21 @@ macro_rules! impl_system_param_tuple {
 
             unsafe fn refresh_archetype(
                 ($($s,)*): &mut Self::State,
-                arch: &Archetype
+                _arch: &Archetype
             )
             {
                 $(
-                    $P::refresh_archetype($s, arch);
+                    $P::refresh_archetype($s, _arch);
                 )*
             }
 
             unsafe fn remove_archetype(
                 ($($s,)*): &mut Self::State,
-                arch: &Archetype
+                _arch: &Archetype
             )
             {
                 $(
-                    $P::remove_archetype($s, arch);
+                    $P::remove_archetype($s, _arch);
                 )*
             }
         }
@@ -855,6 +855,10 @@ impl<T: Default + Send + 'static> SystemParam for Local<'_, T> {
             state: state.get_mut(),
         }
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 impl<T> Deref for Local<'_, T> {
@@ -889,6 +893,10 @@ impl SystemParam for &'_ SystemInfo {
     ) -> Self::Item<'a> {
         info
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 #[cfg(feature = "std")]
@@ -909,6 +917,10 @@ impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
     ) -> Self::Item<'a> {
         std::sync::Mutex::new(P::get_param(state, system_info, event_ptr, world))
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 #[cfg(feature = "std")]
@@ -929,4 +941,8 @@ impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
     ) -> Self::Item<'a> {
         std::sync::RwLock::new(P::get_param(state, system_info, event_ptr, world))
     }
+
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }

@@ -396,6 +396,10 @@ impl SystemParam for &'_ Archetypes {
     ) -> Self::Item<'a> {
         world.archetypes()
     }
+
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -486,14 +490,10 @@ impl Archetype {
     }
 
     fn register_system(&mut self, info: &mut SystemInfo) {
-        if self
-            .columns
-            .iter()
-            .any(|c| info.component_access().access.get(c.component_idx) != Access::None)
-            && info
-                .component_access()
-                .expr
-                .eval(|idx| self.column_of(idx).is_some())
+        if info
+            .component_access()
+            .expr
+            .eval(|idx| self.column_of(idx).is_some())
         {
             unsafe { info.system_mut().refresh_archetype(self) };
 
