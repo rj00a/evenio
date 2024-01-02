@@ -15,7 +15,9 @@ use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::{EntityEventIdx, EventId, EventIdEnum, EventIdx, EventPtr, GlobalEventIdx};
+use crate::event::{
+    EntityEventIdx, Event, EventId, EventIdEnum, EventIdx, EventPtr, GlobalEventIdx,
+};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -946,3 +948,9 @@ impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
 
     unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AddSystem(pub SystemId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoveSystem(pub SystemId);

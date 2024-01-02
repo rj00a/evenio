@@ -708,7 +708,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
 
-        set_received_event::<E>(world, config, Access::ReadWrite);
+        set_received_event::<E>(world, config, Access::ReadWrite)?;
 
         Ok(())
     }
@@ -1248,18 +1248,6 @@ unsafe impl<E: Event> Event for Call<E> {
         }
     }
 }
-
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct AddComponent(pub ComponentId);
-
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RemoveComponent(pub ComponentId);
-
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct AddSystem(pub SystemId);
-
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RemoveSystem(pub SystemId);
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddEvent(pub EventId);

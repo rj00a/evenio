@@ -8,7 +8,7 @@ use std::ops::Index;
 pub use evenio_macros::Component;
 
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::EventPtr;
+use crate::event::{EventPtr, Event};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -225,3 +225,9 @@ unsafe impl SparseIndex for ComponentIdx {
         Self(u32::from_index(idx))
     }
 }
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AddComponent(pub ComponentId);
+
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoveComponent(pub ComponentId);

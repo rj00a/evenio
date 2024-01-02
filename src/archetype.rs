@@ -7,7 +7,6 @@ use std::ptr;
 
 use slab::Slab;
 
-use crate::access::Access;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};

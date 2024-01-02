@@ -7,16 +7,16 @@ use std::mem;
 use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
-use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components};
+use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components, AddComponent};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    AddComponent, AddEvent, AddSystem, Call, Despawn, Event, EventDescriptor, EventId, EventIdx,
-    EventInfo, EventKind, EventPtr, EventQueue, Events, Insert, Remove, Spawn,
+    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
+    EventPtr, EventQueue, Events, Insert, Remove, Spawn,
 };
 use crate::query::Query;
 use crate::system::{
-    Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList, Systems,
+    Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList, Systems, AddSystem,
 };
 use crate::{drop_fn_of, DropFn};
 
