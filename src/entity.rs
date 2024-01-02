@@ -15,7 +15,9 @@ pub struct Entities {
 
 impl Entities {
     pub(crate) fn new() -> Self {
-        Self { locs: SlotMap::new() }
+        Self {
+            locs: SlotMap::new(),
+        }
     }
 
     pub fn get(&self, id: EntityId) -> Option<EntityLocation> {

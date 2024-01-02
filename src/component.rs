@@ -8,7 +8,7 @@ use std::ops::Index;
 pub use evenio_macros::Component;
 
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::{EventPtr, Event};
+use crate::event::{Event, EventPtr};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -172,23 +172,6 @@ impl ComponentInfo {
 }
 
 pub trait Component: Send + Sync + 'static {
-    /// If this component permits mutation through mutable references (`&mut
-    /// T`).
-    ///
-    /// ```compile_fail
-    /// use evenio::prelude::*;
-    ///
-    /// #[derive(Component)]
-    /// #[mutable = false]
-    /// struct MyComponent;
-    ///
-    /// fn my_system(_: Fetcher<&mut MyComponent>) {}
-    ///
-    /// let mut world = World::new();
-    ///
-    /// // Fails to compile because `&mut MyComponent` is not allowed.
-    /// world.add_system(my_system);
-    /// ```
     const MUTABLE: bool = true;
 }
 

@@ -31,16 +31,16 @@ use crate::DropFn;
 
 #[derive(Debug)]
 pub struct Events {
-    global_events: SlotMap<EventInfo>,
-    entity_events: SlotMap<EventInfo>,
+    untargeted_events: SlotMap<EventInfo>,
+    targeted_events: SlotMap<EventInfo>,
     by_type_id: BTreeMap<TypeId, EventId>,
 }
 
 impl Events {
     pub(crate) fn new() -> Self {
         Self {
-            global_events: SlotMap::new(),
-            entity_events: SlotMap::new(),
+            untargeted_events: SlotMap::new(),
+            targeted_events: SlotMap::new(),
             by_type_id: BTreeMap::new(),
         }
     }
@@ -48,7 +48,6 @@ impl Events {
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (EventId, bool) {
         let info = EventInfo {
             id: EventId::NULL,
-            target_offset: desc.target_offset.unwrap_or(0),
             name: desc.name,
             kind: desc.kind,
             type_id: desc.type_id,
@@ -57,18 +56,16 @@ impl Events {
         };
 
         let insert = || {
-            let is_global = desc.target_offset.is_none();
-
-            let map = if is_global {
-                &mut self.global_events
+            let map = if desc.is_targeted {
+                &mut self.targeted_events
             } else {
-                &mut self.entity_events
+                &mut self.untargeted_events
             };
 
             let Some(k) = map.insert(info) else {
                 panic!("too many events")
             };
-            let id = EventId::from_key(k, is_global);
+            let id = EventId::from_key(k, desc.is_targeted);
             map[k].id = id;
 
             id
@@ -85,17 +82,18 @@ impl Events {
     }
 
     pub fn get(&self, id: EventId) -> Option<&EventInfo> {
-        match id.to_enum() {
-            EventIdEnum::Global(id) => self.global_events.get(id.0),
-            EventIdEnum::Entity(id) => self.entity_events.get(id.0),
+        let k = id.as_key();
+        match id.index() {
+            EventIdx::Targeted(_) => self.targeted_events.get(k),
+            EventIdx::Untargeted(_) => self.untargeted_events.get(k),
         }
     }
 
     #[inline]
     pub fn get_by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
         match idx {
-            EventIdx::Global(idx) => Some(self.global_events.get_by_index(idx.0)?.1),
-            EventIdx::Entity(idx) => Some(self.entity_events.get_by_index(idx.0)?.1),
+            EventIdx::Untargeted(idx) => Some(self.untargeted_events.get_by_index(idx.0)?.1),
+            EventIdx::Targeted(idx) => Some(self.targeted_events.get_by_index(idx.0)?.1),
         }
     }
 
@@ -163,17 +161,19 @@ impl SystemParam for &'_ Events {
         world.events()
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-pub unsafe trait Event: Send + Sync + 'static {
-    const TARGET_OFFSET: Option<usize> = None;
+pub trait Event: Send + Sync + 'static {
+    const IS_TARGETED: bool;
 
-    // TODO: const MUTABLE: bool = true
+    const MUTABLE: bool = true;
 
-    fn init(world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId;
+
+    unsafe fn init(world: &mut World) -> EventKind {
         let _ = world;
         EventKind::Other
     }
@@ -213,33 +213,6 @@ pub enum EventKind {
     },
 }
 
-// TODO: remove me.
-const _: () = assert!(mem::size_of::<EventKind>() == mem::size_of::<usize>() * 2);
-
-/// Performs sanity checks on [`Entity::TARGET_OFFSET`]. Returns true if `E`'s
-/// `TARGET_OFFSET` might be correct, and false if it's definitely incorrect.
-const fn check_target_offset<E: Event>() -> bool {
-    match E::TARGET_OFFSET {
-        Some(target_offset) => {
-            mem::size_of::<E>() >= mem::size_of::<EventId>()
-                && target_offset <= mem::size_of::<E>() - mem::size_of::<EventId>()
-        }
-        None => true,
-    }
-}
-
-#[inline]
-const fn get_target<E: Event>(event: &E) -> Option<EntityId> {
-    match E::TARGET_OFFSET {
-        Some(offset) => Some(unsafe {
-            *(event as *const E as *const u8)
-                .add(offset)
-                .cast::<EntityId>()
-        }),
-        None => None,
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventId {
     index: u32,
@@ -252,60 +225,44 @@ impl EventId {
         generation: u32::MAX,
     };
 
-    fn from_key(k: Key, is_global: bool) -> Self {
+    pub const fn new(index: EventIdx, generation: NonZeroU32) -> Option<Self> {
+        todo!()
+    }
+
+    const fn from_key(k: Key, is_targeted: bool) -> Self {
         Self {
             index: k.index(),
-            generation: if is_global {
-                k.generation().get()
-            } else {
+            generation: if is_targeted {
                 k.generation().get() & !1
+            } else {
+                k.generation().get()
             },
         }
     }
 
-    pub const fn from_enum(id: EventIdEnum) -> Self {
-        match id {
-            EventIdEnum::Global(id) => Self {
-                index: id.index().0,
-                generation: id.0.generation().get(),
-            },
-            EventIdEnum::Entity(id) => Self {
-                index: id.index().0,
-                generation: id.0.generation().get() & !1,
-            },
-        }
+    fn as_key(self) -> Key {
+        Key::new(self.index, self.generation()).unwrap()
     }
 
-    pub fn to_enum(self) -> EventIdEnum {
-        if self.generation & 1 == 1 {
-            // SAFETY: Generation is nonzero.
-            let gen = unsafe { NonZeroU32::new(self.generation).unwrap_debug_checked() };
+    pub const fn is_targeted(&self) -> bool {
+        self.generation & 1 == 0
+    }
 
-            // SAFETY: Generation is odd.
-            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
+    pub const fn is_untargeted(&self) -> bool {
+        !self.is_targeted()
+    }
 
-            EventIdEnum::Global(GlobalEventId(k))
+    #[inline]
+    pub const fn index(self) -> EventIdx {
+        if self.is_targeted() {
+            EventIdx::Targeted(TargetedEventIdx(self.index))
         } else {
-            // SAFETY: Generation is nonzero.
-            let gen = unsafe { NonZeroU32::new(self.generation | 1).unwrap_debug_checked() };
-
-            // SAFETY: Generation is odd.
-            let k = unsafe { Key::new(self.index, gen).unwrap_debug_checked() };
-
-            EventIdEnum::Entity(EntityEventId(k))
+            EventIdx::Untargeted(UntargetedEventIdx(self.index))
         }
     }
 
-    pub fn is_global_event(&self) -> bool {
-        matches!(self.to_enum(), EventIdEnum::Global(_))
-    }
-
-    pub fn is_entity_event(&self) -> bool {
-        matches!(self.to_enum(), EventIdEnum::Entity(_))
-    }
-
-    pub fn index(self) -> EventIdx {
-        self.to_enum().index()
+    pub const fn generation(self) -> NonZeroU32 {
+        unsafe { NonZeroU32::new_unchecked(self.generation | 1) }
     }
 }
 
@@ -317,46 +274,32 @@ impl Default for EventId {
 
 impl fmt::Debug for EventId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_enum().fmt(f)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum EventIdEnum {
-    Global(GlobalEventId),
-    Entity(EntityEventId),
-}
-
-impl EventIdEnum {
-    pub const fn index(self) -> EventIdx {
-        match self {
-            Self::Global(id) => EventIdx::Global(id.index()),
-            Self::Entity(id) => EventIdx::Entity(id.index()),
-        }
+        f.debug_struct("EventId")
+            .field("index", &self.index())
+            .field("generation", &self.generation())
+            .finish()
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum EventIdx {
-    Global(GlobalEventIdx),
-    Entity(EntityEventIdx),
+    Targeted(TargetedEventIdx),
+    Untargeted(UntargetedEventIdx),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct GlobalEventId(Key);
-
-impl GlobalEventId {
-    pub const NULL: Self = Self(Key::NULL);
-
-    pub const fn index(self) -> GlobalEventIdx {
-        GlobalEventIdx(self.0.index())
+impl EventIdx {
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            EventIdx::Targeted(idx) => idx.0,
+            EventIdx::Untargeted(idx) => idx.0,
+        }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct GlobalEventIdx(pub u32);
+pub struct UntargetedEventIdx(pub u32);
 
-unsafe impl SparseIndex for GlobalEventIdx {
+unsafe impl SparseIndex for UntargetedEventIdx {
     const MAX: Self = Self(u32::MAX);
 
     fn index(self) -> usize {
@@ -368,21 +311,10 @@ unsafe impl SparseIndex for GlobalEventIdx {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct EntityEventId(Key);
-
-impl EntityEventId {
-    pub const NULL: Self = Self(Key::NULL);
-
-    pub const fn index(self) -> EntityEventIdx {
-        EntityEventIdx(self.0.index())
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct EntityEventIdx(pub u32);
+pub struct TargetedEventIdx(pub u32);
 
-unsafe impl SparseIndex for EntityEventIdx {
+unsafe impl SparseIndex for TargetedEventIdx {
     const MAX: Self = Self(u32::MAX);
 
     fn index(self) -> usize {
@@ -397,9 +329,6 @@ unsafe impl SparseIndex for EntityEventIdx {
 #[derive(Debug)]
 pub struct EventInfo {
     id: EventId,
-    /// [`Event::TARGET_OFFSET`] of this event. Has no meaning if event is not
-    /// an entity event.
-    target_offset: usize,
     name: Cow<'static, str>,
     kind: EventKind,
     type_id: Option<TypeId>,
@@ -410,10 +339,6 @@ pub struct EventInfo {
 impl EventInfo {
     pub fn id(&self) -> EventId {
         self.id
-    }
-
-    pub fn target_offset(&self) -> Option<usize> {
-        self.id.is_entity_event().then_some(self.target_offset)
     }
 
     pub fn name(&self) -> &str {
@@ -441,7 +366,7 @@ impl EventInfo {
 pub struct EventDescriptor {
     pub name: Cow<'static, str>,
     pub type_id: Option<TypeId>,
-    pub target_offset: Option<usize>,
+    pub is_targeted: bool,
     pub kind: EventKind,
     pub layout: Layout,
     pub drop: DropFn,
@@ -465,11 +390,21 @@ impl EventQueue {
         self.items.get_debug_checked_mut(idx)
     }
 
-    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, event_idx: EventIdx) {
-        self.items.push(EventQueueItem {
-            event_idx,
-            event: self.bump.alloc(event) as *mut _ as *mut u8,
-        })
+    #[inline]
+    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, idx: u32) {
+        let meta = if E::IS_TARGETED {
+            EventMeta::Entity {
+                idx: TargetedEventIdx(idx),
+                target: event.target(),
+            }
+        } else {
+            EventMeta::Global {
+                idx: UntargetedEventIdx(idx),
+            }
+        };
+
+        let event = self.bump.alloc(event) as *mut E as *mut u8;
+        self.items.push(EventQueueItem { meta, event });
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> {
@@ -499,10 +434,32 @@ unsafe impl Sync for EventQueue {}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EventQueueItem {
-    pub(crate) event_idx: EventIdx,
+    pub(crate) meta: EventMeta,
     /// Type-erased pointer to this event. When null, ownership of the event
     /// has been transferred and no destructor needs to run.
     pub(crate) event: *mut u8,
+}
+
+/// Metadata for an event in the event queue.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EventMeta {
+    Global {
+        idx: UntargetedEventIdx,
+    },
+    Entity {
+        idx: TargetedEventIdx,
+        target: EntityId,
+    },
+}
+
+impl EventMeta {
+    #[inline]
+    pub(crate) const fn event_idx(self) -> EventIdx {
+        match self {
+            EventMeta::Global { idx } => EventIdx::Untargeted(idx),
+            EventMeta::Entity { idx, .. } => EventIdx::Targeted(idx),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -589,7 +546,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
         struct AssertGlobalEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertGlobalEvent<E> {
-            const ASSERTION: () = assert!(E::TARGET_OFFSET.is_none(), "TODO: error message");
+            const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
         }
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
@@ -628,13 +585,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         struct AssertEntityEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertEntityEvent<E> {
-            const ASSERTION: () = match E::TARGET_OFFSET {
-                Some(n) => assert!(
-                    check_target_offset::<E>(),
-                    "incorrect `TARGET_OFFSET` value for event type"
-                ),
-                None => panic!("TODO: error message"),
-            };
+            const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
         }
 
         let _ = AssertEntityEvent::<E>::ASSERTION;
@@ -670,7 +621,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         let event = event_ptr.as_event::<E>();
-        let target = get_target(event).unwrap();
+
+        assert!(E::IS_TARGETED);
+        let target = event.target();
 
         // SAFETY: The target entity is guaranteed to match the query.
         let query = state
@@ -703,7 +656,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         struct AssertGlobalEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertGlobalEvent<E> {
-            const ASSERTION: () = assert!(E::TARGET_OFFSET.is_none(), "TODO: error message");
+            const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
         }
 
         let _ = AssertGlobalEvent::<E>::ASSERTION;
@@ -739,13 +692,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         struct AssertEntityEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertEntityEvent<E> {
-            const ASSERTION: () = match E::TARGET_OFFSET {
-                Some(n) => assert!(
-                    check_target_offset::<E>(),
-                    "incorrect `TARGET_OFFSET` value for event type"
-                ),
-                None => panic!("TODO: error message"),
-            };
+            const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
         }
 
         let _ = AssertEntityEvent::<E>::ASSERTION;
@@ -781,7 +728,9 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         let event = event_ptr.as_event_mut::<E>();
-        let target = get_target(&*event).unwrap();
+
+        assert!(E::IS_TARGETED);
+        let target = event.target();
 
         // SAFETY: The target entity is guaranteed to match the query.
         let query = state
@@ -890,7 +839,7 @@ impl<T: EventSet> Sender<'_, T> {
             )
         });
 
-        unsafe { self.world.send_unchecked(event, event_idx) }
+        unsafe { self.world.push_event_with_index(event, event_idx) }
     }
 
     /// # Panics
@@ -963,8 +912,8 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
         T::for_each_idx(&state, |idx| {
             match idx {
-                EventIdx::Global(i) => config.sent_global_events.insert(i),
-                EventIdx::Entity(i) => config.sent_entity_events.insert(i),
+                EventIdx::Untargeted(i) => config.sent_global_events.insert(i),
+                EventIdx::Targeted(i) => config.sent_entity_events.insert(i),
             };
         });
 
@@ -1002,7 +951,7 @@ pub unsafe trait EventSet {
 
     fn new_state(world: &mut World) -> Self::State;
 
-    fn event_idx_of<E: Event>(state: &Self::State) -> Option<EventIdx>;
+    fn event_idx_of<E: Event>(state: &Self::State) -> Option<u32>;
 
     fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, f: F);
 }
@@ -1013,27 +962,21 @@ unsafe impl<E: Event> EventSet for E {
 
     fn new_state(world: &mut World) -> Self::State {
         match world.add_event::<E>().index() {
-            EventIdx::Global(idx) => idx.0,
-            EventIdx::Entity(idx) => idx.0,
+            EventIdx::Untargeted(idx) => idx.0,
+            EventIdx::Targeted(idx) => idx.0,
         }
     }
 
     #[inline]
-    fn event_idx_of<F: Event>(state: &Self::State) -> Option<EventIdx> {
-        (TypeId::of::<F>() == TypeId::of::<E>()).then(|| {
-            if E::TARGET_OFFSET.is_some() {
-                EventIdx::Entity(EntityEventIdx(*state))
-            } else {
-                EventIdx::Global(GlobalEventIdx(*state))
-            }
-        })
+    fn event_idx_of<F: Event>(state: &Self::State) -> Option<u32> {
+        (TypeId::of::<F>() == TypeId::of::<E>()).then_some(*state)
     }
 
     fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, mut f: F) {
-        f(if E::TARGET_OFFSET.is_some() {
-            EventIdx::Entity(EntityEventIdx(*state))
+        f(if E::IS_TARGETED {
+            EventIdx::Targeted(TargetedEventIdx(*state))
         } else {
-            EventIdx::Global(GlobalEventIdx(*state))
+            EventIdx::Untargeted(UntargetedEventIdx(*state))
         })
     }
 }
@@ -1052,7 +995,7 @@ macro_rules! impl_event_set_tuple {
             }
 
             #[inline]
-            fn event_idx_of<E: Event>(($($e,)*): &Self::State) -> Option<EventIdx> {
+            fn event_idx_of<E: Event>(($($e,)*): &Self::State) -> Option<u32> {
                 $(
                     if let Some(id) = $E::event_idx_of::<E>($e) {
                         return Some(id);
@@ -1086,10 +1029,14 @@ impl<C> Insert<C> {
     }
 }
 
-unsafe impl<C: Component> Event for Insert<C> {
-    const TARGET_OFFSET: Option<usize> = Some(0);
+impl<C: Component> Event for Insert<C> {
+    const IS_TARGETED: bool = true;
 
-    fn init(world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId {
+        self.entity
+    }
+
+    unsafe fn init(world: &mut World) -> EventKind {
         EventKind::Insert {
             component_idx: world.add_component::<C>().index(),
             component_offset: offset_of!(Self, component)
@@ -1115,10 +1062,14 @@ impl<C> Remove<C> {
     }
 }
 
-unsafe impl<C: Component> Event for Remove<C> {
-    const TARGET_OFFSET: Option<usize> = Some(0);
+impl<C: Component> Event for Remove<C> {
+    const IS_TARGETED: bool = true;
 
-    fn init(world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId {
+        self.entity
+    }
+
+    unsafe fn init(world: &mut World) -> EventKind {
         EventKind::Remove {
             component_idx: world.add_component::<C>().index(),
         }
@@ -1132,12 +1083,16 @@ unsafe impl<C: Component> Event for Remove<C> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Spawn(pub EntityId);
 
-unsafe impl Event for Spawn {
-    const TARGET_OFFSET: Option<usize> = None;
+impl Event for Spawn {
+    const IS_TARGETED: bool = false;
 
-    // TODO: const MUTABLE: bool = false;
+    const MUTABLE: bool = false;
 
-    fn init(_world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId {
+        unimplemented!("`Spawn` does not have a target entity")
+    }
+
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Spawn
     }
 }
@@ -1170,10 +1125,14 @@ unsafe impl Event for Spawn {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Despawn(pub EntityId);
 
-unsafe impl Event for Despawn {
-    const TARGET_OFFSET: Option<usize> = Some(offset_of!(Self, 0));
+impl Event for Despawn {
+    const IS_TARGETED: bool = true;
 
-    fn init(_world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId {
+        self.0
+    }
+
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Despawn
     }
 }
@@ -1236,10 +1195,14 @@ impl<E> Call<E> {
     }
 }
 
-unsafe impl<E: Event> Event for Call<E> {
-    const TARGET_OFFSET: Option<usize> = None;
+impl<E: Event> Event for Call<E> {
+    const IS_TARGETED: bool = false;
 
-    fn init(world: &mut World) -> EventKind {
+    fn target(&self) -> EntityId {
+        unimplemented!()
+    }
+
+    unsafe fn init(world: &mut World) -> EventKind {
         EventKind::Call {
             event_id: world.add_event::<E>(),
             event_offset: offset_of!(Self, event)

@@ -7,16 +7,20 @@ use std::mem;
 use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
-use crate::component::{Component, ComponentDescriptor, ComponentId, ComponentInfo, Components, AddComponent};
+use crate::component::{
+    AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
+};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
-    EventPtr, EventQueue, Events, Insert, Remove, Spawn,
+    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, Spawn, TargetedEventIdx,
+    UntargetedEventIdx,
 };
 use crate::query::Query;
 use crate::system::{
-    Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList, Systems, AddSystem,
+    AddSystem, Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList,
+    Systems,
 };
 use crate::{drop_fn_of, DropFn};
 
@@ -71,7 +75,12 @@ impl World {
     pub fn send<E: Event>(&mut self, event: E) {
         let event_id = self.add_event::<E>();
 
-        unsafe { self.event_queue.push(event, event_id.index()) };
+        let idx = match event_id.index() {
+            EventIdx::Untargeted(idx) => idx.0,
+            EventIdx::Targeted(idx) => idx.0,
+        };
+
+        unsafe { self.event_queue.push(event, idx) };
 
         self.flush_event_queue();
     }
@@ -239,8 +248,8 @@ impl World {
         let desc = EventDescriptor {
             name: any::type_name::<E>().into(),
             type_id: Some(TypeId::of::<E>()),
-            target_offset: E::TARGET_OFFSET,
-            kind: E::init(self),
+            is_targeted: E::IS_TARGETED,
+            kind: unsafe { E::init(self) },
             layout: Layout::new::<E>(),
             drop: drop_fn_of::<E>(),
         };
@@ -300,9 +309,13 @@ impl World {
 
             'next_event: for queue_idx in queue_start_idx..world.event_queue.len() {
                 let item = unsafe { world.event_queue.get_debug_checked_mut(queue_idx) };
-                let event_idx = item.event_idx;
-                let event_info =
-                    unsafe { world.events.get_by_index(event_idx).unwrap_debug_checked() };
+                let event_meta = item.meta;
+                let event_info = unsafe {
+                    world
+                        .events
+                        .get_by_index(event_meta.event_idx())
+                        .unwrap_debug_checked()
+                };
                 let event_kind = event_info.kind();
 
                 // Put the event pointer on the stack because pointers into the event queue
@@ -341,19 +354,12 @@ impl World {
                     }
                 }
 
-                let system_list = match event_idx {
-                    EventIdx::Global(idx) => unsafe {
+                let system_list = match event_meta {
+                    EventMeta::Global { idx } => unsafe {
                         world.systems.get_global_list(idx).unwrap_debug_checked()
                     },
-                    EventIdx::Entity(idx) => {
-                        // SAFETY: event is an entity event, so it must have a target offset.
-                        let target_offset =
-                            unsafe { event_info.target_offset().unwrap_debug_checked() };
-
-                        let entity_id =
-                            unsafe { event.event.add(target_offset).cast::<EntityId>().read() };
-
-                        let Some(location) = world.entities.get(entity_id) else {
+                    EventMeta::Entity { idx, target } => {
+                        let Some(location) = world.entities.get(target) else {
                             continue;
                         };
 
@@ -573,7 +579,7 @@ impl Drop for World {
             if let Some(event) = NonNull::new(item.event) {
                 let info = unsafe {
                     self.events
-                        .get_by_index(item.event_idx)
+                        .get_by_index(item.meta.event_idx())
                         .unwrap_debug_checked()
                 };
 
@@ -602,8 +608,8 @@ impl<'a> UnsafeWorldCell<'a> {
     ///
     /// - Must have permission to access the event queue mutably.
     /// - Event index must be correct for the given event.
-    pub unsafe fn send_unchecked<E: Event>(self, event: E, event_idx: EventIdx) {
-        unsafe { (*self.world).event_queue.push(event, event_idx) }
+    pub unsafe fn push_event_with_index<E: Event>(self, event: E, idx: u32) {
+        unsafe { (*self.world).event_queue.push(event, idx) }
     }
 
     pub unsafe fn reserve_entity(self) -> EntityId {

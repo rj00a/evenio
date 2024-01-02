@@ -11,7 +11,7 @@ use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
-use crate::event::{EntityEventIdx, EventIdx, EventPtr};
+use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::prelude::World;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
@@ -439,7 +439,7 @@ pub struct Archetype {
     /// Systems that need to be notified about column changes.
     refresh_listeners: BTreeSet<SystemInfoPtr>,
     /// Entity event listeners for this archetype.
-    event_listeners: SparseMap<EntityEventIdx, SystemList>,
+    event_listeners: SparseMap<TargetedEventIdx, SystemList>,
 }
 
 impl Archetype {
@@ -499,7 +499,7 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
-        if let (Some(expr), EventIdx::Entity(entity_event_idx)) =
+        if let (Some(expr), EventIdx::Targeted(entity_event_idx)) =
             (info.entity_event_expr(), info.received_event().index())
         {
             if expr.eval(|idx| self.column_of(idx).is_some()) {
@@ -515,7 +515,7 @@ impl Archetype {
         }
     }
 
-    pub(crate) fn system_list_for(&self, idx: EntityEventIdx) -> Option<&SystemList> {
+    pub(crate) fn system_list_for(&self, idx: TargetedEventIdx) -> Option<&SystemList> {
         self.event_listeners.get(idx)
     }
 

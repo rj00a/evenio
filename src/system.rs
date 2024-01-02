@@ -15,9 +15,7 @@ use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::{
-    EntityEventIdx, Event, EventId, EventIdEnum, EventIdx, EventPtr, GlobalEventIdx,
-};
+use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -53,8 +51,8 @@ impl Systems {
 
             unsafe { (*ptr.as_ptr()).id = id };
 
-            if let EventIdEnum::Global(id) = info.received_event().to_enum() {
-                let idx = id.index().0 as usize;
+            if let EventIdx::Untargeted(idx) = info.received_event().index() {
+                let idx = idx.0 as usize;
 
                 if idx >= self.by_global_event.len() {
                     self.by_global_event
@@ -77,7 +75,7 @@ impl Systems {
     }
 
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
-        if let EventIdx::Global(GlobalEventIdx(idx)) = event_idx {
+        if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
             if idx as usize >= self.by_global_event.len() {
                 self.by_global_event
                     .resize_with(idx as usize + 1, SystemList::default);
@@ -85,7 +83,7 @@ impl Systems {
         }
     }
 
-    pub(crate) fn get_global_list(&self, idx: GlobalEventIdx) -> Option<&SystemList> {
+    pub(crate) fn get_global_list(&self, idx: UntargetedEventIdx) -> Option<&SystemList> {
         self.by_global_event.get(idx.0 as usize)
     }
 
@@ -203,8 +201,8 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
     pub(crate) entity_event_expr: BoolExpr<ComponentIdx>,
-    pub(crate) sent_global_events: BitSet<GlobalEventIdx>,
-    pub(crate) sent_entity_events: BitSet<EntityEventIdx>,
+    pub(crate) sent_global_events: BitSet<UntargetedEventIdx>,
+    pub(crate) sent_entity_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
     pub(crate) reserve_entity_access: Access,
     pub(crate) component_access: ComponentAccessExpr,
@@ -238,17 +236,16 @@ impl SystemInfo {
     }
 
     pub fn entity_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
-        match self.received_event().to_enum() {
-            EventIdEnum::Global(_) => None,
-            EventIdEnum::Entity(_) => Some(unsafe { &(*self.inner.as_ptr()).entity_event_expr }),
-        }
+        self.received_event()
+            .is_targeted()
+            .then(|| unsafe { &(*self.inner.as_ptr()).entity_event_expr })
     }
 
-    pub fn sent_global_events(&self) -> &BitSet<GlobalEventIdx> {
+    pub fn sent_global_events(&self) -> &BitSet<UntargetedEventIdx> {
         unsafe { &(*self.inner.as_ptr()).sent_global_events }
     }
 
-    pub fn sent_entity_events(&self) -> &BitSet<EntityEventIdx> {
+    pub fn sent_entity_events(&self) -> &BitSet<TargetedEventIdx> {
         unsafe { &(*self.inner.as_ptr()).sent_entity_events }
     }
 
@@ -621,8 +618,8 @@ pub struct Config {
     pub received_event: Option<EventId>,
     pub received_event_access: Access,
     pub entity_event_expr: BoolExpr<ComponentIdx>,
-    pub sent_global_events: BitSet<GlobalEventIdx>,
-    pub sent_entity_events: BitSet<EntityEventIdx>,
+    pub sent_global_events: BitSet<UntargetedEventIdx>,
+    pub sent_entity_events: BitSet<TargetedEventIdx>,
     pub event_queue_access: Access,
     pub reserve_entity_access: Access,
     pub component_access: ComponentAccessExpr,
@@ -920,9 +917,13 @@ impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
         std::sync::Mutex::new(P::get_param(state, system_info, event_ptr, world))
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        P::refresh_archetype(state, arch)
+    }
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        P::refresh_archetype(state, arch)
+    }
 }
 
 #[cfg(feature = "std")]
@@ -944,9 +945,13 @@ impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
         std::sync::RwLock::new(P::get_param(state, system_info, event_ptr, world))
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+        P::refresh_archetype(state, arch)
+    }
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+        P::refresh_archetype(state, arch)
+    }
 }
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
