@@ -83,7 +83,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
         impl<C: Component> AssertMutable<C> {
             const ASSERTION: () = assert!(
-                C::MUTABLE,
+                C::IS_MUTABLE,
                 "component does not permit mutation through mutable references (see \
                  `Component::MUTABLE`)."
             );

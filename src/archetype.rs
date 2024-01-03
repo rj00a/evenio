@@ -396,9 +396,9 @@ impl SystemParam for &'_ Archetypes {
         world.archetypes()
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -438,7 +438,7 @@ pub struct Archetype {
     remove_components: BTreeMap<ComponentIdx, ArchetypeIdx>,
     /// Systems that need to be notified about column changes.
     refresh_listeners: BTreeSet<SystemInfoPtr>,
-    /// Entity event listeners for this archetype.
+    /// Targeted event listeners for this archetype.
     event_listeners: SparseMap<TargetedEventIdx, SystemList>,
 }
 

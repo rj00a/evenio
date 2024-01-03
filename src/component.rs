@@ -171,8 +171,17 @@ impl ComponentInfo {
     }
 }
 
+/// # Deriving
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(Component)]
+/// #[component(is_mutable = false)] // Override the default mutability.
+/// struct MyComponent(i32);
+/// ```
 pub trait Component: Send + Sync + 'static {
-    const MUTABLE: bool = true;
+    const IS_MUTABLE: bool = true;
 }
 
 #[derive(Clone, Debug)]

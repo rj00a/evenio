@@ -166,10 +166,39 @@ impl SystemParam for &'_ Events {
     unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
+/// # Deriving
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(Event)]
+/// #[event(is_mutable = false)] // Overrides the default mutability.
+/// struct MyEvent {
+///     #[event(target)] // Sets the entity returned by `target()`. If absent, the event is untargeted.
+///     entity: EntityId,
+/// }
+///
+/// // Also works on tuple structs, enums, and unions. However, `#[event(target)]` is unavailable for non-struct types.
+///
+/// #[derive(Event)]
+/// struct TupleStruct(i32, #[event(target)] EntityId);
+///
+/// #[derive(Event)]
+/// enum Enum {
+///     Foo(i32),
+///     Bar(f32),
+/// }
+///
+/// #[derive(Event)]
+/// union Union {
+///     foo: i32,
+///     bar: f32,
+/// }
+/// ```
 pub trait Event: Send + Sync + 'static {
     const IS_TARGETED: bool;
 
-    const MUTABLE: bool = true;
+    const IS_MUTABLE: bool = true;
 
     fn target(&self) -> EntityId;
 
@@ -957,7 +986,7 @@ pub unsafe trait EventSet {
 }
 
 unsafe impl<E: Event> EventSet for E {
-    // Either an entity event index or global event index.
+    // Either a targeted event index or an untargeted event index.
     type State = u32;
 
     fn new_state(world: &mut World) -> Self::State {
@@ -1086,7 +1115,7 @@ pub struct Spawn(pub EntityId);
 impl Event for Spawn {
     const IS_TARGETED: bool = false;
 
-    const MUTABLE: bool = false;
+    const IS_MUTABLE: bool = false;
 
     fn target(&self) -> EntityId {
         unimplemented!("`Spawn` does not have a target entity")
@@ -1212,8 +1241,10 @@ impl<E: Event> Event for Call<E> {
     }
 }
 
+/// An [`Event`] sent immediately after an event is added to the world.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddEvent(pub EventId);
 
+/// An [`Event`] sent immediately before an event is removed from the world.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveEvent(pub EventId);
