@@ -422,12 +422,12 @@ impl EventQueue {
     #[inline]
     pub(crate) unsafe fn push<E: Event>(&mut self, event: E, idx: u32) {
         let meta = if E::IS_TARGETED {
-            EventMeta::Entity {
+            EventMeta::Targeted {
                 idx: TargetedEventIdx(idx),
                 target: event.target(),
             }
         } else {
-            EventMeta::Global {
+            EventMeta::Untargeted {
                 idx: UntargetedEventIdx(idx),
             }
         };
@@ -472,10 +472,10 @@ pub(crate) struct EventQueueItem {
 /// Metadata for an event in the event queue.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EventMeta {
-    Global {
+    Untargeted {
         idx: UntargetedEventIdx,
     },
-    Entity {
+    Targeted {
         idx: TargetedEventIdx,
         target: EntityId,
     },
@@ -485,8 +485,8 @@ impl EventMeta {
     #[inline]
     pub(crate) const fn event_idx(self) -> EventIdx {
         match self {
-            EventMeta::Global { idx } => EventIdx::Untargeted(idx),
-            EventMeta::Entity { idx, .. } => EventIdx::Targeted(idx),
+            EventMeta::Untargeted { idx } => EventIdx::Untargeted(idx),
+            EventMeta::Targeted { idx, .. } => EventIdx::Targeted(idx),
         }
     }
 }
@@ -572,13 +572,13 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
     type Item<'a> = Receiver<'a, E>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertGlobalEvent<E>(PhantomData<E>);
+        struct AssertUntargetedEvent<E>(PhantomData<E>);
 
-        impl<E: Event> AssertGlobalEvent<E> {
+        impl<E: Event> AssertUntargetedEvent<E> {
             const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
         }
 
-        let _ = AssertGlobalEvent::<E>::ASSERTION;
+        let _ = AssertUntargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::Read)?;
 
@@ -611,13 +611,13 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
     type Item<'a> = Receiver<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertEntityEvent<E>(PhantomData<E>);
+        struct AssertTargetedEvent<E>(PhantomData<E>);
 
-        impl<E: Event> AssertEntityEvent<E> {
+        impl<E: Event> AssertTargetedEvent<E> {
             const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
         }
 
-        let _ = AssertEntityEvent::<E>::ASSERTION;
+        let _ = AssertTargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::Read)?;
 
@@ -625,7 +625,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
         let res = FetcherState::new(state);
 
-        config.entity_event_expr = expr.expr.clone();
+        config.targeted_event_expr = expr.expr.clone();
 
         if let Ok(new_component_access) = expr.or(&config.component_access) {
             config.component_access = new_component_access;
@@ -682,13 +682,13 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     type Item<'a> = ReceiverMut<'a, E>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertGlobalEvent<E>(PhantomData<E>);
+        struct AssertUntargetedEvent<E>(PhantomData<E>);
 
-        impl<E: Event> AssertGlobalEvent<E> {
+        impl<E: Event> AssertUntargetedEvent<E> {
             const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
         }
 
-        let _ = AssertGlobalEvent::<E>::ASSERTION;
+        let _ = AssertUntargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::ReadWrite)?;
 
@@ -718,13 +718,13 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     type Item<'a> = ReceiverMut<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertEntityEvent<E>(PhantomData<E>);
+        struct AssertTargetedEvent<E>(PhantomData<E>);
 
-        impl<E: Event> AssertEntityEvent<E> {
+        impl<E: Event> AssertTargetedEvent<E> {
             const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
         }
 
-        let _ = AssertEntityEvent::<E>::ASSERTION;
+        let _ = AssertTargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::ReadWrite)?;
 
@@ -732,7 +732,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
 
         let res = FetcherState::new(state);
 
-        config.entity_event_expr = expr.expr.clone();
+        config.targeted_event_expr = expr.expr.clone();
 
         if let Ok(new_component_access) = expr.or(&config.component_access) {
             config.component_access = new_component_access;
@@ -941,8 +941,8 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
         T::for_each_idx(&state, |idx| {
             match idx {
-                EventIdx::Untargeted(i) => config.sent_global_events.insert(i),
-                EventIdx::Targeted(i) => config.sent_entity_events.insert(i),
+                EventIdx::Untargeted(i) => config.sent_untargeted_events.insert(i),
+                EventIdx::Targeted(i) => config.sent_targeted_events.insert(i),
             };
         });
 
@@ -951,16 +951,16 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
-        event_ptr: EventPtr<'a>,
+        _system_info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Sender { state, world }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 impl<T: EventSet> fmt::Debug for Sender<'_, T>

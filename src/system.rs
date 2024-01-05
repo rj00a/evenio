@@ -24,9 +24,9 @@ use crate::world::{UnsafeWorldCell, World};
 #[derive(Debug)]
 pub struct Systems {
     infos: SlotMap<SystemInfo>,
-    /// Maps global event indices to the ordered list of systems that handle the
-    /// event.
-    by_global_event: Vec<SystemList>,
+    /// Maps untargeted event indices to the ordered list of systems that handle
+    /// the event.
+    by_untargeted_event: Vec<SystemList>,
     by_type_id: BTreeMap<TypeId, SystemInfoPtr>,
 }
 
@@ -34,7 +34,7 @@ impl Systems {
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
-            by_global_event: vec![],
+            by_untargeted_event: vec![],
             by_type_id: BTreeMap::new(),
         }
     }
@@ -54,12 +54,12 @@ impl Systems {
             if let EventIdx::Untargeted(idx) = info.received_event().index() {
                 let idx = idx.0 as usize;
 
-                if idx >= self.by_global_event.len() {
-                    self.by_global_event
+                if idx >= self.by_untargeted_event.len() {
+                    self.by_untargeted_event
                         .resize_with(idx + 1, SystemList::default);
                 }
 
-                self.by_global_event[idx].insert(ptr, info.priority())
+                self.by_untargeted_event[idx].insert(ptr, info.priority())
             }
 
             info
@@ -76,15 +76,15 @@ impl Systems {
 
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
         if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
-            if idx as usize >= self.by_global_event.len() {
-                self.by_global_event
+            if idx as usize >= self.by_untargeted_event.len() {
+                self.by_untargeted_event
                     .resize_with(idx as usize + 1, SystemList::default);
             }
         }
     }
 
-    pub(crate) fn get_global_list(&self, idx: UntargetedEventIdx) -> Option<&SystemList> {
-        self.by_global_event.get(idx.0 as usize)
+    pub(crate) fn get_untargeted_list(&self, idx: UntargetedEventIdx) -> Option<&SystemList> {
+        self.by_untargeted_event.get(idx.0 as usize)
     }
 
     pub fn get(&self, id: SystemId) -> Option<&SystemInfo> {
@@ -200,9 +200,9 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) name: Cow<'static, str>,
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
-    pub(crate) entity_event_expr: BoolExpr<ComponentIdx>,
-    pub(crate) sent_global_events: BitSet<UntargetedEventIdx>,
-    pub(crate) sent_entity_events: BitSet<TargetedEventIdx>,
+    pub(crate) targeted_event_expr: BoolExpr<ComponentIdx>,
+    pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
     pub(crate) reserve_entity_access: Access,
     pub(crate) component_access: ComponentAccessExpr,
@@ -235,18 +235,18 @@ impl SystemInfo {
         unsafe { (*self.inner.as_ptr()).received_event_access }
     }
 
-    pub fn entity_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
+    pub fn targeted_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
         self.received_event()
             .is_targeted()
-            .then(|| unsafe { &(*self.inner.as_ptr()).entity_event_expr })
+            .then(|| unsafe { &(*self.inner.as_ptr()).targeted_event_expr })
     }
 
-    pub fn sent_global_events(&self) -> &BitSet<UntargetedEventIdx> {
-        unsafe { &(*self.inner.as_ptr()).sent_global_events }
+    pub fn sent_untargeted_events(&self) -> &BitSet<UntargetedEventIdx> {
+        unsafe { &(*self.inner.as_ptr()).sent_untargeted_events }
     }
 
-    pub fn sent_entity_events(&self) -> &BitSet<TargetedEventIdx> {
-        unsafe { &(*self.inner.as_ptr()).sent_entity_events }
+    pub fn sent_targeted_events(&self) -> &BitSet<TargetedEventIdx> {
+        unsafe { &(*self.inner.as_ptr()).sent_targeted_events }
     }
 
     pub fn event_queue_access(&self) -> Access {
@@ -302,9 +302,9 @@ impl fmt::Debug for SystemInfo {
             .field("name", &self.name())
             .field("received_event", &self.received_event())
             .field("received_event_access", &self.received_event_access())
-            .field("entity_event_expr", &self.entity_event_expr())
-            .field("sent_global_events", &self.sent_global_events())
-            .field("sent_entity_events", &self.sent_entity_events())
+            .field("targeted_event_expr", &self.targeted_event_expr())
+            .field("sent_untargeted_events", &self.sent_untargeted_events())
+            .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
             .field("reserve_entity_access", &self.reserve_entity_access())
             .field("priority", &self.priority())
@@ -617,9 +617,9 @@ pub struct Config {
     /// has not yet been assigned.
     pub received_event: Option<EventId>,
     pub received_event_access: Access,
-    pub entity_event_expr: BoolExpr<ComponentIdx>,
-    pub sent_global_events: BitSet<UntargetedEventIdx>,
-    pub sent_entity_events: BitSet<TargetedEventIdx>,
+    pub targeted_event_expr: BoolExpr<ComponentIdx>,
+    pub sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    pub sent_targeted_events: BitSet<TargetedEventIdx>,
     pub event_queue_access: Access,
     pub reserve_entity_access: Access,
     pub component_access: ComponentAccessExpr,
@@ -631,9 +631,9 @@ impl Config {
             priority: Default::default(),
             received_event: Default::default(),
             received_event_access: Default::default(),
-            entity_event_expr: BoolExpr::new(false),
-            sent_global_events: Default::default(),
-            sent_entity_events: Default::default(),
+            targeted_event_expr: BoolExpr::new(false),
+            sent_untargeted_events: Default::default(),
+            sent_targeted_events: Default::default(),
             event_queue_access: Default::default(),
             reserve_entity_access: Default::default(),
             component_access: ComponentAccessExpr::new(false),

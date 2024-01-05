@@ -160,9 +160,9 @@ impl World {
             name: system.name(),
             received_event,
             received_event_access: config.received_event_access,
-            entity_event_expr: config.entity_event_expr,
-            sent_global_events: config.sent_global_events,
-            sent_entity_events: config.sent_entity_events,
+            targeted_event_expr: config.targeted_event_expr,
+            sent_untargeted_events: config.sent_untargeted_events,
+            sent_targeted_events: config.sent_targeted_events,
             event_queue_access: config.event_queue_access,
             reserve_entity_access: config.reserve_entity_access,
             component_access: config.component_access,
@@ -355,10 +355,13 @@ impl World {
                 }
 
                 let system_list = match event_meta {
-                    EventMeta::Global { idx } => unsafe {
-                        world.systems.get_global_list(idx).unwrap_debug_checked()
+                    EventMeta::Untargeted { idx } => unsafe {
+                        world
+                            .systems
+                            .get_untargeted_list(idx)
+                            .unwrap_debug_checked()
                     },
-                    EventMeta::Entity { idx, target } => {
+                    EventMeta::Targeted { idx, target } => {
                         let Some(location) = world.entities.get(target) else {
                             continue;
                         };

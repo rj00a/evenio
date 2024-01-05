@@ -499,17 +499,17 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
-        if let (Some(expr), EventIdx::Targeted(entity_event_idx)) =
-            (info.entity_event_expr(), info.received_event().index())
+        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) =
+            (info.targeted_event_expr(), info.received_event().index())
         {
             if expr.eval(|idx| self.column_of(idx).is_some()) {
-                if let Some(list) = self.event_listeners.get_mut(entity_event_idx) {
+                if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
                     list.insert(info.ptr(), info.priority());
                 } else {
                     let mut list = SystemList::new();
                     list.insert(info.ptr(), info.priority());
 
-                    self.event_listeners.insert(entity_event_idx, list);
+                    self.event_listeners.insert(targeted_event_idx, list);
                 }
             }
         }
