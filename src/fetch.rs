@@ -116,10 +116,19 @@ impl<Q: Query> FetcherState<Q> {
             unsafe { archetypes.get(idx).unwrap_debug_checked() }.entity_count()
         });
 
+        let state = NonNull::new(states.as_ptr().cast_mut()).unwrap_or(NonNull::dangling());
+        let state_last = if states.is_empty() {
+            NonNull::dangling()
+        } else {
+            NonNull::new(state.as_ptr().add(states.len() - 1)).unwrap_debug_checked()
+        };
+
+        let index = NonNull::new(indices.as_ptr().cast_mut()).unwrap_or(NonNull::dangling());
+
         Iter {
-            state: states.first().map_or(NonNull::dangling(), NonNull::from),
-            state_last: states.last().map_or(NonNull::dangling(), NonNull::from),
-            index: indices.first().map_or(NonNull::dangling(), NonNull::from),
+            state,
+            state_last,
+            index,
             row: ArchetypeRow(0),
             len: first_arch_len,
             archetypes,
@@ -599,6 +608,19 @@ mod tests {
             }
 
             assert!(set.is_empty());
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn iter_cached_empty() {
+        let mut world = World::new();
+
+        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+            for _ in f {
+                std::hint::black_box(());
+            }
         });
 
         world.send(E1);
