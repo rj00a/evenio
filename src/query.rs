@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use evenio_macros::all_tuples;
+pub use evenio_macros::Query;
 
 use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
@@ -11,6 +12,37 @@ use crate::component::{Component, ComponentId};
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};
 use crate::world::World;
+
+/// # Deriving
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(Component, Debug)]
+/// struct A(i32);
+///
+/// #[derive(Component, Debug)]
+/// struct B;
+///
+/// #[derive(Query, Debug)]
+/// struct CustomQuery<'a> {
+///     foo: &'a mut A,
+///     bar: EntityId,
+///     baz: Has<&'static B>,
+/// }
+///
+/// let mut world = World::new();
+///
+/// world.add_system(|_: Receiver<MyEvent>, q: Fetcher<CustomQuery>| {
+///     for item in q {
+///         println!("{item:?}");
+///     }
+/// });
+///
+/// world.send(MyEvent);
+/// # #[derive(Event)]
+/// # struct MyEvent;
+/// ```
 pub unsafe trait Query {
     /// The item returned by this query. This is usually the same type as
     /// `Self`, but with a modified lifetime.
@@ -112,6 +144,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
 macro_rules! impl_query_tuple {
     ($(($Q:ident, $q:ident)),*) => {
+        #[allow(unused_variables)]
         unsafe impl<$($Q: Query),*> Query for ($($Q,)*) {
             type Item<'a> = ($($Q::Item<'a>,)*);
 
@@ -171,7 +204,7 @@ macro_rules! impl_query_tuple {
     }
 }
 
-// Debug impls for tuples only go up to arity 12.
+// Currently, debug impls for tuples only go up to arity 12.
 all_tuples!(impl_query_tuple, 0, 12, Q, q);
 
 unsafe impl<Q: Query> Query for Option<Q> {
@@ -587,8 +620,8 @@ unsafe impl<Q: Query> Query for Has<Q> {
         Some(Q::new_arch_state(arch, state).is_some())
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        Self::fetch(state, row)
+    unsafe fn fetch<'a>(state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+        Self::new(*state)
     }
 }
 
@@ -622,6 +655,36 @@ unsafe impl Query for EntityId {
 }
 
 unsafe impl ReadOnlyQuery for EntityId {}
+
+/// Like `()`, the `PhantomData<T>` query always succeeds.
+unsafe impl<T: ?Sized> Query for PhantomData<T> {
+    type Item<'a> = Self;
+
+    type ArchState = ();
+
+    type State = ();
+
+    fn init(
+        world: &mut World,
+        config: &mut Config,
+    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        Ok((ComponentAccessExpr::new(true), ()))
+    }
+
+    fn new_state(world: &mut World) -> Self::State {
+        ()
+    }
+
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        Some(())
+    }
+
+    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        Self
+    }
+}
+
+unsafe impl<T: ?Sized> ReadOnlyQuery for PhantomData<T> {}
 
 pub struct ColumnPtr<T>(NonNull<T>);
 

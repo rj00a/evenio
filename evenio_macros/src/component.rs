@@ -19,6 +19,7 @@ pub(crate) fn derive_component(input: TokenStream) -> Result<TokenStream> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
+        #[automatically_derived]
         impl #impl_generics ::evenio::component::Component for #name #ty_generics #where_clause {
             const IS_MUTABLE: bool = #is_mutable;
         }
