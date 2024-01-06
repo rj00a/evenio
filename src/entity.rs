@@ -88,16 +88,16 @@ impl SystemParam for &'_ Entities {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.entities()
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &crate::archetype::Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &crate::archetype::Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 }
 
 #[derive(Copy, Clone, Debug)]

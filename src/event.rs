@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use core::num::NonZeroU32;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
-use core::{any, fmt, mem};
+use core::{any, fmt};
 use std::collections::btree_map::Entry;
 use std::ops::Index;
 
@@ -20,8 +20,8 @@ use crate::archetype::Archetype;
 use crate::component::ComponentIdx;
 use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::EntityId;
-use crate::fetch::{Fetcher, FetcherState};
-use crate::prelude::{Component, ComponentId};
+use crate::fetch::FetcherState;
+use crate::prelude::Component;
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -154,7 +154,7 @@ impl SystemParam for &'_ Events {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -255,7 +255,10 @@ impl EventId {
     };
 
     pub const fn new(index: EventIdx, generation: NonZeroU32) -> Option<Self> {
-        todo!()
+        match Key::new(index.as_u32(), generation) {
+            Some(k) => Some(Self::from_key(k, index.is_targeted())),
+            None => None,
+        }
     }
 
     const fn from_key(k: Key, is_targeted: bool) -> Self {
@@ -322,6 +325,14 @@ impl EventIdx {
             EventIdx::Targeted(idx) => idx.0,
             EventIdx::Untargeted(idx) => idx.0,
         }
+    }
+
+    pub const fn is_targeted(self) -> bool {
+        matches!(self, Self::Targeted(_))
+    }
+
+    pub const fn is_untargeted(self) -> bool {
+        !self.is_targeted()
     }
 }
 
@@ -443,7 +454,7 @@ impl EventQueue {
     /// Clears the event queue and resets the internal bump allocator.
     ///
     /// Any remaining event pointers are invalidated.
-    pub(crate) fn reset(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.bump.reset();
     }
@@ -560,7 +571,7 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Receiver<'a, E: Event, Q: ReceiverQuery = NullReceiverQuery> {
     pub event: &'a E,
     pub query: Q::Item<'a>,
@@ -587,7 +598,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -645,7 +656,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -668,6 +679,20 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
     unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.remove_archetype(arch)
+    }
+}
+
+impl<'a, E, Q> fmt::Debug for Receiver<'a, E, Q>
+where
+    E: Event + fmt::Debug,
+    Q: ReceiverQuery,
+    Q::Item<'a>: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Receiver")
+            .field("event", &self.event)
+            .field("query", &self.query)
+            .finish()
     }
 }
 
@@ -696,10 +721,10 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     }
 
     unsafe fn get_param<'a>(
-        state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        _state: &'a mut Self::State,
+        _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
+        _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         ReceiverMut {
             event: event_ptr.as_event_mut(),
@@ -707,9 +732,9 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
@@ -752,7 +777,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -775,6 +800,20 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
 
     unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
+    }
+}
+
+impl<'a, E, Q> fmt::Debug for ReceiverMut<'a, E, Q>
+where
+    E: Event + fmt::Debug,
+    Q: ReceiverQuery,
+    Q::Item<'a>: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Receiver")
+            .field("event", &self.event)
+            .field("query", &self.query)
+            .finish()
     }
 }
 
@@ -951,7 +990,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {

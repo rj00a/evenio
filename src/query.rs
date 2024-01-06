@@ -76,7 +76,7 @@ unsafe impl<C: Component> Query for &'_ C {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
+        _config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let id = Self::new_state(world);
         let expr = ComponentAccessExpr::with(id.index(), Access::Read);
@@ -109,7 +109,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
+        _config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         struct AssertMutable<C>(PhantomData<C>);
 
@@ -117,7 +117,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
             const ASSERTION: () = assert!(
                 C::IS_MUTABLE,
                 "component does not permit mutation through mutable references (see \
-                 `Component::MUTABLE`)."
+                 `Component::IS_MUTABLE`)."
             );
         }
 
@@ -390,7 +390,7 @@ where
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut left_expr, left_state) = L::init(world, config)?;
+        let (left_expr, left_state) = L::init(world, config)?;
         let (right_expr, right_state) = R::init(world, config)?;
 
         Ok((left_expr.xor(&right_expr), (left_state, right_state)))
@@ -635,8 +635,8 @@ unsafe impl Query for EntityId {
     type State = ();
 
     fn init(
-        world: &mut World,
-        config: &mut Config,
+        _world: &mut World,
+        _config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         Ok((ComponentAccessExpr::new(true), ()))
     }
@@ -665,21 +665,21 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
     type State = ();
 
     fn init(
-        world: &mut World,
-        config: &mut Config,
+        _world: &mut World,
+        _config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         Ok((ComponentAccessExpr::new(true), ()))
     }
 
-    fn new_state(world: &mut World) -> Self::State {
+    fn new_state(_world: &mut World) -> Self::State {
         ()
     }
 
-    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+    fn new_arch_state(_arch: &Archetype, _state: &mut Self::State) -> Option<Self::ArchState> {
         Some(())
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         Self
     }
 }

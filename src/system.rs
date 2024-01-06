@@ -165,16 +165,16 @@ impl SystemParam for &'_ Systems {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.systems()
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 #[repr(transparent)]
@@ -655,7 +655,7 @@ pub trait SystemParam {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a>;
@@ -910,11 +910,11 @@ impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        std::sync::Mutex::new(P::get_param(state, system_info, event_ptr, world))
+        std::sync::Mutex::new(P::get_param(state, info, event_ptr, world))
     }
 
     unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
@@ -938,11 +938,11 @@ impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        std::sync::RwLock::new(P::get_param(state, system_info, event_ptr, world))
+        std::sync::RwLock::new(P::get_param(state, info, event_ptr, world))
     }
 
     unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {

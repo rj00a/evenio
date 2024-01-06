@@ -14,8 +14,7 @@ use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
-    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, Spawn, TargetedEventIdx,
-    UntargetedEventIdx,
+    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, Spawn,
 };
 use crate::query::Query;
 use crate::system::{
@@ -303,6 +302,7 @@ impl World {
     pub fn flush_event_queue(&mut self) {
         handle_events(0, self);
         debug_assert_eq!(self.event_queue.len(), 0);
+        self.event_queue.clear();
 
         fn handle_events(queue_start_idx: usize, world: &mut World) {
             debug_assert!(queue_start_idx < world.event_queue.len());

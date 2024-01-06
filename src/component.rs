@@ -128,7 +128,7 @@ impl SystemParam for &'_ Components {
 
     unsafe fn get_param<'a>(
         _state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {

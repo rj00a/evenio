@@ -270,8 +270,8 @@ where
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
-        event_ptr: EventPtr<'a>,
+        _info: &'a SystemInfo,
+        _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Fetcher { state, world }
@@ -301,11 +301,11 @@ impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     #[track_caller]
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        system_info: &'a SystemInfo,
+        info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        match TrySingle::get_param(state, system_info, event_ptr, world) {
+        match TrySingle::get_param(state, info, event_ptr, world) {
             TrySingle(Ok(item)) => Single(item),
             TrySingle(Err(e)) => {
                 panic!(
@@ -339,7 +339,7 @@ impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
 
     unsafe fn get_param<'a>(
         state: &'a mut Self::State,
-        _system_info: &'a SystemInfo,
+        _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
@@ -470,17 +470,17 @@ impl<Q: Query> ExactSizeIterator for Iter<'_, Q> {
 
 impl<Q: Query> FusedIterator for Iter<'_, Q> {}
 
-// SAFETY: Iter is only cloneable when the query item is read-only.
+// SAFETY: Iter is only cloneable when the query is read-only.
 impl<'a, Q: ReadOnlyQuery> Clone for Iter<'a, Q> {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
-            state_last: self.state_last.clone(),
-            index: self.index.clone(),
-            row: self.row.clone(),
-            len: self.len.clone(),
-            archetypes: self.archetypes.clone(),
-            _marker: self._marker.clone(),
+            state: self.state,
+            state_last: self.state_last,
+            index: self.index,
+            row: self.row,
+            len: self.len,
+            archetypes: self.archetypes,
+            _marker: self._marker,
         }
     }
 }
@@ -499,24 +499,6 @@ impl<'a, Q: Query> fmt::Debug for Iter<'a, Q> {
 }
 
 // TODO `Send` and `Sync` impls for `Iter`.
-
-#[track_caller]
-#[cold]
-pub(crate) fn fetch_one_no_entity_matches<Q: Query>() -> ! {
-    panic!(
-        "failed to fetch single entity: no entity matches the query `{}`",
-        any::type_name::<Q>()
-    )
-}
-
-#[track_caller]
-#[cold]
-pub(crate) fn fetch_one_more_than_one_entity_matches<Q: Query>() -> ! {
-    panic!(
-        "failed to fetch single entity: more than one entity matches the query `{}`",
-        any::type_name::<Q>()
-    )
-}
 
 #[cfg(test)]
 mod tests {
