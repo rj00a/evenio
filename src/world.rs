@@ -13,8 +13,8 @@ use crate::component::{
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
-    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, Spawn,
+    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventInfo, EventKind, EventMeta,
+    EventPtr, EventQueue, Events, Insert, Remove, Spawn,
 };
 use crate::query::Query;
 use crate::system::{
@@ -72,16 +72,18 @@ impl World {
     /// world.send(MyEvent(123));
     /// ```
     pub fn send<E: Event>(&mut self, event: E) {
-        let event_id = self.add_event::<E>();
+        self.send_many(|mut sender| sender.send(event))
+    }
 
-        let idx = match event_id.index() {
-            EventIdx::Untargeted(idx) => idx.0,
-            EventIdx::Targeted(idx) => idx.0,
-        };
-
-        unsafe { self.event_queue.push(event, idx) };
+    pub fn send_many<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(Sender) -> R,
+    {
+        let res = f(Sender { world: self });
 
         self.flush_event_queue();
+
+        res
     }
 
     /// Examples
@@ -116,7 +118,9 @@ impl World {
         self.send(Call::new(system, event))
     }
 
-    pub fn get<Q: Query>(&mut self) {}
+    pub fn get<Q: Query>(&mut self) {
+        
+    }
 
     /// # Examples
     ///
@@ -294,12 +298,7 @@ impl World {
 
     /// Send all queued events to systems. The event queue will be empty after
     /// this call.
-    ///
-    /// Note that methods like [`send`] will automatically flush the event
-    /// queue, so this doesn't ususally need to be called directly.
-    ///
-    /// [`send`]: Self::send
-    pub fn flush_event_queue(&mut self) {
+    fn flush_event_queue(&mut self) {
         handle_events(0, self);
         debug_assert_eq!(self.event_queue.len(), 0);
         self.event_queue.clear();
@@ -599,6 +598,40 @@ unsafe impl Sync for World {}
 
 impl UnwindSafe for World {}
 impl RefUnwindSafe for World {}
+
+#[derive(Debug)]
+pub struct Sender<'a> {
+    world: &'a mut World,
+}
+
+impl Sender<'_> {
+    pub fn send<E: Event>(&mut self, event: E) {
+        let idx = self.world.add_event::<E>().index().as_u32();
+        unsafe { self.world.event_queue.push(event, idx) };
+    }
+
+    pub fn spawn(&mut self) -> EntityId {
+        let id = self.world.reserved_entities.reserve(&self.world.entities);
+        self.send(Spawn(id));
+        id
+    }
+
+    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
+        self.send(Insert::new(entity, component))
+    }
+
+    pub fn remove<C: Component>(&mut self, entity: EntityId) {
+        self.send(Remove::<C>::new(entity))
+    }
+
+    pub fn despawn(&mut self, entity: EntityId) {
+        self.send(Despawn(entity))
+    }
+
+    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
+        self.send(Call::new(system, event))
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {
