@@ -529,6 +529,10 @@ impl Archetype {
         self.entity_ids.len() as u32
     }
 
+    pub fn entity_ids(&self) -> &[EntityId] {
+        &self.entity_ids
+    }
+
     pub fn columns(&self) -> &[Column] {
         &self.columns
     }
@@ -540,10 +544,6 @@ impl Archetype {
             .ok()?;
 
         Some(unsafe { self.columns.get_debug_checked(idx) })
-    }
-
-    pub fn entity_id_data(&self) -> NonNull<EntityId> {
-        unsafe { NonNull::new(self.entity_ids.as_ptr().cast_mut()).unwrap_debug_checked() }
     }
 
     /// Would the columns of this archetype reallocate if an entity were added

@@ -57,17 +57,17 @@ impl<Q: Query> FetcherState<Q> {
         Q: ReadOnlyQuery,
     {
         let Some(loc) = entities.get(entity) else {
-            return Err(GetError::NoSuchEntity(entity));
+            return Err(GetError::NoSuchEntity);
         };
 
         // Eliminate a panicking branch.
         assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
 
         let Some(state) = self.map.get(loc.archetype) else {
-            return Err(GetError::QueryDoesNotMatch(entity));
+            return Err(GetError::QueryDoesNotMatch);
         };
 
-        Ok(Q::fetch(state, loc.row))
+        Ok(Q::get(state, loc.row))
     }
 
     #[inline]
@@ -77,7 +77,7 @@ impl<Q: Query> FetcherState<Q> {
         entity: EntityId,
     ) -> Result<Q::Item<'_>, GetError> {
         let Some(loc) = entities.get(entity) else {
-            return Err(GetError::NoSuchEntity(entity));
+            return Err(GetError::NoSuchEntity);
         };
 
         // Eliminate a panicking branch.
@@ -87,10 +87,10 @@ impl<Q: Query> FetcherState<Q> {
         // bounds, and then `assume` it. That would eliminate a bounds check.
 
         let Some(state) = self.map.get_mut(loc.archetype) else {
-            return Err(GetError::QueryDoesNotMatch(entity));
+            return Err(GetError::QueryDoesNotMatch);
         };
 
-        Ok(Q::fetch(state, loc.row))
+        Ok(Q::get(state, loc.row))
     }
 
     #[inline]
@@ -234,21 +234,17 @@ impl<'a, Q: Query> fmt::Debug for Fetcher<'a, Q> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetError {
-    NoSuchEntity(EntityId),
-    QueryDoesNotMatch(EntityId),
-    AliasedMutability(EntityId),
+    NoSuchEntity,
+    QueryDoesNotMatch,
+    AliasedMutability,
 }
 
 impl fmt::Display for GetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GetError::NoSuchEntity(id) => write!(f, "entity {id:?} does not exist"),
-            GetError::QueryDoesNotMatch(id) => {
-                write!(f, "entity {id:?} does not match the query")
-            }
-            GetError::AliasedMutability(id) => {
-                write!(f, "entity {id:?} was requested mutably more than once")
-            }
+            GetError::NoSuchEntity => write!(f, "entity does not exist"),
+            GetError::QueryDoesNotMatch => write!(f, "entity does not match the query"),
+            GetError::AliasedMutability => write!(f, "query violated aliasing rules"),
         }
     }
 }
@@ -431,7 +427,7 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
         }
 
         let state = unsafe { &*self.state.as_ptr().cast_const() };
-        let item = unsafe { Q::fetch(state, self.row) };
+        let item = unsafe { Q::get(state, self.row) };
 
         self.row.0 += 1;
 
@@ -548,16 +544,13 @@ mod tests {
         world.send(E1);
 
         world.add_system(|_: Receiver<E2>, f: Fetcher<&C1>| {
-            assert_eq!(
-                f.get(EntityId::NULL),
-                Err(GetError::NoSuchEntity(EntityId::NULL))
-            );
+            assert_eq!(f.get(EntityId::NULL), Err(GetError::NoSuchEntity));
         });
 
         world.send(E2);
 
         world.add_system(move |_: Receiver<E3>, f: Fetcher<&C2>| {
-            assert_eq!(f.get(e), Err(GetError::QueryDoesNotMatch(e)))
+            assert_eq!(f.get(e), Err(GetError::QueryDoesNotMatch))
         });
 
         world.send(E3);

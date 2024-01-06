@@ -1,3 +1,4 @@
+use core::any::TypeId;
 use core::fmt;
 use std::any;
 use std::marker::PhantomData;
@@ -6,12 +7,13 @@ use std::ptr::NonNull;
 use evenio_macros::all_tuples;
 pub use evenio_macros::Query;
 
-use crate::access::{Access, ComponentAccessExpr};
+use crate::access::{Access, AccessMap, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::component::{Component, ComponentId};
+use crate::component::{Component, ComponentId, ComponentIdx, AssertMutable};
+use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};
-use crate::world::World;
+use crate::world::{UnsafeWorldCell, World};
 
 /// # Deriving
 ///
@@ -62,7 +64,7 @@ pub unsafe trait Query {
 
     fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState>;
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
 pub unsafe trait ReadOnlyQuery: Query {}
@@ -93,7 +95,7 @@ unsafe impl<C: Component> Query for &'_ C {
             .map(|c| ColumnPtr(c.data().cast()))
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
         &*state.0.as_ptr().cast_const().add(row.0 as usize)
     }
 }
@@ -111,16 +113,6 @@ unsafe impl<C: Component> Query for &'_ mut C {
         world: &mut World,
         _config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        struct AssertMutable<C>(PhantomData<C>);
-
-        impl<C: Component> AssertMutable<C> {
-            const ASSERTION: () = assert!(
-                C::IS_MUTABLE,
-                "component does not permit mutation through mutable references (see \
-                 `Component::IS_MUTABLE`)."
-            );
-        }
-
         let _ = AssertMutable::<C>::ASSERTION;
 
         let id = Self::new_state(world);
@@ -137,7 +129,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
         <&C>::new_arch_state(arch, state)
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
         &mut *state.0.as_ptr().add(row.0 as usize)
     }
 }
@@ -152,7 +144,10 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
-            fn init(world: &mut World, config: &mut Config) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+            fn init(
+                world: &mut World,
+                config: &mut Config
+            ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
                 #![allow(unused_variables)]
 
                 #[allow(unused_mut)]
@@ -191,10 +186,10 @@ macro_rules! impl_query_tuple {
                 ))
             }
 
-            unsafe fn fetch<'a>(($($q,)*): &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+            unsafe fn get<'a>(($($q,)*): &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
                 (
                     $(
-                        $Q::fetch($q, row),
+                        $Q::get($q, row),
                     )*
                 )
             }
@@ -233,8 +228,8 @@ unsafe impl<Q: Query> Query for Option<Q> {
         Some(Q::new_arch_state(arch, state))
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        state.as_ref().map(|f| Q::fetch(f, row))
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state.as_ref().map(|f| Q::get(f, row))
     }
 }
 
@@ -328,10 +323,8 @@ where
         }
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        state
-            .as_ref()
-            .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state.as_ref().map(|l| L::get(l, row), |r| R::get(r, row))
     }
 }
 
@@ -415,10 +408,8 @@ where
         }
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        state
-            .as_ref()
-            .map(|l| L::fetch(l, row), |r| R::fetch(r, row))
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        state.as_ref().map(|l| L::get(l, row), |r| R::get(r, row))
     }
 }
 
@@ -484,7 +475,7 @@ unsafe impl<Q: Query> Query for Not<Q> {
         }
     }
 
-    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         Not::new()
     }
 }
@@ -545,7 +536,7 @@ unsafe impl<Q: Query> Query for With<Q> {
         Q::new_arch_state(arch, state).map(|_| ())
     }
 
-    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         With::new()
     }
 }
@@ -620,7 +611,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
         Some(Q::new_arch_state(arch, state).is_some())
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         Self::new(*state)
     }
 }
@@ -646,10 +637,12 @@ unsafe impl Query for EntityId {
     }
 
     fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
-        Some(ColumnPtr(arch.entity_id_data()))
+        Some(ColumnPtr(unsafe {
+            NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked()
+        }))
     }
 
-    unsafe fn fetch<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
         *state.0.as_ptr().add(row.0 as usize)
     }
 }
@@ -679,7 +672,7 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
         Some(())
     }
 
-    unsafe fn fetch<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
         Self
     }
 }

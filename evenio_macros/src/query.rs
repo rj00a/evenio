@@ -110,8 +110,8 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                 <#tuple_ty as ::evenio::query::Query>::new_arch_state(arch, state)
             }
 
-            unsafe fn fetch<'__a>(state: &Self::ArchState, row: ::evenio::archetype::ArchetypeRow) -> Self::Item<'__a> {
-                let (#(#field_idents,)*) = <#tuple_ty as ::evenio::query::Query>::fetch(state, row);
+            unsafe fn get<'__a>(state: &Self::ArchState, row: ::evenio::archetype::ArchetypeRow) -> Self::Item<'__a> {
+                let (#(#field_idents,)*) = <#tuple_ty as ::evenio::query::Query>::get(state, row);
 
                 #name {
                     #(#field_idents),*

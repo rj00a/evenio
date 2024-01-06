@@ -8,7 +8,8 @@ use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
 use crate::component::{
-    AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
+    AddComponent, AssertMutable, Component, ComponentDescriptor, ComponentId, ComponentInfo,
+    Components,
 };
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
@@ -118,8 +119,81 @@ impl World {
         self.send(Call::new(system, event))
     }
 
-    pub fn get<Q: Query>(&mut self) {
-        
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Component, PartialEq, Debug)]
+    /// struct MyComponent(i32);
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let e = world.spawn();
+    /// world.insert(e, MyComponent(123));
+    ///
+    /// assert_eq!(
+    ///     world.get_component::<MyComponent>(e),
+    ///     Some(&MyComponent(123))
+    /// );
+    /// ```
+    pub fn get_component<C: Component>(&self, entity: EntityId) -> Option<&C> {
+        let loc = self.entities.get(entity)?;
+
+        let component_idx = self
+            .components()
+            .get_by_type_id(TypeId::of::<C>())?
+            .id()
+            .index();
+
+        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_debug_checked() };
+
+        let col = arch.column_of(component_idx)?;
+
+        Some(unsafe {
+            &*col
+                .data()
+                .as_ptr()
+                .cast_const()
+                .cast::<C>()
+                .add(loc.row.0 as usize)
+        })
+    }
+
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Component, PartialEq, Debug)]
+    /// struct MyComponent(i32);
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let e = world.spawn();
+    /// world.insert(e, MyComponent(123));
+    ///
+    /// assert_eq!(
+    ///     world.get_component_mut::<MyComponent>(e),
+    ///     Some(&mut MyComponent(123))
+    /// );
+    /// ```
+    pub fn get_component_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
+        let _ = AssertMutable::<C>::ASSERTION;
+
+        let loc = self.entities.get(entity)?;
+
+        let component_idx = self
+            .components()
+            .get_by_type_id(TypeId::of::<C>())?
+            .id()
+            .index();
+
+        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_debug_checked() };
+
+        let col = arch.column_of(component_idx)?;
+
+        Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
     /// # Examples

@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 use core::alloc::Layout;
 use core::any::TypeId;
+use core::marker::PhantomData;
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::ops::Index;
@@ -223,3 +224,13 @@ pub struct AddComponent(pub ComponentId);
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveComponent(pub ComponentId);
+
+pub(crate) struct AssertMutable<C>(PhantomData<C>);
+
+impl<C: Component> AssertMutable<C> {
+    pub(crate) const ASSERTION: () = assert!(
+        C::IS_MUTABLE,
+        "component does not permit mutation through mutable references (see \
+         `Component::IS_MUTABLE`)."
+    );
+}
