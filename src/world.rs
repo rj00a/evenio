@@ -410,7 +410,10 @@ impl World {
                     /// the destructor.
                     #[inline]
                     fn unpack(self) -> (*mut u8, DropFn) {
-                        let Self { event, drop } = self;
+                        let event = self.event;
+                        let drop = self.drop;
+                        mem::forget(self);
+
                         (event, drop)
                     }
                 }
