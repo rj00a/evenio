@@ -89,6 +89,21 @@ impl BlobVec {
         }
     }
 
+    pub(crate) unsafe fn assign(&mut self, idx: usize, elem: *const u8) {
+        debug_assert!(idx < self.len, "index out of bounds");
+
+        let ptr = self
+            .data
+            .as_ptr()
+            .add(idx * self.elem_layout.size());
+
+        if let Some(drop) = self.drop {
+            drop(NonNull::new_unchecked(ptr));
+        }
+
+        ptr::copy_nonoverlapping(elem, ptr, self.elem_layout.size());
+    }
+
     pub(crate) unsafe fn get_mut(&mut self, idx: usize) -> *mut u8 {
         debug_assert!(idx < self.len, "index out of bounds");
 
@@ -245,7 +260,6 @@ fn capacity_overflow() -> ! {
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
-    use std::{mem, ptr};
 
     use super::*;
     use crate::drop_fn_of;

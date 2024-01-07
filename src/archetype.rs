@@ -78,13 +78,6 @@ impl Archetypes {
         }
     }
 
-    /*
-    pub fn max_archetype_index(&self) -> ArchetypeIdx {
-        // SAFETY: `indices` is nonempty because the empty archetype is always present.
-        *unsafe { self.indices.peek().unwrap_debug_checked() }
-    }
-    */
-
     pub fn iter(&self) -> impl Iterator<Item = &Archetype> {
         self.archetypes.iter().map(|(_, v)| v)
     }
@@ -105,6 +98,8 @@ impl Archetypes {
         components: &mut Components,
         systems: &mut Systems,
     ) -> ArchetypeIdx {
+        debug_assert!(components.get_by_index(component_idx).is_some());
+
         let next_arch_idx = self.archetypes.vacant_key();
 
         let src_arch = unsafe {
@@ -242,10 +237,23 @@ impl Archetypes {
         &mut self,
         src: EntityLocation,
         dst: ArchetypeIdx,
-        new_components: impl IntoIterator<Item = (ComponentIdx, *mut u8)>,
+        new_components: impl IntoIterator<Item = (ComponentIdx, *const u8)>,
         entities: &mut Entities,
     ) -> ArchetypeRow {
+        let mut new_components = new_components.into_iter();
+
         if src.archetype == dst {
+            let arch = self
+                .archetypes
+                .get_mut(src.archetype.0 as usize)
+                .unwrap_debug_checked();
+
+            for (comp_idx, comp_ptr) in new_components {
+                let col = arch.column_of_mut(comp_idx).unwrap_debug_checked();
+
+                col.data.assign(src.row.0 as usize, comp_ptr);
+            }
+
             return src.row;
         }
 
@@ -260,8 +268,6 @@ impl Archetypes {
 
         let mut src_it = src_arch.columns.iter_mut().peekable();
         let mut dst_it = dst_arch.columns.iter_mut().peekable();
-
-        let mut new_components = new_components.into_iter();
 
         // TODO: does this optimize better with raw pointers?
         loop {
@@ -546,6 +552,15 @@ impl Archetype {
         Some(unsafe { self.columns.get_debug_checked(idx) })
     }
 
+    fn column_of_mut(&mut self, idx: ComponentIdx) -> Option<&mut Column> {
+        let idx = self
+            .columns
+            .binary_search_by_key(&idx, |c| c.component_idx)
+            .ok()?;
+
+        Some(unsafe { self.columns.get_debug_checked_mut(idx) })
+    }
+
     /// Would the columns of this archetype reallocate if an entity were added
     /// to it?
     fn push_would_reallocate(&self) -> bool {
@@ -580,3 +595,32 @@ impl Column {
 // SAFETY: Components are guaranteed `Send` and `Sync`.
 unsafe impl Send for Column {}
 unsafe impl Sync for Column {}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    #[derive(Component)]
+    struct C(String);
+
+    #[derive(Event)]
+    struct E1;
+
+    #[derive(Event)]
+    struct E2;
+
+    #[test]
+    fn insert_overwrites() {
+        let mut world = World::new();
+
+        let e = world.spawn();
+
+        world.insert(e, C("hello".into()));
+
+        assert_eq!(world.get_component::<C>(e).unwrap().0, "hello");
+
+        world.insert(e, C("goodbye".into()));
+
+        assert_eq!(world.get_component::<C>(e).unwrap().0, "goodbye");
+    }
+}

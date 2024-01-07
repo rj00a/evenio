@@ -510,7 +510,7 @@ impl World {
                             };
 
                             let component_ptr =
-                                unsafe { event.event.add(component_offset as usize) };
+                                unsafe { event.event.add(component_offset as usize) }.cast_const();
 
                             unsafe {
                                 world.archetypes.move_entity(

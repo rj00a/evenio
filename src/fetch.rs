@@ -622,15 +622,11 @@ mod tests {
 
         world.add_system(
             move |_: Receiver<E1>, f1: Fetcher<&C1>, f2: Fetcher<&C2>, f3: Fetcher<&C3>| {
-                dbg!(&f1);
-
                 assert_eq!(f1.iter().len(), count as usize);
                 assert_eq!(f2.iter().len(), count as usize / 2);
                 assert_eq!(f3.iter().len(), count as usize / 3);
             },
         );
-
-        // dbg!(world.archetypes());
 
         world.send(E1);
     }
