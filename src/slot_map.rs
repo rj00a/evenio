@@ -132,16 +132,19 @@ impl<T> SlotMap<T> {
         Some((key, value))
     }
 
-    /*
-    pub(crate) fn key_at_occupied_index(&self, idx: u32) -> Option<Key> {
-        let slot = self.slots.get(idx as usize)?;
+    pub(crate) fn get_by_index_mut(&mut self, index: u32) -> Option<(Key, &mut T)> {
+        let slot = self.slots.get_mut(index as usize)?;
 
         if slot.is_vacant() {
             return None;
         }
 
-        Some(unsafe { Key::new_unchecked(idx, slot.generation) })
-    }*/
+        let key = unsafe { Key::new_unchecked(index, slot.generation) };
+
+        let value = unsafe { &mut slot.union.value };
+
+        Some((key, value))
+    }
 
     pub(crate) fn next_key_iter(&self) -> NextKeyIter<T> {
         NextKeyIter {

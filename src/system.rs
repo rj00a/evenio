@@ -71,7 +71,20 @@ impl Systems {
     }
 
     pub(crate) fn remove(&mut self, id: SystemId) -> Option<SystemInfo> {
-        todo!()
+        let info = self.infos.remove(id.0)?;
+
+        let received_event = info.received_event();
+
+        if received_event.is_untargeted() {
+            let list = &mut self.by_untargeted_event[received_event.index().as_u32() as usize];
+            list.remove(info.ptr());
+        }
+
+        if let Some(type_id) = info.type_id() {
+            self.by_type_id.remove(&type_id);
+        }
+
+        Some(info)
     }
 
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {

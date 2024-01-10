@@ -9,7 +9,7 @@ pub use evenio_macros::Query;
 
 use crate::access::{Access, AccessMap, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::component::{Component, ComponentId, ComponentIdx, AssertMutable};
+use crate::component::{AssertMutable, Component, ComponentId, ComponentIdx};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};

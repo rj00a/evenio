@@ -9,18 +9,17 @@ use std::ptr::{self, NonNull};
 use crate::archetype::Archetypes;
 use crate::component::{
     AddComponent, AssertMutable, Component, ComponentDescriptor, ComponentId, ComponentInfo,
-    Components,
+    Components, RemoveComponent,
 };
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventInfo, EventKind, EventMeta,
-    EventPtr, EventQueue, Events, Insert, Remove, Spawn,
+    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
 };
-use crate::query::Query;
 use crate::system::{
-    AddSystem, Config, IntoSystem, System, SystemId, SystemInfo, SystemInfoInner, SystemList,
-    Systems,
+    AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
+    SystemList, Systems,
 };
 use crate::{drop_fn_of, DropFn};
 
@@ -259,8 +258,34 @@ impl World {
         id
     }
 
+    /// # Example
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// let mut world = World::new();
+    ///
+    /// # #[derive(Event)]
+    /// # struct MyEvent;
+    /// let system_id = world.add_system(|_: Receiver<MyEvent>| {});
+    ///
+    /// let info = world.remove_system(system_id).unwrap();
+    ///
+    /// assert_eq!(info.id(), system_id);
+    /// assert!(!world.systems().contains(system_id));
+    /// ```
     pub fn remove_system(&mut self, id: SystemId) -> Option<SystemInfo> {
-        todo!()
+        if !self.systems.contains(id) {
+            return None;
+        }
+
+        self.send(RemoveSystem(id));
+
+        let info = self.systems.remove(id).unwrap();
+
+        self.archetypes.remove_system(&info);
+
+        Some(info)
     }
 
     /// # Examples
@@ -335,10 +360,29 @@ impl World {
     }
 
     pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
+        let kind = desc.kind;
+
         let (id, is_new) = self.events.add(desc);
 
         if is_new {
             self.systems.register_event(id.index());
+
+            match kind {
+                EventKind::Other => {}
+                EventKind::Insert { component_idx, .. } => {
+                    if let Some(info) = self.components.get_by_index_mut(component_idx) {
+                        info.insert_events.insert(id);
+                    }
+                }
+                EventKind::Remove { component_idx } => {
+                    if let Some(info) = self.components.get_by_index_mut(component_idx) {
+                        info.remove_events.insert(id);
+                    }
+                }
+                EventKind::Spawn => {}
+                EventKind::Despawn => {}
+                EventKind::Call { .. } => {}
+            }
 
             self.send(AddEvent(id));
         }
@@ -346,8 +390,51 @@ impl World {
         id
     }
 
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(Event)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let id = world.add_event::<MyEvent>();
+    /// world.remove_event(id);
+    ///
+    /// assert!(!world.events().contains(id));
+    /// ```
     pub fn remove_event(&mut self, id: EventId) -> Option<EventInfo> {
-        todo!()
+        assert!(self.event_queue.is_empty());
+
+        if !self.events.contains(id) {
+            return None;
+        }
+
+        // Send event before removing anything.
+        self.send(RemoveEvent(id));
+
+        let info = self.events.remove(id).unwrap();
+
+        match info.kind() {
+            EventKind::Other => {}
+            EventKind::Insert { component_idx, .. } => {
+                if let Some(info) = self.components.get_by_index_mut(component_idx) {
+                    info.insert_events.remove(&id);
+                }
+            }
+            EventKind::Remove { component_idx } => {
+                if let Some(info) = self.components.get_by_index_mut(component_idx) {
+                    info.remove_events.remove(&id);
+                }
+            }
+            EventKind::Spawn => {}
+            EventKind::Despawn => {}
+            EventKind::Call { .. } => {}
+        }
+
+        Some(info)
     }
 
     pub fn entities(&self) -> &Entities {

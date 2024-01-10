@@ -105,6 +105,22 @@ impl Events {
     pub fn contains(&self, id: EventId) -> bool {
         self.get(id).is_some()
     }
+
+    pub(crate) fn remove(&mut self, id: EventId) -> Option<EventInfo> {
+        let k = id.as_key();
+
+        let info = if id.is_targeted() {
+            self.targeted_events.remove(k)
+        } else {
+            self.untargeted_events.remove(k)
+        }?;
+
+        if let Some(type_id) = info.type_id {
+            self.by_type_id.remove(&type_id);
+        }
+
+        Some(info)
+    }
 }
 
 impl Index<EventId> for Events {
@@ -461,6 +477,10 @@ impl EventQueue {
 
     pub(crate) fn len(&self) -> usize {
         self.items.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub(crate) unsafe fn set_len(&mut self, new_len: usize) {

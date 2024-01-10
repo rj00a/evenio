@@ -1,4 +1,4 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -8,8 +8,9 @@ use std::ops::Index;
 
 pub use evenio_macros::Component;
 
+use crate::archetype::Archetype;
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::event::{Event, EventPtr};
+use crate::event::{Event, EventId, EventPtr};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -41,6 +42,8 @@ impl Components {
                         type_id: desc.type_id,
                         layout: desc.layout,
                         drop: desc.drop,
+                        insert_events: BTreeSet::new(),
+                        remove_events: BTreeSet::new(),
                     }) else {
                         panic!("too many components")
                     };
@@ -57,6 +60,8 @@ impl Components {
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
+            insert_events: BTreeSet::new(),
+            remove_events: BTreeSet::new(),
         }) else {
             panic!("too many components")
         };
@@ -70,6 +75,10 @@ impl Components {
 
     pub fn get_by_index(&self, idx: ComponentIdx) -> Option<&ComponentInfo> {
         self.infos.get_by_index(idx.0).map(|(_, v)| v)
+    }
+
+    pub(crate) fn get_by_index_mut(&mut self, idx: ComponentIdx) -> Option<&mut ComponentInfo> {
+        self.infos.get_by_index_mut(idx.0).map(|(_, v)| v)
     }
 
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
@@ -136,9 +145,9 @@ impl SystemParam for &'_ Components {
         world.components()
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
+    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
+    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 #[derive(Debug)]
@@ -148,6 +157,8 @@ pub struct ComponentInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: DropFn,
+    pub(crate) insert_events: BTreeSet<EventId>,
+    pub(crate) remove_events: BTreeSet<EventId>,
 }
 
 impl ComponentInfo {
@@ -169,6 +180,14 @@ impl ComponentInfo {
 
     pub fn drop(&self) -> DropFn {
         self.drop
+    }
+
+    pub fn insert_events(&self) -> &BTreeSet<EventId> {
+        &self.insert_events
+    }
+
+    pub fn remove_events(&self) -> &BTreeSet<EventId> {
+        &self.remove_events
     }
 }
 

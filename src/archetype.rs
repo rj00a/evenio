@@ -89,6 +89,19 @@ impl Archetypes {
         }
     }
 
+    pub(crate) fn remove_system(&mut self, info: &SystemInfo) {
+        // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
+        for (_, arch) in self.archetypes.iter_mut() {
+            arch.refresh_listeners.remove(&info.ptr());
+
+            if let EventIdx::Targeted(idx) = info.received_event().index() {
+                if let Some(list) = arch.event_listeners.get_mut(idx) {
+                    list.remove(info.ptr());
+                }
+            }
+        }
+    }
+
     /// Traverses one edge of the archetype graph in the insertion direction.
     /// Returns the destination archetype.
     pub(crate) unsafe fn traverse_insert(
