@@ -1,6 +1,7 @@
 # Sending Events From Systems
 
-Previously, we've seen how to send events using the [`World::send`] method. But to send events from within a system, we'll need to use the [`Sender`] system parameter:
+Previously, we've seen how to send events using the [`World::send`] method.
+But to send events from _within_ a system, we'll need to use the [`Sender`] system parameter:
 
 ```rust
 # use evenio::prelude::*;
@@ -20,6 +21,8 @@ world.add_system(|_: Receiver<A>, mut sender: Sender<(B, C)>| {
 
 world.add_system(|_: Receiver<B>| println!("got B!"));
 world.add_system(|_: Receiver<C>| println!("got C!"));
+
+world.send(A);
 ```
 
 Output:
@@ -30,12 +33,12 @@ got B!
 got C!
 ```
 
-In the parameter `Sender<(B, C)>` the `(B, C)` is the set of events the sender is allowed to send.
+In the parameter `Sender<(B, C)>`, the `(B, C)` is the set of events the sender is allowed to send.
 Attempting to send an event that is not in this set will fail.
 
 Note that [`Sender::send`] does not immediately send the event. It is instead added to an _event queue_, which is flushed once the system returns.
 
-Finally, note that events are evaluated recursively: Events sent by systems will finish broadcasting before the outer event has finished broadcasting.
+Finally, note that events are evaluated recursively – events sent by systems will finish broadcasting before the outer event has finished broadcasting.
 This is similar to a call stack or pre-order tree traversal. Consider the program:
 
 ```rust

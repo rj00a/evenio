@@ -3,13 +3,11 @@
 _Evenio_ is an archetype-based [Entity Component System](https://en.wikipedia.org/wiki/Entity_component_system) framework for building highly event-driven programs.
 
 In addition to the usual cast of Entities, Components, and Systems, `evenio` introduces _events_ as a first class citizen.
-Rather than restricting systems to run once every "update" in a fixed order, systems are generalized and reframed as _event handlers_.
+Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as _event handlers_.
 The control flow of the entire program is then defined by the flow of events between systems.
 Structural changes to the world are also mediated by events.
 
-Events allow users to build decoupled and robust software modules that can reliably and efficiently respond to changes in the `World`.
-
-> **For a full step-by-step introduction, please see the [guide book 📚](guide).** 
+> **For a full step-by-step introduction, please see the [tutorial book 📚](tutorial).** 
 
 ```rust
 use evenio::prelude::*;

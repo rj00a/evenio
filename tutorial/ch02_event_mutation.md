@@ -1,9 +1,9 @@
-# Mutable Events
+# Event Mutation
 
 So far, we've only had immutable access to events from within systems.
 But sometimes it's desirable to mutate events so that later systems will see the event differently.
 
-We can achieve this by using the `ReceiverMut` system parameter.
+We can achieve this by using the [`ReceiverMut`] system parameter.
 
 ```rust
 # use evenio::prelude::*;
@@ -31,15 +31,20 @@ Event is: 42
 Event is now: 52
 ```
 
+You should prefer using `Receiver` whenever possible, and only use `ReceiverMut` when mutable access to the event is needed.
+
+[`ReceiverMut`]: crate::event::ReceiverMut
+
 # Event Ownership
 
-We can take this a step further and _take ownership_ of the event.
-Doing so will stop the event from broadcasting and later systems will completely miss the event.
+We can take this a step further and entirely _take ownership_ of the event.
+Doing so will stop the event from broadcasting and later systems will not receive the event.
 
 ```rust
 # use evenio::prelude::*;
 # 
 # let mut world = World::new();
+# 
 #[derive(Event)]
 struct MyEvent(u32);
 
@@ -69,5 +74,5 @@ got event: 9
 ```
 
 This can be useful in a number of different scenarios.
-Consider a `TakeDamage` event used to signal an entity taking damage:
+Consider a `TakeDamage` event used to signal an entity taking damage in a game.
 With event consumption, we can take ownership of the event before it has a chance to propagate, effectively creating an "invincibility" effect.

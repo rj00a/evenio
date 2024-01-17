@@ -9,15 +9,17 @@ use evenio::prelude::*;
 let mut world = World::new();
 ```
 
-An application usually only needs a single `World`, but multiple worlds can be created if the need arises.[^1]
+An application usually needs a single `World`, but multiple worlds can be used if the need arises.[^1]
 
 # Systems and Events
 
 Systems are event handler functions that enable efficient access to the world. The majority of your application logic will likely live within systems.
 
-Events are messages we send in order to communicate with systems.
+Events are messages that systems listen for.
+A handful of events are defined by the library and have special effects when sent.
+However, most events are defined by the user.
 
-To get started, let's create a "hello world" system which prints a message whenever a `Message` event is sent.
+To get started, let's create a "hello world" system which prints a message whenever our `Message` event is sent.
 
 ```rust
 use evenio::prelude::*;
@@ -38,13 +40,13 @@ fn my_system(r: Receiver<Message>) {
 }
 ```
 
-This prints:
+Output:
 
 ```txt
 The message is: "Hello, World!"
 ```
 
-`Receiver<E>` is a special _system parameter_ which tells the library that we would like to listen for events of type `E`.
+`Receiver<E>` is a _system parameter_ which tells the system that we would like to listen for events of type `E`.
 
 Note that systems must listen for exactly one event type. Adding a system with more than one `Receiver` or no receivers at all will panic.
 
@@ -95,7 +97,7 @@ fn system_c(_: Receiver<MyEvent>) {
 }
 ```
 
-This prints:
+Output:
 ```txt
 system C
 system A

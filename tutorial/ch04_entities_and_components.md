@@ -6,8 +6,6 @@ Entities make up the _things_ in your application, such as monsters, players, ca
 By itself, an entity is just a unique identifier ([`EntityId`]). It is the entity's set of _components_ that differentiate a player from a monster, or a camera from an item.
 Components hold the data while systems operate on entities with certain sets of components.
 
-For more information on the ECS pattern in general, see the [Wikipedia article] on the subject.
-
 Let's see how we might model player and monster entities in a game with `evenio`.
 
 ```rust
@@ -22,7 +20,7 @@ struct Position {
     y: f32,
 }
 
-// A zero-sized component, often called a "marker" component.
+// A zero-sized component, often called a "marker" or "tag".
 #[derive(Component)]
 struct Player;
 
@@ -59,12 +57,9 @@ We can visualize our data using a table where the rows are entities and columns 
 | 1         | 20     | (100, 100) |        | ✅      |
 | 2         |        | (42, 42)   |        |         |
 
-Because players and monsters share components (health and position) we can treat those entities
-uniformly without having to fall back on inheritance from the Object Oriented Programming paradigm.
-This is a great news for us, since Rust doesn't have inheritance!
-
 [`EntityId`]: crate::entity::EntityId
-[Wikipedia article]: https://en.wikipedia.org/wiki/Entity_component_system
+
+In the next chapter, we'll see how to operate on component data from within systems.
 
 ## Bundling Components
 
@@ -121,8 +116,9 @@ Because of this, we have to specify the correct `Insert` events in the system's 
 
 ## Cleanup
 
-To remove an entity from the world, we send the special [`Despawn`] event.
-This will drop all of the entity's components and cause its `EntityId` to become invalid.
+To remove an entity from the world, we send the [`Despawn`] event.
+This will drop all of the entity's components and make its `EntityId` invalid.
+The `EntityId` will never be reused by a new entity.
 
 Alternatively, if we just want to remove components without deleting the entire entity, we send the [`Remove`] event for the specific component(s).
 
@@ -136,11 +132,16 @@ struct A;
 let e = world.spawn();
 world.insert(e, A);
 
+// Component exists.
 assert!(world.get_component::<A>(e).is_some());
 
 world.remove::<A>(e);
 
 // No more component.
+assert!(world.get_component::<A>(e).is_none());
+
+// Sending the `Remove` event again has no effect.
+world.remove::<A>(e);
 assert!(world.get_component::<A>(e).is_none());
 
 world.despawn(e);
@@ -152,26 +153,10 @@ assert!(!world.entities().contains(e));
 [`Despawn`]: crate::event::Despawn
 [`Remove`]: crate::event
 
-## Immutable Components
-
-TODO
-
-```rust
-use evenio::prelude::*;
-
-// An immutable component.
-#[derive(Component)]
-#[component(is_mutable = false)]
-struct Uuid(u128);
-```
-
-In the next chapter, we'll see how we can operate on component data from within systems.
-
 ## Performance Considerations
 
 Internally, all entities with the same set of components are organized into groups called _archetypes_.
-Archetypes enable fast iteration and random access lookups, among other benefits.
+Archetypes enable fast entity iteration and cleanup among other benefits.
 
-However, this means that adding or removing a component on an entity will force all components of that entity to move somewhere else in memory, which can be slow.
-For this reason, you should avoid rapidly adding or removing components from entities.
-For very frequent component additions or removals, consider using a `bool` or an `Option` in a component instead.
+However, this design means that adding or removing a component on an entity will force all components of that entity to move somewhere else in memory, which can be slow.
+If components are being rapidly added and removed, consider using a `bool` or an `Option` inside the component instead.
