@@ -15,7 +15,7 @@ use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
-    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
+    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
 };
 use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
@@ -72,7 +72,7 @@ impl World {
     /// world.send(MyEvent(123));
     /// ```
     pub fn send<E: Event>(&mut self, event: E) {
-        self.send_many(|mut sender| sender.send(event))
+        self.send_many(|mut s| s.send(event))
     }
 
     pub fn send_many<F, R>(&mut self, f: F) -> R
@@ -97,9 +97,7 @@ impl World {
     /// assert!(world.entities().contains(id));
     /// ```
     pub fn spawn(&mut self) -> EntityId {
-        let id = self.reserved_entities.reserve(&self.entities);
-        self.send(Spawn(id));
-        id
+        self.send_many(|mut s| s.spawn())
     }
 
     pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
@@ -236,7 +234,6 @@ impl World {
             sent_untargeted_events: config.sent_untargeted_events,
             sent_targeted_events: config.sent_targeted_events,
             event_queue_access: config.event_queue_access,
-            reserve_entity_access: config.reserve_entity_access,
             component_access: config.component_access,
             referenced_components: config.referenced_components,
             priority: config.priority,
@@ -428,7 +425,7 @@ impl World {
                         info.remove_events.insert(id);
                     }
                 }
-                EventKind::Spawn => {}
+                EventKind::SpawnQueued => {}
                 EventKind::Despawn => {}
             }
 
@@ -456,7 +453,7 @@ impl World {
     pub fn remove_event(&mut self, id: EventId) -> Option<EventInfo> {
         assert!(self.event_queue.is_empty());
 
-        if !self.events.contains(id) {
+        if !self.events.contains(id) || id == EventId::SPAWN_QUEUED {
             return None;
         }
 
@@ -495,7 +492,7 @@ impl World {
                     info.remove_events.remove(&id);
                 }
             }
-            EventKind::Spawn => {}
+            EventKind::SpawnQueued => {}
             EventKind::Despawn => {}
         }
 
@@ -703,14 +700,14 @@ impl World {
                             };
                         }
                     }
-                    EventKind::Spawn => {
-                        // `Spawn` doesn't need drop.
+                    EventKind::SpawnQueued => {
+                        // `SpawnQueued` doesn't need drop.
                         let _ = event.unpack();
 
-                        // Flush reserved entities and add them to the empty archetype.
+                        // Spawn one entity from the reserved entity queue.
                         world
                             .reserved_entities
-                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
+                            .spawn_one(&mut world.entities, |id| world.archetypes.spawn(id));
                     }
                     EventKind::Despawn => {
                         // `Despawn` doesn't need drop.
@@ -722,10 +719,8 @@ impl World {
                             .archetypes
                             .remove_entity(entity_id, &mut world.entities);
 
-                        // Flush reserved entities and add them to the empty archetype.
-                        world
-                            .reserved_entities
-                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
+                        // Reset next key iter.
+                        world.reserved_entities.refresh(&world.entities);
                     }
                 }
             }
@@ -799,6 +794,11 @@ impl Sender<'_> {
 
     pub fn spawn(&mut self) -> EntityId {
         let id = self.world.reserved_entities.reserve(&self.world.entities);
+        unsafe {
+            self.world
+                .event_queue
+                .push(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
+        }
         self.send(Spawn(id));
         id
     }
@@ -825,14 +825,21 @@ pub struct UnsafeWorldCell<'a> {
 impl<'a> UnsafeWorldCell<'a> {
     /// # Safety
     ///
+    /// - Must be called from within a system.
     /// - Must have permission to access the event queue mutably.
     /// - Event index must be correct for the given event.
-    pub unsafe fn push_event_with_index<E: Event>(self, event: E, idx: u32) {
+    pub unsafe fn send_with_index<E: Event>(self, event: E, idx: u32) {
         unsafe { (*self.world).event_queue.push(event, idx) }
     }
 
-    pub unsafe fn reserve_entity(self) -> EntityId {
-        (*self.world).reserved_entities.reserve(self.entities())
+    /// # Safety
+    ///
+    /// - Must be called from within a system.
+    /// - Must have permission to access the event queue mutably.
+    pub unsafe fn queue_spawn(self) -> EntityId {
+        let entity_id = (*self.world).reserved_entities.reserve(self.entities());
+        self.send_with_index(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32());
+        entity_id
     }
 
     pub fn entities(self) -> &'a Entities {

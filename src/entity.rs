@@ -154,22 +154,30 @@ impl ReservedEntities {
         }
     }
 
-    pub(crate) fn flush(
+    pub(crate) fn spawn_one(
         &mut self,
         entities: &mut Entities,
-        mut f: impl FnMut(EntityId) -> EntityLocation,
+        f: impl FnOnce(EntityId) -> EntityLocation,
     ) {
-        for _ in 0..self.count {
-            entities.add_with(&mut f);
-        }
+        if self.count > 0 {
+            entities.add_with(f);
 
-        self.count = 0;
+            self.count -= 1;
+            self.iter = entities.locs.next_key_iter();
+        }
+    }
+
+    pub(crate) fn refresh(&mut self, entities: &Entities) {
+        debug_assert_eq!(self.count, 0);
         self.iter = entities.locs.next_key_iter();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use crate::entity::Entities;
     use crate::prelude::*;
 
     #[test]
@@ -187,5 +195,49 @@ mod tests {
         assert_ne!(e1, e2);
         world.despawn(e2);
         assert!(!world.entities().contains(e2));
+    }
+
+    #[test]
+    fn spawn_queued() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E1;
+
+        #[derive(Event)]
+        struct E2;
+
+        let entities = Arc::new(Mutex::new((EntityId::NULL, EntityId::NULL)));
+
+        let entities_1 = entities.clone();
+        let entities_2 = entities.clone();
+
+        world.add_system(move |_: Receiver<E1>, mut s: Sender<(Spawn, E2)>| {
+            let e1 = s.spawn();
+            s.send(E2);
+            let e2 = s.spawn();
+            *entities_1.lock().unwrap() = (e1, e2);
+        });
+
+        world.add_system(move |_: Receiver<E2>, entities: &Entities| {
+            let (e1, e2) = *entities_2.lock().unwrap();
+
+            assert!(entities.contains(e1));
+            assert!(!entities.contains(e2));
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn spawn_event_entity_exists() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E;
+
+        world.add_system(|r: Receiver<Spawn, ()>, entities: &Entities| {
+            assert!(entities.contains(r.event.0));
+        });
     }
 }

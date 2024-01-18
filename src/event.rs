@@ -25,7 +25,7 @@ use crate::prelude::Component;
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
-use crate::system::{Config, InitError, SystemId, SystemInfo, SystemParam};
+use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 use crate::DropFn;
 
@@ -38,11 +38,22 @@ pub struct Events {
 
 impl Events {
     pub(crate) fn new() -> Self {
-        Self {
+        let mut this = Self {
             untargeted_events: SlotMap::new(),
             targeted_events: SlotMap::new(),
             by_type_id: BTreeMap::new(),
-        }
+        };
+
+        this.add(EventDescriptor {
+            name: any::type_name::<SpawnQueued>().into(),
+            type_id: None,
+            is_targeted: false,
+            kind: EventKind::SpawnQueued,
+            layout: Layout::new::<SpawnQueued>(),
+            drop: None,
+        });
+
+        this
     }
 
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (EventId, bool) {
@@ -98,6 +109,8 @@ impl Events {
     }
 
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
+        debug_assert_ne!(type_id, TypeId::of::<SpawnQueued>());
+
         let idx = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
@@ -107,6 +120,8 @@ impl Events {
     }
 
     pub(crate) fn remove(&mut self, id: EventId) -> Option<EventInfo> {
+        debug_assert_ne!(id, EventId::SPAWN_QUEUED);
+
         let k = id.as_key();
 
         let info = if id.is_targeted() {
@@ -212,11 +227,13 @@ impl SystemParam for &'_ Events {
 /// }
 /// ```
 pub trait Event: Send + Sync + 'static {
-    const IS_TARGETED: bool;
+    const IS_TARGETED: bool = false;
 
     const IS_MUTABLE: bool = true;
 
-    fn target(&self) -> EntityId;
+    fn target(&self) -> EntityId {
+        unimplemented!()
+    }
 
     unsafe fn init(world: &mut World) -> EventKind {
         let _ = world;
@@ -244,8 +261,7 @@ pub enum EventKind {
         /// The [`ComponentIdx`] of the component to remove.
         component_idx: ComponentIdx,
     },
-    /// The [`Spawn`] event.
-    Spawn,
+    SpawnQueued,
     /// The [`Despawn`] event.
     Despawn,
 }
@@ -260,6 +276,12 @@ impl EventId {
     pub const NULL: Self = Self {
         index: u32::MAX,
         generation: u32::MAX,
+    };
+
+    // ID of the [`SpawnQueued`] event.
+    pub(crate) const SPAWN_QUEUED: EventId = Self {
+        index: 0,
+        generation: 1,
     };
 
     pub const fn new(index: EventIdx, generation: NonZeroU32) -> Option<Self> {
@@ -289,7 +311,7 @@ impl EventId {
     }
 
     pub const fn is_untargeted(&self) -> bool {
-        !self.is_targeted()
+        self.generation & 1 == 1
     }
 
     #[inline]
@@ -371,6 +393,14 @@ unsafe impl SparseIndex for TargetedEventIdx {
 
     fn from_index(idx: usize) -> Self {
         Self(u32::from_index(idx))
+    }
+}
+
+pub(crate) struct SpawnQueued;
+
+impl Event for SpawnQueued {
+    unsafe fn init(world: &mut World) -> EventKind {
+        EventKind::SpawnQueued
     }
 }
 
@@ -919,7 +949,7 @@ impl<T: EventSet> Sender<'_, T> {
             )
         });
 
-        unsafe { self.world.push_event_with_index(event, event_idx) }
+        unsafe { self.world.send_with_index(event, event_idx) }
     }
 
     /// # Panics
@@ -928,7 +958,7 @@ impl<T: EventSet> Sender<'_, T> {
     /// This may become a compile time error in the future.
     #[track_caller]
     pub fn spawn(&mut self) -> EntityId {
-        let id = unsafe { self.world.reserve_entity() };
+        let id = unsafe { self.world.queue_spawn() };
         self.send(Spawn(id));
         id
     }
@@ -1152,25 +1182,8 @@ impl<C: Component> Event for Remove<C> {
 }
 
 /// An [`Event`] which signals the creation of an entity.
-///
-/// Note that the contained [`EntityId`] may or may not refer to a live entity
-/// at the time the event is sent.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Spawn(pub EntityId);
-
-impl Event for Spawn {
-    const IS_TARGETED: bool = false;
-
-    const IS_MUTABLE: bool = false;
-
-    fn target(&self) -> EntityId {
-        unimplemented!("`Spawn` does not have a target entity")
-    }
-
-    unsafe fn init(_world: &mut World) -> EventKind {
-        EventKind::Spawn
-    }
-}
+#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Spawn(#[event(target)] pub EntityId);
 
 /// An [`Event`] which removes an entity from the [`World`].
 ///
@@ -1219,3 +1232,16 @@ pub struct AddEvent(pub EventId);
 /// An [`Event`] sent immediately before an event is removed from the world.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveEvent(pub EventId);
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn flush_entity_event() {
+        let mut world = World::new();
+
+        assert!(world.events().contains(EventId::SPAWN_QUEUED));
+        assert!(world.remove_event(EventId::SPAWN_QUEUED).is_none());
+    }
+}

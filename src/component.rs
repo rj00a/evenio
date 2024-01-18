@@ -299,10 +299,7 @@ mod tests {
         );
 
         let c2 = world.add_component::<B>();
-        dbg!(world.entities());
         let e2 = world.spawn();
-        dbg!(world.entities());
-        dbg!(e2);
         assert!(world.entities().contains(e2));
         world.insert(e2, B(vec![]));
         let s2 = world.add_system(|_: Receiver<E>, Single(B(b)): Single<&mut B>| {

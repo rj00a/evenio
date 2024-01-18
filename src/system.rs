@@ -217,7 +217,6 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
-    pub(crate) reserve_entity_access: Access,
     pub(crate) component_access: ComponentAccessExpr,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
     pub(crate) priority: Priority,
@@ -265,10 +264,6 @@ impl SystemInfo {
 
     pub fn event_queue_access(&self) -> Access {
         unsafe { (*self.inner.as_ptr()).event_queue_access }
-    }
-
-    pub fn reserve_entity_access(&self) -> Access {
-        unsafe { (*self.inner.as_ptr()).reserve_entity_access }
     }
 
     pub fn component_access(&self) -> &ComponentAccessExpr {
@@ -328,7 +323,6 @@ impl fmt::Debug for SystemInfo {
             .field("sent_untargeted_events", &self.sent_untargeted_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
-            .field("reserve_entity_access", &self.reserve_entity_access())
             .field("priority", &self.priority())
             .field("id", &self.id())
             .field("type_id", &self.type_id())
