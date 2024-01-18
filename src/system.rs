@@ -87,6 +87,10 @@ impl Systems {
         Some(info)
     }
 
+    pub(crate) fn remove_component(&mut self, idx: ComponentIdx) {
+        todo!()
+    }
+
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
         if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
             if idx as usize >= self.by_untargeted_event.len() {
@@ -219,6 +223,7 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) event_queue_access: Access,
     pub(crate) reserve_entity_access: Access,
     pub(crate) component_access: ComponentAccessExpr,
+    pub(crate) referenced_components: BitSet<ComponentIdx>,
     pub(crate) priority: Priority,
     pub(crate) id: SystemId,
     pub(crate) type_id: Option<TypeId>,
@@ -274,6 +279,10 @@ impl SystemInfo {
         unsafe { &(*self.inner.as_ptr()).component_access }
     }
 
+    pub fn referenced_components(&self) -> &BitSet<ComponentIdx> {
+        unsafe { &(*self.inner.as_ptr()).referenced_components }
+    }
+
     pub fn priority(&self) -> Priority {
         // SAFETY: Type ensures inner pointer is valid.
         unsafe { (*self.inner.as_ptr()).priority }
@@ -299,6 +308,10 @@ impl SystemInfo {
     pub(crate) unsafe fn ref_from_ptr(this: &SystemInfoPtr) -> &Self {
         // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
         &*(this as *const _ as *const Self)
+    }
+
+    pub(crate) unsafe fn mut_from_ptr(this: &mut SystemInfoPtr) -> &mut Self {
+        &mut *(this as *mut _ as *mut Self)
     }
 
     pub(crate) fn system_mut(&mut self) -> &mut dyn System {
@@ -636,6 +649,14 @@ pub struct Config {
     pub event_queue_access: Access,
     pub reserve_entity_access: Access,
     pub component_access: ComponentAccessExpr,
+    /// The set of components referenced by this system. Used for system cleanup
+    /// when a component is removed.
+    ///
+    /// This is a superset of the components accessed by this system. Consider
+    /// the query `Has<&C>`: `Has` does not access `C`, but it still makes use
+    /// of `C`'s component index, so the whole system must be removed when
+    /// component `C` is removed.
+    pub referenced_components: BitSet<ComponentIdx>,
 }
 
 impl Config {
@@ -650,6 +671,7 @@ impl Config {
             event_queue_access: Default::default(),
             reserve_entity_access: Default::default(),
             component_access: ComponentAccessExpr::new(false),
+            referenced_components: Default::default(),
         }
     }
 }

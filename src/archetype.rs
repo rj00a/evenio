@@ -1,4 +1,5 @@
 use alloc::collections::BTreeMap;
+use core::mem;
 use core::ptr::NonNull;
 use std::cmp::Ordering;
 use std::collections::btree_map::Entry;
@@ -100,6 +101,48 @@ impl Archetypes {
                 }
             }
         }
+    }
+
+    pub(crate) fn remove_component<F>(&mut self, component_idx: ComponentIdx, mut f: F)
+    where
+        F: FnMut(EntityId),
+    {
+        self.by_components.retain(|comps, &mut idx| {
+            if comps.binary_search(&component_idx).is_ok() {
+                let arch = unsafe { self.archetypes.get_debug_checked_mut(idx.0 as usize) };
+
+                for mut sys in mem::take(&mut arch.refresh_listeners) {
+                    let sys = unsafe { SystemInfo::mut_from_ptr(&mut sys) };
+
+                    unsafe { sys.system_mut().remove_archetype(arch) };
+                }
+
+                for &entity_id in arch.entity_ids() {
+                    f(entity_id);
+                }
+
+                let insert_components = mem::take(&mut arch.insert_components);
+                let remove_components = mem::take(&mut arch.remove_components);
+
+                for (comp_idx, arch_idx) in insert_components {
+                    let arch =
+                        unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+
+                    arch.remove_components.remove(&comp_idx);
+                }
+
+                for (comp_idx, arch_idx) in remove_components {
+                    let arch =
+                        unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+
+                    arch.insert_components.remove(&comp_idx);
+                }
+
+                false
+            } else {
+                true
+            }
+        })
     }
 
     /// Traverses one edge of the archetype graph in the insertion direction.

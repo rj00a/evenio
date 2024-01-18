@@ -83,7 +83,7 @@ In the previous example, we used the `&A` query to match entities with the `A` c
 Derived queries act like tuples — every field must match in order for the whole query to match.
 
 Compared to tuples, however, derived query structs offer some advantages.
-Fields are be named and methods can be implemented on the struct – handy for complex or frequently used queries.
+Fields are named and methods can be implemented on the struct – handy for complex or frequently used queries.
 
 ```rust
 # use evenio::prelude::*;

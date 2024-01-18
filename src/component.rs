@@ -69,6 +69,16 @@ impl Components {
         (ComponentId(k), true)
     }
 
+    pub(crate) fn remove(&mut self, component_id: ComponentId) -> Option<ComponentInfo> {
+        let info = self.infos.remove(component_id.0)?;
+
+        if let Some(type_id) = info.type_id {
+            self.by_type_id.remove(&type_id);
+        }
+
+        Some(info)
+    }
+
     pub fn get(&self, id: ComponentId) -> Option<&ComponentInfo> {
         self.infos.get(id.0)
     }

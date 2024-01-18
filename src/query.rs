@@ -74,25 +74,25 @@ unsafe impl<C: Component> Query for &'_ C {
 
     type ArchState = ColumnPtr<C>;
 
-    type State = ComponentId;
+    type State = ComponentIdx;
 
     fn init(
         world: &mut World,
-        _config: &mut Config,
+        config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let id = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(id.index(), Access::Read);
+        let idx = Self::new_state(world);
+        let expr = ComponentAccessExpr::with(idx, Access::Read);
+        config.referenced_components.insert(idx);
 
-        Ok((expr, id))
+        Ok((expr, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
-        world.add_component::<C>()
+        world.add_component::<C>().index()
     }
 
     fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
-        arch.column_of(state.index())
-            .map(|c| ColumnPtr(c.data().cast()))
+        arch.column_of(*state).map(|c| ColumnPtr(c.data().cast()))
     }
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
@@ -107,22 +107,23 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     type ArchState = ColumnPtr<C>;
 
-    type State = ComponentId;
+    type State = ComponentIdx;
 
     fn init(
         world: &mut World,
-        _config: &mut Config,
+        config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let _ = AssertMutable::<C>::ASSERTION;
 
-        let id = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(id.index(), Access::ReadWrite);
+        let idx = Self::new_state(world);
+        let expr = ComponentAccessExpr::with(idx, Access::ReadWrite);
+        config.referenced_components.insert(idx);
 
-        Ok((expr, id))
+        Ok((expr, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
-        world.add_component::<C>()
+        world.add_component::<C>().index()
     }
 
     fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {

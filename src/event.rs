@@ -592,7 +592,7 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Receiver<'a, E: Event, Q: ReceiverQuery = NullReceiverQuery> {
+pub struct Receiver<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery> {
     pub event: &'a E,
     pub query: Q::Item<'a>,
 }
@@ -716,7 +716,7 @@ where
     }
 }
 
-pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery = NullReceiverQuery> {
+pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery> {
     pub event: EventMut<'a, E>,
     pub query: Q::Item<'a>,
 }

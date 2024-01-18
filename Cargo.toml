@@ -41,7 +41,6 @@ default = ["std"]
 std = []
 
 [dependencies]
-# ahash = "0.8.3"
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros" }
 memoffset = "0.9.0"

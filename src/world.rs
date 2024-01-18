@@ -6,6 +6,7 @@ use std::any::{self, TypeId};
 use std::mem;
 use std::ptr::{self, NonNull};
 
+use crate::access::Access;
 use crate::archetype::Archetypes;
 use crate::component::{
     AddComponent, AssertMutable, Component, ComponentDescriptor, ComponentId, ComponentInfo,
@@ -14,8 +15,8 @@ use crate::component::{
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventInfo, EventKind, EventMeta,
-    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
+    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
+    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
 };
 use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
@@ -242,6 +243,7 @@ impl World {
             event_queue_access: config.event_queue_access,
             reserve_entity_access: config.reserve_entity_access,
             component_access: config.component_access,
+            referenced_components: config.referenced_components,
             priority: config.priority,
             id: SystemId::NULL, // Filled in later.
             type_id,
@@ -327,8 +329,60 @@ impl World {
         id
     }
 
-    pub fn remove_component(&mut self, id: SystemId) -> Option<ComponentInfo> {
-        todo!()
+    pub fn remove_component(&mut self, id: ComponentId) -> Option<ComponentInfo> {
+        if !self.components.contains(id) {
+            return None;
+        }
+
+        self.send(RemoveComponent(id));
+
+        let despawn_idx = self.add_event::<Despawn>().index().as_u32();
+
+        // Attempt to despawn all entities that still have this component.
+        for arch in self.archetypes.iter() {
+            if arch.column_of(id.index()).is_some() {
+                for &entity_id in arch.entity_ids() {
+                    unsafe { self.event_queue.push(Despawn(entity_id), despawn_idx) };
+                }
+            }
+        }
+
+        self.flush_event_queue();
+
+        // Remove all systems that reference this component.
+        let mut systems_to_remove = vec![];
+
+        for sys in self.systems.iter() {
+            if sys.referenced_components().contains(id.index()) {
+                systems_to_remove.push(sys.id());
+            }
+        }
+
+        for sys_id in systems_to_remove {
+            self.remove_system(sys_id);
+        }
+
+        let info = &self.components[id];
+
+        // Remove all the `Insert` and `Remove` events for this component.
+        let events_to_remove = info
+            .insert_events()
+            .iter()
+            .copied()
+            .chain(info.remove_events().iter().copied())
+            .collect::<Vec<_>>();
+
+        for event in events_to_remove {
+            self.remove_event(event);
+        }
+
+        // Remove all archetypes with this component. If there are still entities with
+        // the component by this point, then they will be silently removed.
+        self.archetypes.remove_component(id.index(), |entity_id| {
+            self.entities.remove(entity_id);
+        });
+
+        self.components.remove(id)
     }
 
     /// # Examples
@@ -414,6 +468,24 @@ impl World {
 
         // Send event before removing anything.
         self.send(RemoveEvent(id));
+
+        // Remove all systems that send or receive this event.
+        let mut to_remove = vec![];
+
+        for sys in self.systems.iter() {
+            if sys.received_event() == id
+                || match id.index() {
+                    EventIdx::Targeted(idx) => sys.sent_targeted_events().contains(idx),
+                    EventIdx::Untargeted(idx) => sys.sent_untargeted_events().contains(idx),
+                }
+            {
+                to_remove.push(sys.id());
+            }
+        }
+
+        for id in to_remove {
+            self.remove_system(id);
+        }
 
         let info = self.events.remove(id).unwrap();
 
