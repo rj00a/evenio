@@ -14,8 +14,8 @@ use crate::component::{
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
-    AddEvent, Call, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind,
-    EventMeta, EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
+    AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
+    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn,
 };
 use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
@@ -112,10 +112,6 @@ impl World {
 
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
-    }
-
-    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
-        self.send(Call::new(system, event))
     }
 
     /// # Examples
@@ -434,7 +430,6 @@ impl World {
                 }
                 EventKind::Spawn => {}
                 EventKind::Despawn => {}
-                EventKind::Call { .. } => {}
             }
 
             self.send(AddEvent(id));
@@ -502,7 +497,6 @@ impl World {
             }
             EventKind::Spawn => {}
             EventKind::Despawn => {}
-            EventKind::Call { .. } => {}
         }
 
         Some(info)
@@ -733,48 +727,6 @@ impl World {
                             .reserved_entities
                             .flush(&mut world.entities, |id| world.archetypes.spawn(id));
                     }
-                    EventKind::Call {
-                        event_id,
-                        event_offset,
-                    } => {
-                        let system_id = unsafe { *event.event.cast::<SystemId>() };
-
-                        if let Some(info) = world.systems.get_mut(system_id) {
-                            if info.received_event() == event_id {
-                                let info_ptr = info.ptr();
-
-                                let events_before = world.event_queue.len();
-
-                                let mut event_ptr =
-                                    unsafe { event.event.add(event_offset as usize) };
-
-                                let event_ptr_ptr = EventPtr::new(NonNull::from(&mut event_ptr));
-                                let world_cell = world.unsafe_cell_mut();
-                                let info = unsafe { SystemInfo::ref_from_ptr(&info_ptr) };
-
-                                unsafe {
-                                    (*info_ptr.as_ptr())
-                                        .system
-                                        .run(info, event_ptr_ptr, world_cell)
-                                };
-
-                                let events_after = world.event_queue.len();
-
-                                if events_before < events_after {
-                                    // Eagerly handle any events produced by the system.
-                                    handle_events(events_before, world);
-                                }
-
-                                debug_assert_eq!(world.event_queue.len(), events_before);
-
-                                if event_ptr.is_null() {
-                                    // System took ownership of the event. Don't
-                                    // run destructor for Call<E>.
-                                    event.unpack();
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -861,10 +813,6 @@ impl Sender<'_> {
 
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
-    }
-
-    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
-        self.send(Call::new(system, event))
     }
 }
 

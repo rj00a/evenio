@@ -275,7 +275,7 @@ mod tests {
     fn remove_component() {
         #[derive(Component)]
         struct A(String);
-    
+
         #[derive(Component, PartialEq, Debug)]
         struct B(Vec<String>);
 
@@ -292,7 +292,11 @@ mod tests {
         assert!(world.remove_component(c1).is_some());
         assert!(!world.systems().contains(s1));
         assert!(!world.entities().contains(e1));
-        assert_eq!(world.archetypes().len(), 1, "only the empty archetype should be present");
+        assert_eq!(
+            world.archetypes().len(),
+            1,
+            "only the empty archetype should be present"
+        );
 
         let c2 = world.add_component::<B>();
         dbg!(world.entities());

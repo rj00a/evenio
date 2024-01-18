@@ -248,14 +248,6 @@ pub enum EventKind {
     Spawn,
     /// The [`Despawn`] event.
     Despawn,
-    /// The [`Call`] event.
-    Call {
-        /// The [`EventId`] of the event to send.
-        event_id: EventId,
-        /// Cached offset from the beginning of the event to the
-        /// [`Call::event`] field.
-        event_offset: u32,
-    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -955,11 +947,6 @@ impl<T: EventSet> Sender<'_, T> {
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
     }
-
-    #[track_caller]
-    pub fn call<E: Event>(&mut self, system: SystemId, event: E) {
-        self.send(Call::new(system, event))
-    }
 }
 
 impl<T: EventSet> SystemParam for Sender<'_, T> {
@@ -1222,81 +1209,6 @@ impl Event for Despawn {
 
     unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::Despawn
-    }
-}
-
-/// An [`Event`] which sends an event to a specific system.
-///
-/// `Call` allows users to bypass the usual event broadcasting behavior in order
-/// to send an event to exactly one system, identified by a [`SystemId`] value.
-/// Here are a few scenarios where this could be useful:
-/// - A function-like system needs to "return" a value to a "caller".
-/// - An event sender has ahead-of-time knowledge about which systems are
-///   interested in the event, and would like to choose which systems receive
-///   the event for performance reasons.
-/// - Interacting with code outside the user's control in a hacky way.
-///
-/// Note that `Call<E>` is itself an event which can be listened for and
-/// consumed as usual. The inner event `E` is only sent once `Call<E>` has
-/// finished broadcasting without being consumed.
-///
-/// # Examples
-///
-/// ```
-/// use evenio::prelude::*;
-///
-/// let mut world = World::new();
-///
-/// #[derive(Event)]
-/// struct Foo;
-///
-/// fn system_1(_: Receiver<Foo>) {
-///     println!("OK");
-/// }
-/// fn system_2(_: Receiver<Foo>) {
-///     panic!("not OK");
-/// }
-///
-/// let system_1_id = world.add_system(system_1);
-/// world.add_system(system_2);
-///
-/// // Although both `system_1` and `system_2` listen for `Foo`, only `system_1`
-/// // will receive this event.
-/// world.send(Call {
-///     system: system_1_id,
-///     event: Foo,
-/// });
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[repr(C)] // Field order is significant!
-pub struct Call<E> {
-    /// Identifier of the system that will receive the event. If the ID is
-    /// invalid, then no system will receive the event.
-    pub system: SystemId,
-    /// The event to send to the system.
-    pub event: E,
-}
-
-impl<E> Call<E> {
-    pub const fn new(system: SystemId, event: E) -> Self {
-        Self { system, event }
-    }
-}
-
-impl<E: Event> Event for Call<E> {
-    const IS_TARGETED: bool = false;
-
-    fn target(&self) -> EntityId {
-        unimplemented!()
-    }
-
-    unsafe fn init(world: &mut World) -> EventKind {
-        EventKind::Call {
-            event_id: world.add_event::<E>(),
-            event_offset: offset_of!(Self, event)
-                .try_into()
-                .expect("event offset should fit in a `u32`"),
-        }
     }
 }
 
