@@ -263,3 +263,53 @@ impl<C: Component> AssertMutable<C> {
          `Component::IS_MUTABLE`)."
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use evenio::prelude::*;
+
+    #[derive(Event)]
+    struct E;
+
+    #[test]
+    fn remove_component() {
+        #[derive(Component)]
+        struct A(String);
+    
+        #[derive(Component, PartialEq, Debug)]
+        struct B(Vec<String>);
+
+        let mut world = World::new();
+
+        let c1 = world.add_component::<A>();
+        let e1 = world.spawn();
+        world.insert(e1, A("hello".into()));
+        let s1 = world.add_system(|_: Receiver<E>, Single(A(a)): Single<&mut A>| {
+            a.push_str("hello");
+        });
+        world.send(E);
+
+        assert!(world.remove_component(c1).is_some());
+        assert!(!world.systems().contains(s1));
+        assert!(!world.entities().contains(e1));
+        assert_eq!(world.archetypes().len(), 1, "only the empty archetype should be present");
+
+        let c2 = world.add_component::<B>();
+        dbg!(world.entities());
+        let e2 = world.spawn();
+        dbg!(world.entities());
+        dbg!(e2);
+        assert!(world.entities().contains(e2));
+        world.insert(e2, B(vec![]));
+        let s2 = world.add_system(|_: Receiver<E>, Single(B(b)): Single<&mut B>| {
+            b.push("hello".into());
+        });
+        world.send(E);
+        assert_eq!(world.get_component::<B>(e2), Some(&B(vec!["hello".into()])));
+
+        assert!(world.remove_component(c2).is_some());
+        assert!(!world.systems().contains(s2));
+        assert!(!world.entities().contains(e2));
+        assert_eq!(world.archetypes().len(), 1);
+    }
+}

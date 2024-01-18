@@ -6,7 +6,6 @@ use std::any::{self, TypeId};
 use std::mem;
 use std::ptr::{self, NonNull};
 
-use crate::access::Access;
 use crate::archetype::Archetypes;
 use crate::component::{
     AddComponent, AssertMutable, Component, ComponentDescriptor, ComponentId, ComponentInfo,
@@ -723,16 +722,16 @@ impl World {
                         // `Despawn` doesn't need drop.
                         let (event, _) = event.unpack();
 
-                        // Flush reserved entities and add them to the empty archetype.
-                        world
-                            .reserved_entities
-                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
-
                         let entity_id = unsafe { *event.cast::<Despawn>() }.0;
 
                         world
                             .archetypes
                             .remove_entity(entity_id, &mut world.entities);
+
+                        // Flush reserved entities and add them to the empty archetype.
+                        world
+                            .reserved_entities
+                            .flush(&mut world.entities, |id| world.archetypes.spawn(id));
                     }
                     EventKind::Call {
                         event_id,

@@ -167,3 +167,25 @@ impl ReservedEntities {
         self.iter = entities.locs.next_key_iter();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn spawn_despawn_entity() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        assert!(world.entities().contains(e1));
+        world.despawn(e1);
+        assert!(!world.entities().contains(e1));
+
+        let e2 = world.spawn();
+        assert!(world.entities().contains(e2));
+        assert!(!world.entities().contains(e1));
+        assert_ne!(e1, e2);
+        world.despawn(e2);
+        assert!(!world.entities().contains(e2));
+    }
+}

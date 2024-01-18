@@ -83,6 +83,10 @@ impl Archetypes {
         self.archetypes.iter().map(|(_, v)| v)
     }
 
+    pub fn len(&self) -> usize {
+        self.archetypes.len()
+    }
+
     pub(crate) fn register_system(&mut self, info: &mut SystemInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
         for (_, arch) in self.archetypes.iter_mut() {
@@ -109,40 +113,35 @@ impl Archetypes {
     {
         self.by_components.retain(|comps, &mut idx| {
             if comps.binary_search(&component_idx).is_ok() {
-                let arch = unsafe { self.archetypes.get_debug_checked_mut(idx.0 as usize) };
+                let arch = self.archetypes.remove(idx.0 as usize);
 
-                for mut sys in mem::take(&mut arch.refresh_listeners) {
-                    let sys = unsafe { SystemInfo::mut_from_ptr(&mut sys) };
-
-                    unsafe { sys.system_mut().remove_archetype(arch) };
+                for sys in &arch.refresh_listeners {
+                    unsafe { (*sys.as_ptr()).system.remove_archetype(&arch) };
                 }
 
                 for &entity_id in arch.entity_ids() {
                     f(entity_id);
                 }
 
-                let insert_components = mem::take(&mut arch.insert_components);
-                let remove_components = mem::take(&mut arch.remove_components);
-
-                for (comp_idx, arch_idx) in insert_components {
-                    let arch =
+                for (comp_idx, arch_idx) in arch.insert_components {
+                    let other_arch =
                         unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
 
-                    arch.remove_components.remove(&comp_idx);
+                    other_arch.remove_components.remove(&comp_idx);
                 }
 
-                for (comp_idx, arch_idx) in remove_components {
-                    let arch =
+                for (comp_idx, arch_idx) in arch.remove_components {
+                    let other_arch =
                         unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
 
-                    arch.insert_components.remove(&comp_idx);
+                    other_arch.insert_components.remove(&comp_idx);
                 }
 
                 false
             } else {
                 true
             }
-        })
+        });
     }
 
     /// Traverses one edge of the archetype graph in the insertion direction.

@@ -491,7 +491,7 @@ mod tests {
 
         let mut iter = sm.next_key_iter();
 
-        assert_eq!(iter.next(&sm), sm.insert(0),);
+        assert_eq!(iter.next(&sm), sm.insert(0));
         assert_eq!(iter.next(&sm), sm.insert(0));
         assert_eq!(iter.next(&sm), sm.insert(0));
     }
@@ -505,7 +505,7 @@ mod tests {
 
         let mut iter = sm.next_key_iter();
 
-        assert_eq!(iter.next(&sm), sm.insert(0),);
+        assert_eq!(iter.next(&sm), sm.insert(0));
         assert_eq!(iter.next(&sm), sm.insert(0));
     }
 }

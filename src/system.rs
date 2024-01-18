@@ -87,10 +87,6 @@ impl Systems {
         Some(info)
     }
 
-    pub(crate) fn remove_component(&mut self, idx: ComponentIdx) {
-        todo!()
-    }
-
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
         if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
             if idx as usize >= self.by_untargeted_event.len() {
@@ -351,8 +347,8 @@ impl Drop for SystemInfo {
 
 #[derive(Debug, Default)]
 pub(crate) struct SystemList {
-    before_divider: u32,
-    after_divider: u32,
+    before: u32,
+    after: u32,
     entries: Vec<SystemInfoPtr>,
 }
 
@@ -361,8 +357,8 @@ unsafe impl Sync for SystemList {}
 impl SystemList {
     pub(crate) const fn new() -> SystemList {
         Self {
-            before_divider: 0,
-            after_divider: 0,
+            before: 0,
+            after: 0,
             entries: vec![],
         }
     }
@@ -372,13 +368,13 @@ impl SystemList {
 
         match priority {
             Priority::Before => {
-                self.entries.insert(self.before_divider as usize, ptr);
-                self.before_divider += 1;
-                self.after_divider += 1;
+                self.entries.insert(self.before as usize, ptr);
+                self.before += 1;
+                self.after += 1;
             }
             Priority::Normal => {
-                self.entries.insert(self.after_divider as usize, ptr);
-                self.after_divider += 1;
+                self.entries.insert(self.after as usize, ptr);
+                self.after += 1;
             }
             Priority::After => {
                 self.entries.push(ptr);
@@ -392,11 +388,11 @@ impl SystemList {
 
             let idx = idx as u32;
 
-            if idx < self.after_divider {
-                self.after_divider -= 1;
+            if idx < self.after {
+                self.after -= 1;
 
-                if idx < self.before_divider {
-                    self.before_divider -= 1;
+                if idx < self.before {
+                    self.before -= 1;
                 }
             }
 
