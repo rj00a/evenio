@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use syn::{Attribute, LitBool, Result};
+use syn::{Attribute, Result};
 
 mod all_tuples;
 mod component;
@@ -37,14 +37,14 @@ pub fn derive_query(input: TokenStream) -> TokenStream {
         .into()
 }
 
-fn parse_is_mutable(outer: &str, attrs: &[Attribute]) -> Result<bool> {
-    let mut res = true;
+fn parse_immutable(outer: &str, attrs: &[Attribute]) -> Result<bool> {
+    let mut res = false;
 
     for attr in attrs {
         if attr.path().is_ident(outer) {
             attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("is_mutable") {
-                    res = meta.value()?.parse::<LitBool>()?.value;
+                if meta.path.is_ident("immutable") {
+                    res = true;
                     Ok(())
                 } else {
                     Err(meta.error("unrecognized argument"))

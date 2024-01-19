@@ -71,3 +71,5 @@ const fn drop_fn_of<T>() -> DropFn {
         None
     }
 }
+
+struct AssertMutable<T>(core::marker::PhantomData<T>);

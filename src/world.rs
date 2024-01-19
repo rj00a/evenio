@@ -8,8 +8,8 @@ use std::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
 use crate::component::{
-    AddComponent, AssertMutable, Component, ComponentDescriptor, ComponentId, ComponentInfo,
-    Components, RemoveComponent,
+    AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
+    RemoveComponent,
 };
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::{Entities, EntityId, ReservedEntities};
@@ -21,7 +21,7 @@ use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
     SystemList, Systems,
 };
-use crate::{drop_fn_of, DropFn};
+use crate::{drop_fn_of, AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct World {
@@ -172,7 +172,7 @@ impl World {
     /// );
     /// ```
     pub fn get_component_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
-        let _ = AssertMutable::<C>::ASSERTION;
+        let _ = AssertMutable::<C>::COMPONENT;
 
         let loc = self.entities.get(entity)?;
 
@@ -303,6 +303,7 @@ impl World {
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
             drop: drop_fn_of::<C>(),
+            is_immutable: C::IS_IMMUTABLE,
         };
 
         unsafe { self.add_component_with_descriptor(desc) }
@@ -400,6 +401,7 @@ impl World {
             kind: unsafe { E::init(self) },
             layout: Layout::new::<E>(),
             drop: drop_fn_of::<E>(),
+            is_immutable: E::IS_IMMUTABLE,
         };
 
         unsafe { self.add_event_with_descriptor(desc) }

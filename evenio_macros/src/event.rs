@@ -2,7 +2,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{parse2, parse_quote, Data, DeriveInput, LitInt, Result};
 
-use crate::parse_is_mutable;
+use crate::parse_immutable;
 
 pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
     let mut input = parse2::<DeriveInput>(input)?;
@@ -72,7 +72,7 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
 
     let is_targeted = target_field.is_some();
 
-    let is_mutable = parse_is_mutable("event", &input.attrs)?;
+    let is_immutable = parse_immutable("event", &input.attrs)?;
 
     let target_fn_body = match target_field {
         Some((idx, field)) => {
@@ -83,7 +83,10 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
 
             quote!(self.#f)
         }
-        None => quote!(::core::unreachable!("this event is not targeted")),
+        None => {
+            let message = format!("`{}` is not a targeted event", &input.ident);
+            quote!(::core::unreachable!(#message))
+        }
     };
 
     let name = &input.ident;
@@ -93,8 +96,9 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
         #[automatically_derived]
         impl #impl_generics ::evenio::event::Event for #name #ty_generics #where_clause {
             const IS_TARGETED: bool = #is_targeted;
-            const IS_MUTABLE: bool = #is_mutable;
+            const IS_IMMUTABLE: bool = #is_immutable;
 
+            #[track_caller]
             fn target(&self) -> ::evenio::entity::EntityId {
                 #target_fn_body
             }

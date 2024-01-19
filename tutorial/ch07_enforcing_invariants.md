@@ -17,7 +17,7 @@ To start, we'll mark the component as immutable.
 # use evenio::prelude::*;
 /// A universally unique identifier for an entity.
 #[derive(Component)]
-#[component(is_mutable = false)]
+#[component(immutable)]
 struct Uuid(u128);
 ```
 
@@ -27,7 +27,7 @@ Attempting to get a mutable reference to the UUID component will fail at compile
 # use evenio::prelude::*;
 # let mut world = World::new();
 # #[derive(Component)]
-# #[component(is_mutable = false)]
+# #[component(immutable)]
 # struct Uuid(u128);
 let e = world.spawn();
 world.insert(e, Uuid(12345));
@@ -42,7 +42,7 @@ The UUID could still be changed using the `Insert` event, so let's raise an erro
 # use evenio::prelude::*;
 # let mut world = World::new();
 # #[derive(Component)]
-# #[component(is_mutable = false)]
+# #[component(immutable)]
 # struct Uuid(u128);
 world.add_system(detect_uuid_overwrite);
 
@@ -61,7 +61,7 @@ To make this completely airtight, we'll also need to protect against removing th
 # use evenio::prelude::*;
 # let mut world = World::new();
 # #[derive(Component)]
-# #[component(is_mutable = false)]
+# #[component(immutable)]
 # struct Uuid(u128);
 world.add_system(detect_uuid_remove);
 
@@ -86,7 +86,7 @@ Doing so will prevent users from mutating or consuming the event.
 use evenio::prelude::*;
 let mut world = World::new();
 #[derive(Event)]
-#[event(is_mutable = false)]
+#[event(immutable)]
 struct MyEvent;
 
 // Compile error.

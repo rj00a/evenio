@@ -27,7 +27,7 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
-use crate::DropFn;
+use crate::{AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct Events {
@@ -51,6 +51,7 @@ impl Events {
             kind: EventKind::SpawnQueued,
             layout: Layout::new::<SpawnQueued>(),
             drop: None,
+            is_immutable: true,
         });
 
         this
@@ -64,6 +65,7 @@ impl Events {
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
+            is_immutable: desc.is_immutable,
         };
 
         let insert = || {
@@ -203,7 +205,7 @@ impl SystemParam for &'_ Events {
 /// use evenio::prelude::*;
 ///
 /// #[derive(Event)]
-/// #[event(is_mutable = false)] // Overrides the default mutability.
+/// #[event(immutable)] // Overrides the default mutability.
 /// struct MyEvent {
 ///     #[event(target)] // Sets the entity returned by `target()`. If absent, the event is untargeted.
 ///     entity: EntityId,
@@ -229,7 +231,7 @@ impl SystemParam for &'_ Events {
 pub trait Event: Send + Sync + 'static {
     const IS_TARGETED: bool = false;
 
-    const IS_MUTABLE: bool = true;
+    const IS_IMMUTABLE: bool = false;
 
     fn target(&self) -> EntityId {
         unimplemented!()
@@ -239,6 +241,13 @@ pub trait Event: Send + Sync + 'static {
         let _ = world;
         EventKind::Other
     }
+}
+
+impl<E: Event> AssertMutable<E> {
+    pub(crate) const EVENT: () = assert!(
+        !E::IS_IMMUTABLE,
+        "event does not permit mutation through mutable references (see `Event::IS_IMMUTABLE`)."
+    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
@@ -412,6 +421,7 @@ pub struct EventInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: DropFn,
+    is_immutable: bool,
 }
 
 impl EventInfo {
@@ -438,6 +448,10 @@ impl EventInfo {
     pub fn drop(&self) -> DropFn {
         self.drop
     }
+
+    pub fn is_immutable(&self) -> bool {
+        self.is_immutable
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -448,6 +462,7 @@ pub struct EventDescriptor {
     pub kind: EventKind,
     pub layout: Layout,
     pub drop: DropFn,
+    pub is_immutable: bool,
 }
 
 #[derive(Debug)]
@@ -749,6 +764,8 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     type Item<'a> = ReceiverMut<'a, E>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        let _ = AssertMutable::<E>::EVENT;
+
         struct AssertUntargetedEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertUntargetedEvent<E> {
@@ -785,6 +802,8 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     type Item<'a> = ReceiverMut<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+        let _ = AssertMutable::<E>::EVENT;
+
         struct AssertTargetedEvent<E>(PhantomData<E>);
 
         impl<E: Event> AssertTargetedEvent<E> {

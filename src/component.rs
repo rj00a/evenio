@@ -1,7 +1,6 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::alloc::Layout;
 use core::any::TypeId;
-use core::marker::PhantomData;
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::ops::Index;
@@ -16,7 +15,7 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::UnsafeWorldCell;
-use crate::DropFn;
+use crate::{AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct Components {
@@ -42,6 +41,7 @@ impl Components {
                         type_id: desc.type_id,
                         layout: desc.layout,
                         drop: desc.drop,
+                        is_immutable: desc.is_immutable,
                         insert_events: BTreeSet::new(),
                         remove_events: BTreeSet::new(),
                     }) else {
@@ -60,6 +60,7 @@ impl Components {
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
+            is_immutable: desc.is_immutable,
             insert_events: BTreeSet::new(),
             remove_events: BTreeSet::new(),
         }) else {
@@ -167,6 +168,7 @@ pub struct ComponentInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: DropFn,
+    is_immutable: bool,
     pub(crate) insert_events: BTreeSet<EventId>,
     pub(crate) remove_events: BTreeSet<EventId>,
 }
@@ -192,6 +194,10 @@ impl ComponentInfo {
         self.drop
     }
 
+    pub fn is_immutable(&self) -> bool {
+        self.is_immutable
+    }
+
     pub fn insert_events(&self) -> &BTreeSet<EventId> {
         &self.insert_events
     }
@@ -207,11 +213,19 @@ impl ComponentInfo {
 /// use evenio::prelude::*;
 ///
 /// #[derive(Component)]
-/// #[component(is_mutable = false)] // Override the default mutability.
+/// #[component(immutable)] // Override the default mutability.
 /// struct MyComponent(i32);
 /// ```
 pub trait Component: Send + Sync + 'static {
-    const IS_MUTABLE: bool = true;
+    const IS_IMMUTABLE: bool = false;
+}
+
+impl<C: Component> AssertMutable<C> {
+    pub(crate) const COMPONENT: () = assert!(
+        !C::IS_IMMUTABLE,
+        "component does not permit mutation through mutable references (see \
+         `Component::IS_IMMUTABLE`)."
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -220,6 +234,7 @@ pub struct ComponentDescriptor {
     pub type_id: Option<TypeId>,
     pub layout: Layout,
     pub drop: DropFn,
+    pub is_immutable: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
@@ -253,16 +268,6 @@ pub struct AddComponent(pub ComponentId);
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveComponent(pub ComponentId);
-
-pub(crate) struct AssertMutable<C>(PhantomData<C>);
-
-impl<C: Component> AssertMutable<C> {
-    pub(crate) const ASSERTION: () = assert!(
-        C::IS_MUTABLE,
-        "component does not permit mutation through mutable references (see \
-         `Component::IS_MUTABLE`)."
-    );
-}
 
 #[cfg(test)]
 mod tests {

@@ -9,11 +9,12 @@ pub use evenio_macros::Query;
 
 use crate::access::{Access, AccessMap, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::component::{AssertMutable, Component, ComponentId, ComponentIdx};
+use crate::component::{Component, ComponentId, ComponentIdx};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};
 use crate::world::{UnsafeWorldCell, World};
+use crate::AssertMutable;
 
 /// # Deriving
 ///
@@ -113,7 +114,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let _ = AssertMutable::<C>::ASSERTION;
+        let _ = AssertMutable::<C>::COMPONENT;
 
         let idx = Self::new_state(world);
         let expr = ComponentAccessExpr::with(idx, Access::ReadWrite);
