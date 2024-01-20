@@ -271,7 +271,7 @@ pub struct RemoveComponent(pub ComponentId);
 
 #[cfg(test)]
 mod tests {
-    use evenio::prelude::*;
+    use crate::prelude::*;
 
     #[derive(Event)]
     struct E;

@@ -6,34 +6,6 @@
 
 use core::alloc::Layout;
 
-/// Creates a layout describing the record for `n` instances of
-/// `self`, with a suitable amount of padding between each to
-/// ensure that each instance is given its requested size and
-/// alignment. On success, returns `(k, offs)` where `k` is the
-/// layout of the array and `offs` is the distance between the start
-/// of each element in the array.
-///
-/// On arithmetic overflow, returns `LayoutError`.
-#[inline]
-#[must_use]
-pub(crate) fn repeat_layout(layout: &Layout, n: usize) -> Option<(Layout, usize)> {
-    // This cannot overflow. Quoting from the invariant of Layout:
-    // > `size`, when rounded up to the nearest multiple of `align`,
-    // > must not overflow (i.e., the rounded value must be less than
-    // > `usize::MAX`)
-    let padded_size = layout.size() + padding_needed_for(layout, layout.align());
-    let alloc_size = padded_size.checked_mul(n)?;
-
-    // SAFETY: self.align is already known to be valid and alloc_size has been
-    // padded already.
-    unsafe {
-        Some((
-            Layout::from_size_align_unchecked(alloc_size, layout.align()),
-            padded_size,
-        ))
-    }
-}
-
 /// Returns the amount of padding we must insert after `self`
 /// to ensure that the following address will satisfy `align`
 /// (measured in bytes).

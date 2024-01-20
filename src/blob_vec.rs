@@ -4,7 +4,7 @@ use core::ptr;
 use core::ptr::NonNull;
 
 use crate::debug_checked::UnwrapDebugChecked;
-use crate::layout_util::{padding_needed_for, repeat_layout};
+use crate::layout_util::pad_to_align;
 use crate::DropFn;
 
 /// Like `Vec<T>`, but `T` is erased.
@@ -14,8 +14,9 @@ pub(crate) struct BlobVec {
     elem_layout: Layout,
     /// Number of elements.
     len: usize,
+    /// Capacity of allocated buffer.
     cap: usize,
-    /// Pointer to the element array.
+    /// Pointer to beginning of allocated buffer.
     data: NonNull<u8>,
     /// The erased element type's drop function, if any.
     drop: DropFn,
@@ -23,20 +24,17 @@ pub(crate) struct BlobVec {
 
 impl BlobVec {
     /// # Safety
-    /// - `layout`'s size must be evenly divisble by its alignment.
     /// - `drop` must be safe to call with elements of this `BlobVec` as
     ///   described by [`DropFn`]'s documentation.
     pub(crate) unsafe fn new(layout: Layout, drop: DropFn) -> Self {
-        debug_assert_eq!(padding_needed_for(&layout, layout.align()), 0);
-
-        // SAFETY: `Layout` guarantees alignment is non-zero.
-        let data = NonNull::new(layout.align() as *mut u8).unwrap_debug_checked();
+        // // SAFETY: `Layout` guarantees alignment is non-zero.
+        // let data = NonNull::new(layout.align() as *mut u8).unwrap_debug_checked();
 
         Self {
-            elem_layout: layout,
+            elem_layout: pad_to_align(&layout),
             len: 0,
             cap: if layout.size() == 0 { usize::MAX } else { 0 },
-            data,
+            data: NonNull::dangling(),
             drop,
         }
     }
@@ -101,10 +99,16 @@ impl BlobVec {
         ptr::copy_nonoverlapping(elem, ptr, self.elem_layout.size());
     }
 
-    pub(crate) unsafe fn get_mut(&mut self, idx: usize) -> *mut u8 {
-        debug_assert!(idx < self.len, "index out of bounds");
+    #[cfg(test)]
+    fn get_mut(&mut self, idx: usize) -> Option<NonNull<u8>> {
+        if idx >= self.len {
+            return None;
+        }
 
-        self.data.as_ptr().add(idx * self.elem_layout.size())
+        Some(unsafe {
+            NonNull::new(self.data.as_ptr().add(idx * self.elem_layout.size()))
+                .unwrap_debug_checked()
+        })
     }
 
     /// Move an element from `self` to `other`. The element at `src_idx` is
@@ -142,28 +146,35 @@ impl BlobVec {
             // of `cap` is `usize`.
             let new_cap = (self.cap * 2).max(required_cap);
 
-            // Get the new layout of the new allocation and check that it doesn't exceed
-            // `isize::MAX`.
-            let Some((new_cap_layout, _)) = repeat_layout(&self.elem_layout, new_cap) else {
+            let Some(new_cap_in_bytes) = new_cap.checked_mul(self.elem_layout.size()) else {
                 capacity_overflow()
+            };
+
+            if new_cap_in_bytes > isize::MAX as usize {
+                capacity_overflow()
+            }
+
+            // SAFETY:
+            // - `new_cap_in_bytes` is <= `isize::MAX` from above check (size is multiple of
+            //   align).
+            // - Alignment is from layout so must be valid.
+            let new_cap_layout = unsafe {
+                Layout::from_size_align_unchecked(new_cap_in_bytes, self.elem_layout.align())
             };
 
             // The current layout of the capacity.
             let old_cap_layout = self.capacity_layout();
 
-            debug_assert!(old_cap_layout.size() <= isize::MAX as usize);
-            debug_assert!((1..isize::MAX as usize).contains(&new_cap_layout.size()));
-
             let ptr = if old_cap_layout.size() == 0 {
-                // SAFETY: `new_cap_layout` was checked for validity by `array_layout`.
+                // SAFETY: `new_cap_layout` is nonzero due to previous ZST check.
                 unsafe { alloc::alloc(new_cap_layout) }
             } else {
                 // SAFETY:
                 // - `old_cap_layout` size is nonzero, so `data` must be currently allocated via
                 //   the global allocator.
                 // - `old_cap_layout` is the previous layout of the data.
-                // - `new_cap_layout` size does not exceed `isize::MAX` by call to
-                //   `array_layout`, and is nonzero due to nonzero `additional` and ZST check.
+                // - `new_cap_layout` size does not exceed `isize::MAX` because of `Layout`
+                //   invariant, and is nonzero due to previous ZST check.
                 unsafe { alloc::realloc(self.data.as_ptr(), old_cap_layout, new_cap_layout.size()) }
             };
 
@@ -200,14 +211,17 @@ impl BlobVec {
     /// Returns the layout of the entire allocated buffer owned by this
     /// ErasedVec.
     pub(crate) fn capacity_layout(&self) -> Layout {
-        // SAFETY: Capacity layout was validated when it was last changed.
         unsafe {
-            repeat_layout(&self.elem_layout, self.cap)
-                .expect_debug_checked("current capacity layout should be valid")
-                .0
+            Layout::from_size_align(self.elem_layout.size() * self.cap, self.elem_layout.align())
+                .unwrap_debug_checked()
         }
     }
 
+    /// Returns the layout of a single element.
+    ///
+    /// Note that the size has been rounded up to a multiple of the alignment,
+    /// which may mean the [`Layout`] returned by this method is different than
+    /// the one given to `BlobVec::new`.
     pub(crate) fn elem_layout(&self) -> Layout {
         self.elem_layout
     }
@@ -223,14 +237,6 @@ impl BlobVec {
     pub(crate) fn capacity(&self) -> usize {
         self.cap
     }
-
-    /*
-    /// Returns a pointer to the length of this vec. The pointer is invalidated
-    /// when the vec is moved or dropped.
-    pub(crate) fn len_ptr(&self) -> *const usize {
-        &self.len
-    }
-    */
 }
 
 impl Drop for BlobVec {
@@ -261,7 +267,7 @@ mod tests {
     use super::*;
     use crate::drop_fn_of;
 
-    fn new_erased_vec<T>() -> BlobVec {
+    fn new_blob_vec<T>() -> BlobVec {
         unsafe { BlobVec::new(Layout::new::<T>(), drop_fn_of::<T>()) }
     }
 
@@ -271,7 +277,7 @@ mod tests {
 
         let elem = T::new(());
 
-        let mut vec = new_erased_vec::<T>();
+        let mut vec = new_blob_vec::<T>();
 
         for _ in 0..5 {
             unsafe {
@@ -287,7 +293,7 @@ mod tests {
 
     #[test]
     fn swap_remove() {
-        let mut vec = new_erased_vec::<String>();
+        let mut vec = new_blob_vec::<String>();
 
         let strings = ["aaa", "bbb", "ccc", "ddd"];
 
@@ -314,6 +320,25 @@ mod tests {
 
             vec.swap_remove(0);
             assert_eq!(vec.len, 0);
+        }
+    }
+
+    #[test]
+    fn unusual_alignment() {
+        unsafe {
+            let mut vec = BlobVec::new(Layout::from_size_align(5, 128).unwrap(), None);
+
+            #[track_caller]
+            fn check(ptr: NonNull<u8>) {
+                assert!(ptr.as_ptr() as usize % 128 == 0);
+            }
+
+            check(vec.push());
+            check(vec.push());
+            check(vec.push());
+
+            vec.swap_remove(1);
+            check(vec.get_mut(1).unwrap());
         }
     }
 }
