@@ -48,7 +48,7 @@ The message is: "Hello, World!"
 
 `Receiver<E>` is a _system parameter_ which tells the system that we would like to listen for events of type `E`.
 
-Note that systems must listen for exactly one event type. Adding a system with more than one `Receiver` or no receivers at all will panic.
+Note that systems must listen for exactly one event type. Attempting to listen for more than one event or no events at all will panic.
 
 ```should_panic
 # use evenio::prelude::*;
@@ -61,13 +61,10 @@ world.add_system(|| {});
 
 When multiple systems listen for the same event, we'll need to consider the order those systems should run when the event is sent.
 
-System order is first determined by the system's [`Priority`]. This is a simple enum with three possible states: [`Priority::Before`], [`Priority::Normal`], and [`Priority::After`]. `Priority::Normal` is the default.
+System order is first determined by the system's [`Priority`]. This is a enum with three states: `Before`, `Normal`, and `After`. `Normal` is the default.
 If systems have the same priority, then we fall back on the order the systems were added to the `World` to decide the order.
 
 [`Priority`]: crate::system::Priority
-[`Priority::Before`]: crate::system::Priority::Before
-[`Priority::Normal`]: crate::system::Priority::Normal
-[`Priority::After`]: crate::system::Priority::After
 
 ```rust
 use evenio::prelude::*;

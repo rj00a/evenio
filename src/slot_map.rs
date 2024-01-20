@@ -162,10 +162,6 @@ impl<T> SlotMap<T> {
         self.len
     }
 
-    pub(crate) const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
         self.slots.iter().enumerate().filter_map(|(idx, slot)| {
             (!slot.is_vacant()).then(|| {
@@ -402,7 +398,7 @@ mod tests {
         assert_eq!(sm.len(), 2);
         assert_eq!(sm.remove(k1), Some(123));
         assert_eq!(sm.remove(k3), Some(789));
-        assert!(sm.is_empty());
+        assert_eq!(sm.len(), 0);
     }
 
     #[test]

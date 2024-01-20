@@ -408,7 +408,7 @@ unsafe impl SparseIndex for TargetedEventIdx {
 pub(crate) struct SpawnQueued;
 
 impl Event for SpawnQueued {
-    unsafe fn init(world: &mut World) -> EventKind {
+    unsafe fn init(_world: &mut World) -> EventKind {
         EventKind::SpawnQueued
     }
 }

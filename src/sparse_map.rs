@@ -11,6 +11,7 @@ pub(crate) struct SparseMap<K, V> {
     indices: Vec<K>,
 }
 
+#[allow(dead_code)]
 impl<K: SparseIndex, V> SparseMap<K, V> {
     pub(crate) const fn new() -> Self {
         Self {

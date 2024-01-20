@@ -825,7 +825,6 @@ where
     }
 }
 
-/// This trait is sealed and cannot be implemented by downstream crates.
 pub trait SystemParamFunction<Marker>: Send + Sync + 'static {
     type Param: SystemParam;
 
@@ -984,9 +983,8 @@ pub struct RemoveSystem(pub SystemId);
 
 #[cfg(test)]
 mod tests {
-    use crate::event::Events;
-
     use super::*;
+    use crate::event::Events;
 
     #[test]
     fn derive_system_param() {

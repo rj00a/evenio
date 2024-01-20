@@ -1,9 +1,8 @@
-use proc_macro2::{Ident, TokenStream};
-use quote::{quote, ToTokens};
-use syn::spanned::Spanned;
+use proc_macro2::Ident;
+use quote::ToTokens;
 use syn::{
-    parse_quote, Attribute, Fields, GenericArgument, Path, Result, ReturnType, Type,
-    TypeParamBound, TypeTuple,
+    parse_quote, Attribute, GenericArgument, Path, Result, ReturnType, Type, TypeParamBound,
+    TypeTuple,
 };
 
 /// Parse a `#[foo(immutable)]` attribute where `outer` is `foo`.
@@ -157,42 +156,6 @@ pub(crate) fn replace_lifetime(ty: &mut Type, old: &Ident, new: &Ident) {
                 _ => {}
             }
         }
-    }
-}
-
-/// Returns a list of field identifiers. Tuple fields are named `_0`, `_1`, etc.
-pub(crate) fn collect_field_idents(fields: &Fields) -> Vec<Ident> {
-    match fields {
-        Fields::Named(fields) => fields
-            .named
-            .iter()
-            .map(|f| f.ident.clone().unwrap())
-            .collect(),
-        Fields::Unnamed(fields) => fields
-            .unnamed
-            .iter()
-            .enumerate()
-            .map(|(i, f)| Ident::new(&format!("_{i}"), f.span()))
-            .collect(),
-        Fields::Unit => vec![],
-    }
-}
-
-/// Returns a list of field names. Tuple fields are named `0`, `1`, etc.
-pub(crate) fn collect_field_names(fields: &Fields) -> Vec<TokenStream> {
-    match fields {
-        Fields::Named(fields) => fields
-            .named
-            .iter()
-            .map(|f| f.ident.to_token_stream())
-            .collect(),
-        Fields::Unnamed(fields) => fields
-            .unnamed
-            .iter()
-            .enumerate()
-            .map(|(i, _)| quote!(#i))
-            .collect(),
-        Fields::Unit => vec![],
     }
 }
 

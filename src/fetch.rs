@@ -84,7 +84,7 @@ impl<Q: Query> FetcherState<Q> {
         assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
 
         // TODO: Resize the sparse array so that all valid archetype indices are in
-        // bounds, and then `assume` it. That would eliminate a bounds check.
+        // bounds, and then `assume` it. That would eliminate a bounds check?
 
         let Some(state) = self.map.get_mut(loc.archetype) else {
             return Err(GetError::QueryDoesNotMatch);
@@ -164,10 +164,6 @@ pub struct Fetcher<'a, Q: Query> {
 }
 
 impl<'a, Q: Query> Fetcher<'a, Q> {
-    pub(crate) unsafe fn new(state: &'a mut FetcherState<Q>, world: UnsafeWorldCell<'a>) -> Self {
-        Self { state, world }
-    }
-
     #[inline]
     pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError>
     where

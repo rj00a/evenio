@@ -81,7 +81,7 @@ impl<T> BitSet<T> {
 impl<T: SparseIndex> BitSet<T> {
     #[track_caller]
     #[inline]
-    pub(crate) fn insert(&mut self, value: T) -> bool {
+    pub fn insert(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -96,7 +96,7 @@ impl<T: SparseIndex> BitSet<T> {
     }
 
     #[inline]
-    pub(crate) fn remove(&mut self, value: T) -> bool {
+    pub fn remove(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -113,7 +113,7 @@ impl<T: SparseIndex> BitSet<T> {
     }
 
     #[must_use]
-    pub(crate) fn contains(&self, value: T) -> bool {
+    pub fn contains(&self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -123,7 +123,7 @@ impl<T: SparseIndex> BitSet<T> {
             .map_or(false, |&block| (block >> bit) & 1 == 1)
     }
 
-    pub(crate) fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<T> {
         Iter {
             bits: self.blocks.get(0).copied().unwrap_or(0),
             block_idx: 0,
@@ -132,7 +132,7 @@ impl<T: SparseIndex> BitSet<T> {
         }
     }
 
-    pub(crate) fn shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&mut self) {
         while let Some(&last) = self.blocks.last() {
             if last != 0 {
                 // There are bits in this block.
@@ -188,7 +188,22 @@ impl<T: SparseIndex> FromIterator<T> for BitSet<T> {
     }
 }
 
-pub(crate) struct Iter<'a, T = usize> {
+impl<T> fmt::Debug for BitSet<T>
+where
+    T: SparseIndex + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut set = f.debug_set();
+
+        for elem in self.iter() {
+            set.entry(&elem);
+        }
+
+        set.finish()
+    }
+}
+
+pub struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
@@ -200,8 +215,8 @@ impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.bits == 0 {
+            self.bits = *self.blocks.get(self.block_idx + 1)?;
             self.block_idx += 1;
-            self.bits = *self.blocks.get(self.block_idx)?;
         }
 
         // Index of least significant bit in the block.
@@ -216,24 +231,20 @@ impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {
 
 impl<'a, T: SparseIndex> FusedIterator for Iter<'a, T> {}
 
+impl<T> fmt::Debug for Iter<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Iter")
+            .field("bits", &self.bits)
+            .field("block_idx", &self.block_idx)
+            .field("blocks", &self.blocks)
+            .field("_marker", &self._marker)
+            .finish()
+    }
+}
+
 #[inline]
 fn div_rem(a: usize, b: usize) -> (usize, usize) {
     (a / b, a % b)
-}
-
-impl<T> fmt::Debug for BitSet<T>
-where
-    T: SparseIndex + fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut set = f.debug_set();
-
-        for elem in self.iter() {
-            set.entry(&elem);
-        }
-
-        set.finish()
-    }
 }
 
 impl<T: SparseIndex> Ord for BitSet<T> {
@@ -331,5 +342,18 @@ mod tests {
         let right = BitSet::from_iter([0u32, 1, 2, 3]);
 
         assert_ne!(left < right, left > right);
+    }
+
+    #[test]
+    fn iter_is_fused() {
+        let set = BitSet::<u32>::from_iter([1, 5, 7, 123]);
+        let mut iter = set.iter();
+        assert_eq!(iter.next(), Some(1));
+        assert_eq!(iter.next(), Some(5));
+        assert_eq!(iter.next(), Some(7));
+        assert_eq!(iter.next(), Some(123));
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
     }
 }

@@ -24,6 +24,7 @@ struct Uuid(u128);
 Attempting to get a mutable reference to the UUID component will fail at compile time:
 
 ```compile_fail
+# #![cfg(not(miri))] // TODO: miri compiles successfully when it shouldn't.
 # use evenio::prelude::*;
 # let mut world = World::new();
 # #[derive(Component)]
@@ -83,6 +84,7 @@ Like components, events can be marked as immutable.
 Doing so will prevent users from mutating or consuming the event.
 
 ```compile_fail
+# #![cfg(not(miri))] // TODO: miri compiles successfully when it shouldn't.
 use evenio::prelude::*;
 let mut world = World::new();
 #[derive(Event)]

@@ -1,4 +1,3 @@
-use core::any::TypeId;
 use core::fmt;
 use std::any;
 use std::marker::PhantomData;
@@ -7,13 +6,13 @@ use std::ptr::NonNull;
 use evenio_macros::all_tuples;
 pub use evenio_macros::Query;
 
-use crate::access::{Access, AccessMap, ComponentAccessExpr};
+use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::component::{Component, ComponentId, ComponentIdx};
+use crate::component::{Component, ComponentIdx};
 use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};
-use crate::world::{UnsafeWorldCell, World};
+use crate::world::World;
 use crate::AssertMutable;
 
 /// # Deriving

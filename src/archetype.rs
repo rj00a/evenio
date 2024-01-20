@@ -1,5 +1,4 @@
 use alloc::collections::BTreeMap;
-use core::mem;
 use core::ptr::NonNull;
 use std::cmp::Ordering;
 use std::collections::btree_map::Entry;

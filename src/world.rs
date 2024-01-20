@@ -952,6 +952,7 @@ mod tests {
             }
         }
 
+        #[allow(dead_code)]
         #[derive(Event)]
         struct C(Arc<()>);
 
