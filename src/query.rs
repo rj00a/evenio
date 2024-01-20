@@ -761,4 +761,39 @@ mod tests {
     t!(t14, true, (Option<&A>, &A, &A));
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
+
+    #[test]
+    fn derived_query() {
+        #![allow(dead_code)]
+
+        #[derive(Query)]
+        struct UnitQuery;
+
+        #[derive(Query)]
+        struct QueryWithLifetime<'a> {
+            foo: &'a A,
+        }
+
+        #[derive(Query)]
+        struct QueryWithTwoLifetimes<'a, 'b> {
+            foo: &'a A,
+            bar: &'b B,
+        }
+
+        #[derive(Query)]
+        struct QueryWithTypeParam<'a, T> {
+            foo: &'a A,
+            bar: T,
+        }
+
+        #[derive(Query)]
+        struct TupleStructQuery<'a>(&'a A, &'a mut B);
+
+        assert_read_only_query::<UnitQuery>();
+        assert_read_only_query::<QueryWithLifetime>();
+        assert_read_only_query::<QueryWithTwoLifetimes>();
+        assert_read_only_query::<QueryWithTypeParam<()>>();
+
+        fn assert_read_only_query<Q: ReadOnlyQuery>() {}
+    }
 }

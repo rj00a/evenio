@@ -4,17 +4,15 @@ use syn::{parse2, parse_quote, Data, DeriveInput, Error, GenericParam, LitInt, R
 
 use crate::util::{make_tuple, replace_lifetime};
 
-pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
+pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
     let mut input = parse2::<DeriveInput>(input)?;
     let name = &input.ident;
 
     let lifetimes;
     let tuple_ty;
-    let get_body;
+    let get_param_body;
 
-    let mut ro_generics = input.generics.clone();
-
-    match input.data {
+    match &input.data {
         Data::Struct(struct_) => {
             lifetimes = input
                 .generics
@@ -31,8 +29,6 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
 
             let where_clause = input.generics.make_where_clause();
 
-            let ro_where_clause = ro_generics.make_where_clause();
-
             for field in &struct_.fields {
                 let ty = &field.ty;
 
@@ -43,15 +39,11 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                 }
 
                 where_clause.predicates.push(
-                    parse_quote!(#ty: for<'__a> ::evenio::query::Query<Item<'__a> = #replaced_ty>),
+                    parse_quote!(#ty: for<'__a> ::evenio::system::SystemParam<Item<'__a> = #replaced_ty>),
                 );
-
-                ro_where_clause
-                    .predicates
-                    .push(parse_quote!(#ty: for<'__a> ::evenio::query::ReadOnlyQuery<Item<'__a> = #replaced_ty>));
             }
 
-            get_body = match &struct_.fields {
+            get_param_body = match &struct_.fields {
                 syn::Fields::Named(fields) => {
                     let idents: Vec<_> = fields
                         .named
@@ -60,7 +52,12 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                         .collect();
 
                     quote! {
-                        let (#(#idents,)*) = <#tuple_ty as ::evenio::query::Query>::get(state, row);
+                        let (#(#idents,)*) = <#tuple_ty as ::evenio::system::SystemParam>::get_param(
+                            state,
+                            info,
+                            event_ptr,
+                            world
+                        );
 
                         #name {
                             #(#idents),*
@@ -75,7 +72,12 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                         .map(|(i, _)| LitInt::new(&format!("{i}"), Span::call_site()));
 
                     quote! {
-                        let tuple = <#tuple_ty as ::evenio::query::Query>::get(state, row);
+                        let tuple = <#tuple_ty as ::evenio::system::SystemParam>::get_param(
+                            state,
+                            info,
+                            event_ptr,
+                            world
+                        );
 
                         #name(#(tuple.#indices),*)
                     }
@@ -86,18 +88,16 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
         Data::Enum(_) => {
             return Err(Error::new(
                 Span::call_site(),
-                "cannot derive `Query` on enums",
+                "cannot derive `SystemParam` on enums",
             ))
         }
         Data::Union(_) => {
             return Err(Error::new(
                 Span::call_site(),
-                "cannot derive `Query` on unions",
+                "cannot derive `SystemParam` on unions",
             ))
         }
     }
-
-    let (ro_impl_generics, ro_ty_generics, ro_where_clause) = ro_generics.split_for_impl();
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
@@ -108,35 +108,47 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
 
     Ok(quote! {
         #[automatically_derived]
-        unsafe impl #impl_generics ::evenio::query::Query for #name #ty_generics #where_clause {
+        impl #impl_generics ::evenio::system::SystemParam for #name #ty_generics #where_clause {
+            type State = <#tuple_ty as ::evenio::system::SystemParam>::State;
+
             type Item<'__a> = #item;
-
-            type ArchState = <#tuple_ty as ::evenio::query::Query>::ArchState;
-
-            type State = <#tuple_ty as ::evenio::query::Query>::State;
 
             fn init(
                 world: &mut ::evenio::world::World,
-                config: &mut ::evenio::system::Config
-            ) -> ::core::result::Result<(::evenio::access::ComponentAccessExpr, Self::State), ::evenio::system::InitError>
+                config: &mut ::evenio::system::Config,
+            ) -> ::core::result::Result<Self::State, ::evenio::system::InitError>
             {
-                <#tuple_ty as ::evenio::query::Query>::init(world, config)
+                <#tuple_ty as ::evenio::system::SystemParam>::init(world, config)
             }
 
-            fn new_state(world: &mut ::evenio::world::World) -> Self::State {
-                <#tuple_ty as ::evenio::query::Query>::new_state(world)
+            unsafe fn get_param<'__a>(
+                state: &'__a mut Self::State,
+                info: &'__a ::evenio::system::SystemInfo,
+                event_ptr: ::evenio::event::EventPtr<'__a>,
+                world: ::evenio::world::UnsafeWorldCell<'__a>,
+            ) -> Self::Item<'__a> {
+                #get_param_body
             }
 
-            fn new_arch_state(arch: &::evenio::archetype::Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
-                <#tuple_ty as ::evenio::query::Query>::new_arch_state(arch, state)
+            unsafe fn refresh_archetype(
+                state: &mut Self::State,
+                arch: &::evenio::archetype::Archetype
+            ) {
+                <#tuple_ty as ::evenio::system::SystemParam>::refresh_archetype(
+                    state,
+                    arch
+                )
             }
 
-            unsafe fn get<'__a>(state: &Self::ArchState, row: ::evenio::archetype::ArchetypeRow) -> Self::Item<'__a> {
-                #get_body
+            unsafe fn remove_archetype(
+                state: &mut Self::State,
+                arch: &::evenio::archetype::Archetype
+            ) {
+                <#tuple_ty as ::evenio::system::SystemParam>::remove_archetype(
+                    state,
+                    arch
+                )
             }
         }
-
-        #[automatically_derived]
-        unsafe impl #ro_impl_generics ::evenio::query::ReadOnlyQuery for #name #ro_ty_generics #ro_where_clause {}
     })
 }

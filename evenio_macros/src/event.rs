@@ -2,7 +2,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{parse2, parse_quote, Data, DeriveInput, LitInt, Result};
 
-use crate::parse_immutable;
+use crate::util::parse_attr_immutable;
 
 pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
     let mut input = parse2::<DeriveInput>(input)?;
@@ -72,7 +72,7 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
 
     let is_targeted = target_field.is_some();
 
-    let is_immutable = parse_immutable("event", &input.attrs)?;
+    let is_immutable = parse_attr_immutable("event", &input.attrs)?;
 
     let target_fn_body = match target_field {
         Some((idx, field)) => {

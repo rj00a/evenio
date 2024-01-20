@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::ops::Index;
 
 use evenio_macros::all_tuples;
+pub use evenio_macros::SystemParam;
 
 use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::Archetype;
@@ -299,10 +300,6 @@ impl SystemInfo {
     pub(crate) unsafe fn ref_from_ptr(this: &SystemInfoPtr) -> &Self {
         // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
         &*(this as *const _ as *const Self)
-    }
-
-    pub(crate) unsafe fn mut_from_ptr(this: &mut SystemInfoPtr) -> &mut Self {
-        &mut *(this as *mut _ as *mut Self)
     }
 
     pub(crate) fn system_mut(&mut self) -> &mut dyn System {
@@ -674,7 +671,7 @@ impl Default for Config {
 
 pub trait SystemParam {
     type State: Send + Sync + 'static;
-    type Item<'a>: SystemParam<State = Self::State>;
+    type Item<'a>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError>;
 
@@ -984,3 +981,38 @@ pub struct AddSystem(pub SystemId);
 
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveSystem(pub SystemId);
+
+#[cfg(test)]
+mod tests {
+    use crate::event::Events;
+
+    use super::*;
+
+    #[test]
+    fn derive_system_param() {
+        #![allow(dead_code)]
+
+        #[derive(SystemParam)]
+        struct UnitParam;
+
+        #[derive(SystemParam)]
+        struct ParamWithLifetime<'a> {
+            foo: &'a Systems,
+        }
+
+        #[derive(SystemParam)]
+        struct ParamWithTwoLifetimes<'a, 'b> {
+            foo: &'a Systems,
+            bar: &'b Events,
+        }
+
+        #[derive(SystemParam)]
+        struct ParamWithTypeParam<'a, T> {
+            foo: &'a Systems,
+            bar: T,
+        }
+
+        #[derive(SystemParam)]
+        struct TupleStructParam<'a>(&'a Systems, &'a Events);
+    }
+}
