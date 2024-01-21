@@ -1,5 +1,5 @@
+use core::cmp::Ordering;
 use core::fmt;
-use std::cmp::Ordering;
 
 use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
@@ -36,12 +36,12 @@ impl Access {
     /// ```
     #[must_use]
     pub const fn is_compatible(self, other: Self) -> bool {
-        match (self, other) {
+        matches!(
+            (self, other),
             (Access::None, _)
-            | (Access::Read, Access::None | Access::Read)
-            | (Access::ReadWrite, Access::None) => true,
-            _ => false,
-        }
+                | (Access::Read, Access::None | Access::Read)
+                | (Access::ReadWrite, Access::None)
+        )
     }
 
     /// Sets `self` equal to `other` if `self` is [compatible] with `other`.
@@ -187,6 +187,7 @@ pub struct ComponentAccessExpr {
     pub access: AccessMap<ComponentIdx>,
 }
 
+#[allow(clippy::should_implement_trait)]
 impl ComponentAccessExpr {
     pub fn new(b: bool) -> Self {
         Self {

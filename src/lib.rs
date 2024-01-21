@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(clippy::std_instead_of_alloc, clippy::std_instead_of_core)]
+#![allow(clippy::len_without_is_empty, clippy::let_unit_value)]
 
 extern crate alloc;
 
@@ -8,11 +10,12 @@ extern crate self as evenio;
 
 pub mod access;
 pub mod archetype;
+mod assert;
 pub mod bit_set;
 mod blob_vec;
 pub mod bool_expr;
 pub mod component;
-mod debug_checked;
+pub mod drop;
 pub mod entity;
 pub mod event;
 #[doc(hidden)]
@@ -45,31 +48,3 @@ pub mod prelude {
     pub use crate::system::{IntoSystem, SystemId};
     pub use crate::world::World;
 }
-
-const _: () = assert!(
-    core::mem::size_of::<usize>() >= core::mem::size_of::<u32>(),
-    "unsupported target"
-);
-
-/// Drop function for some erased (and sized) type.
-///
-/// In order to be safe to call, the input pointer must be correctly aligned and
-/// point to an initialized value of the erased type. The pointed-to memory
-/// should be considered uninitialized after the call.
-///
-/// If the function pointer is `None`, then the erased type is considered
-/// trivially droppable and no destructor needs to run.
-type DropFn = Option<unsafe fn(core::ptr::NonNull<u8>)>;
-
-const fn drop_fn_of<T>() -> DropFn {
-    use core::mem::needs_drop;
-    use core::ptr::drop_in_place;
-
-    if needs_drop::<T>() {
-        Some(|ptr| unsafe { drop_in_place(ptr.cast::<T>().as_ptr()) })
-    } else {
-        None
-    }
-}
-
-struct AssertMutable<T>(core::marker::PhantomData<T>);

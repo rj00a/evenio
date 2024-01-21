@@ -1,17 +1,18 @@
+use core::alloc::Layout;
+use core::any::{self, TypeId};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
+use core::mem;
 use core::panic::{RefUnwindSafe, UnwindSafe};
-use std::alloc::Layout;
-use std::any::{self, TypeId};
-use std::mem;
-use std::ptr::{self, NonNull};
+use core::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
+use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{
     AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
     RemoveComponent,
 };
-use crate::debug_checked::UnwrapDebugChecked;
+use crate::drop::{drop_fn_of, DropFn};
 use crate::entity::{Entities, EntityId, ReservedEntities};
 use crate::event::{
     AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
@@ -21,7 +22,6 @@ use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
     SystemList, Systems,
 };
-use crate::{drop_fn_of, AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct World {
@@ -172,7 +172,7 @@ impl World {
     /// );
     /// ```
     pub fn get_component_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
-        let _ = AssertMutable::<C>::COMPONENT;
+        let () = AssertMutable::<C>::COMPONENT;
 
         let loc = self.entities.get(entity)?;
 
@@ -875,8 +875,8 @@ impl<'a> UnsafeWorldCell<'a> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
     use std::panic;
-    use std::sync::Arc;
 
     use crate::prelude::*;
 
@@ -985,15 +985,4 @@ mod tests {
 
         assert_eq!(Arc::strong_count(&arc), 1);
     }
-
-    /*
-    #[test]
-    fn unsafe_world_cell_access() {
-        let mut world = World::new();
-
-        let cell = world.unsafe_cell_mut();
-
-        todo!()
-    }
-    */
 }

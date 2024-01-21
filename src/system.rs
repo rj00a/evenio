@@ -1,21 +1,19 @@
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use core::any::TypeId;
-use core::fmt;
-use core::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut, Index};
 use core::ptr::NonNull;
-use std::any;
-use std::borrow::Cow;
-use std::ops::Index;
+use core::{any, fmt};
 
 use evenio_macros::all_tuples;
 pub use evenio_macros::SystemParam;
 
 use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::Archetype;
+use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
-use crate::debug_checked::UnwrapDebugChecked;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
 use crate::slot_map::{Key, SlotMap};
@@ -689,6 +687,7 @@ pub trait SystemParam {
 
 macro_rules! impl_system_param_tuple {
     ($(($P:ident, $s:ident)),*) => {
+        #[allow(clippy::unused_unit)]
         impl<$($P: SystemParam),*> SystemParam for ($($P,)*) {
             type State = ($($P::State,)*);
 
@@ -891,7 +890,7 @@ impl<T> Deref for Local<'_, T> {
 
 impl<T> DerefMut for Local<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state
+        self.state
     }
 }
 

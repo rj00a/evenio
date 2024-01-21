@@ -3,9 +3,9 @@ use core::alloc::Layout;
 use core::ptr;
 use core::ptr::NonNull;
 
-use crate::debug_checked::UnwrapDebugChecked;
+use crate::assert::UnwrapDebugChecked;
+use crate::drop::DropFn;
 use crate::layout_util::pad_to_align;
-use crate::DropFn;
 
 /// Like `Vec<T>`, but `T` is erased.
 #[derive(Debug)]
@@ -209,7 +209,7 @@ impl BlobVec {
     }
 
     /// Returns the layout of the entire allocated buffer owned by this
-    /// ErasedVec.
+    /// `BlobVec`.
     pub(crate) fn capacity_layout(&self) -> Layout {
         unsafe {
             Layout::from_size_align(self.elem_layout.size() * self.cap, self.elem_layout.align())
@@ -262,10 +262,10 @@ fn capacity_overflow() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use ::alloc::rc::Rc;
 
     use super::*;
-    use crate::drop_fn_of;
+    use crate::drop::drop_fn_of;
 
     fn new_blob_vec<T>() -> BlobVec {
         unsafe { BlobVec::new(Layout::new::<T>(), drop_fn_of::<T>()) }

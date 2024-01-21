@@ -1,14 +1,13 @@
 use alloc::borrow::Cow;
+use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
 use core::num::NonZeroU32;
-use core::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut, Index};
 use core::ptr::NonNull;
 use core::{any, fmt};
-use std::collections::btree_map::Entry;
-use std::ops::Index;
 
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
@@ -17,8 +16,11 @@ use memoffset::offset_of;
 
 use crate::access::Access;
 use crate::archetype::Archetype;
+use crate::assert::{
+    AssertMutable, AssertTargetedEvent, AssertUntargetedEvent, GetDebugChecked, UnwrapDebugChecked,
+};
 use crate::component::ComponentIdx;
-use crate::debug_checked::{GetDebugChecked, UnwrapDebugChecked};
+use crate::drop::DropFn;
 use crate::entity::EntityId;
 use crate::fetch::FetcherState;
 use crate::prelude::Component;
@@ -27,7 +29,6 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
-use crate::{AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct Events {
@@ -241,13 +242,6 @@ pub trait Event: Send + Sync + 'static {
         let _ = world;
         EventKind::Other
     }
-}
-
-impl<E: Event> AssertMutable<E> {
-    pub(crate) const EVENT: () = assert!(
-        !E::IS_IMMUTABLE,
-        "event does not permit mutation through mutable references (see `Event::IS_IMMUTABLE`)."
-    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
@@ -568,7 +562,7 @@ pub struct EventPtr<'a> {
 impl<'a> EventPtr<'a> {
     pub(crate) fn new(ptr: NonNull<*mut u8>) -> Self {
         Self {
-            ptr: NonNull::from(ptr),
+            ptr,
             _marker: PhantomData,
         }
     }
@@ -624,7 +618,7 @@ impl<E> DerefMut for EventMut<'_, E> {
 
 impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("EventMut").field(self.deref()).finish()
+        f.debug_tuple("EventMut").field(&**self).finish()
     }
 }
 
@@ -640,13 +634,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
     type Item<'a> = Receiver<'a, E>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertUntargetedEvent<E>(PhantomData<E>);
-
-        impl<E: Event> AssertUntargetedEvent<E> {
-            const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
-        }
-
-        let _ = AssertUntargetedEvent::<E>::ASSERTION;
+        let () = AssertUntargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::Read)?;
 
@@ -679,13 +667,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
     type Item<'a> = Receiver<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        struct AssertTargetedEvent<E>(PhantomData<E>);
-
-        impl<E: Event> AssertTargetedEvent<E> {
-            const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
-        }
-
-        let _ = AssertTargetedEvent::<E>::ASSERTION;
+        let () = AssertTargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::Read)?;
 
@@ -764,15 +746,8 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     type Item<'a> = ReceiverMut<'a, E>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        let _ = AssertMutable::<E>::EVENT;
-
-        struct AssertUntargetedEvent<E>(PhantomData<E>);
-
-        impl<E: Event> AssertUntargetedEvent<E> {
-            const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
-        }
-
-        let _ = AssertUntargetedEvent::<E>::ASSERTION;
+        let () = AssertMutable::<E>::EVENT;
+        let () = AssertUntargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::ReadWrite)?;
 
@@ -802,15 +777,8 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     type Item<'a> = ReceiverMut<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        let _ = AssertMutable::<E>::EVENT;
-
-        struct AssertTargetedEvent<E>(PhantomData<E>);
-
-        impl<E: Event> AssertTargetedEvent<E> {
-            const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
-        }
-
-        let _ = AssertTargetedEvent::<E>::ASSERTION;
+        let () = AssertMutable::<E>::EVENT;
+        let () = AssertTargetedEvent::<E>::ASSERTION;
 
         set_received_event::<E>(world, config, Access::ReadWrite)?;
 
@@ -890,8 +858,7 @@ fn set_received_event<E: Event>(
             let other = world
                 .events()
                 .get(received_event)
-                .map(|info| info.name())
-                .unwrap_or("<unknown>");
+                .map_or("<unknown>", |info| info.name());
 
             return Err(InitError(
                 format!(
@@ -1107,6 +1074,7 @@ unsafe impl<E: Event> EventSet for E {
 
 macro_rules! impl_event_set_tuple {
     ($(($E:ident, $e:ident)),*) => {
+        #[allow(clippy::unused_unit)]
         unsafe impl<$($E: EventSet),*> EventSet for ($($E,)*) {
             type State = ($($E::State,)*);
 

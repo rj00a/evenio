@@ -1,15 +1,14 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::{BTreeMap, BTreeSet};
+use core::cmp::Ordering;
+use core::ptr;
 use core::ptr::NonNull;
-use std::cmp::Ordering;
-use std::collections::btree_map::Entry;
-use std::collections::BTreeSet;
-use std::ptr;
 
 use slab::Slab;
 
+use crate::assert::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
-use crate::debug_checked::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::prelude::World;
@@ -66,7 +65,7 @@ impl Archetypes {
         empty.entity_ids.push(id);
 
         if empty.entity_count() == 1 || rellocated {
-            for &ptr in empty.refresh_listeners.iter() {
+            for &ptr in &empty.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
                 unsafe { system.refresh_archetype(empty) };
             }
@@ -88,14 +87,14 @@ impl Archetypes {
 
     pub(crate) fn register_system(&mut self, info: &mut SystemInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
-        for (_, arch) in self.archetypes.iter_mut() {
+        for (_, arch) in &mut self.archetypes {
             arch.register_system(info);
         }
     }
 
     pub(crate) fn remove_system(&mut self, info: &SystemInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
-        for (_, arch) in self.archetypes.iter_mut() {
+        for (_, arch) in &mut self.archetypes {
             arch.refresh_listeners.remove(&info.ptr());
 
             if let EventIdx::Targeted(idx) = info.received_event().index() {
@@ -177,9 +176,7 @@ impl Archetypes {
 
                 match self.by_components.entry(new_components.into_boxed_slice()) {
                     Entry::Vacant(vacant_by_components) => {
-                        if next_arch_idx >= u32::MAX as usize {
-                            panic!("too many archetypes");
-                        }
+                        assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
@@ -250,9 +247,7 @@ impl Archetypes {
 
                 match self.by_components.entry(new_components.into_boxed_slice()) {
                     Entry::Vacant(vacant_by_components) => {
-                        if next_arch_idx >= u32::MAX as usize {
-                            panic!("too many archetypes");
-                        }
+                        assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
@@ -393,14 +388,14 @@ impl Archetypes {
         }
 
         if src_arch.entity_ids.is_empty() {
-            for &ptr in src_arch.refresh_listeners.iter() {
+            for &ptr in &src_arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
                 unsafe { system.remove_archetype(src_arch) };
             }
         }
 
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
-            for &ptr in dst_arch.refresh_listeners.iter() {
+            for &ptr in &dst_arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
                 unsafe { system.refresh_archetype(dst_arch) };
             }
@@ -430,7 +425,7 @@ impl Archetypes {
         arch.entity_ids.swap_remove(loc.row.0 as usize);
 
         if arch.entity_count() == 0 {
-            for &ptr in arch.refresh_listeners.iter() {
+            for &ptr in &arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
                 unsafe { system.remove_archetype(arch) };
             }
@@ -584,7 +579,7 @@ impl Archetype {
     }
 
     pub fn entity_count(&self) -> u32 {
-        debug_assert!(self.entity_ids.len() <= u32::MAX as usize);
+        debug_assert!(u32::try_from(self.entity_ids.len()).is_ok());
         // This doesn't truncate because entity indices are less than u32::MAX.
         self.entity_ids.len() as u32
     }

@@ -1,19 +1,17 @@
-use core::fmt;
-use std::any;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
+use core::{any, fmt};
 
 use evenio_macros::all_tuples;
 pub use evenio_macros::Query;
 
 use crate::access::{Access, ComponentAccessExpr};
 use crate::archetype::{Archetype, ArchetypeRow};
+use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{Component, ComponentIdx};
-use crate::debug_checked::UnwrapDebugChecked;
 use crate::entity::EntityId;
 use crate::system::{Config, InitError};
 use crate::world::World;
-use crate::AssertMutable;
 
 /// # Deriving
 ///
@@ -113,7 +111,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let _ = AssertMutable::<C>::COMPONENT;
+        let () = AssertMutable::<C>::COMPONENT;
 
         let idx = Self::new_state(world);
         let expr = ComponentAccessExpr::with(idx, Access::ReadWrite);
@@ -137,7 +135,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
 macro_rules! impl_query_tuple {
     ($(($Q:ident, $q:ident)),*) => {
-        #[allow(unused_variables)]
+        #[allow(unused_variables, clippy::unused_unit)]
         unsafe impl<$($Q: Query),*> Query for ($($Q,)*) {
             type Item<'a> = ($($Q::Item<'a>,)*);
 
@@ -431,7 +429,7 @@ impl<Q> Not<Q> {
 
 impl<Q> Clone for Not<Q> {
     fn clone(&self) -> Self {
-        Self::new()
+        *self
     }
 }
 
@@ -493,7 +491,7 @@ impl<Q> With<Q> {
 
 impl<Q> Clone for With<Q> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        *self
     }
 }
 
@@ -564,10 +562,7 @@ impl<Q> Has<Q> {
 
 impl<Q> Clone for Has<Q> {
     fn clone(&self) -> Self {
-        Self {
-            has: self.has,
-            _marker: PhantomData,
-        }
+        *self
     }
 }
 
@@ -633,9 +628,7 @@ unsafe impl Query for EntityId {
         Ok((ComponentAccessExpr::new(true), ()))
     }
 
-    fn new_state(_world: &mut World) -> Self::State {
-        ()
-    }
+    fn new_state(_world: &mut World) -> Self::State {}
 
     fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
         Some(ColumnPtr(unsafe {
@@ -665,9 +658,7 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
         Ok((ComponentAccessExpr::new(true), ()))
     }
 
-    fn new_state(_world: &mut World) -> Self::State {
-        ()
-    }
+    fn new_state(_world: &mut World) -> Self::State {}
 
     fn new_arch_state(_arch: &Archetype, _state: &mut Self::State) -> Option<Self::ArchState> {
         Some(())
@@ -684,7 +675,7 @@ pub struct ColumnPtr<T>(NonNull<T>);
 
 impl<T> Clone for ColumnPtr<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        *self
     }
 }
 

@@ -3,7 +3,7 @@
 //! Once `Exclusive` is stabilized, this module should be removed.
 //! See <https://github.com/rust-lang/rust/issues/98407>
 
-use std::fmt;
+use core::fmt;
 
 #[derive(Default)]
 #[repr(transparent)]

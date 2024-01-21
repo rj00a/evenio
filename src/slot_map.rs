@@ -1,9 +1,8 @@
-use core::fmt;
+use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::num::NonZeroU32;
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::{Index, IndexMut};
+use core::ops::{Index, IndexMut};
+use core::{fmt, mem};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SlotMap<T> {
@@ -163,14 +162,16 @@ impl<T> SlotMap<T> {
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
-        self.slots.iter().enumerate().filter_map(|(idx, slot)| {
-            (!slot.is_vacant()).then(|| {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_vacant())
+            .map(|(idx, slot)| {
                 let key = unsafe { Key::new_unchecked(idx as u32, slot.generation) };
                 let value = unsafe { &*slot.union.value };
 
                 (key, value)
             })
-        })
     }
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Key, &mut T)> {
@@ -375,9 +376,9 @@ impl<T> NextKeyIter<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::collections::BTreeSet;
-    use std::rc::Rc;
+    use alloc::collections::BTreeSet;
+    use alloc::rc::Rc;
+    use core::cell::Cell;
 
     use super::*;
 

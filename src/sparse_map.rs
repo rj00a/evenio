@@ -1,6 +1,6 @@
-use std::mem;
+use core::mem;
 
-use crate::debug_checked::{assume_debug_checked, GetDebugChecked};
+use crate::assert::{assume_debug_checked, GetDebugChecked};
 use crate::sparse::SparseIndex;
 
 #[derive(Clone, Default, Debug)]
@@ -139,7 +139,7 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
 
     use super::*;
 

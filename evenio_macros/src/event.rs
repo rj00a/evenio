@@ -74,19 +74,16 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
 
     let is_immutable = parse_attr_immutable("event", &input.attrs)?;
 
-    let target_fn_body = match target_field {
-        Some((idx, field)) => {
-            let f = match field.ident {
-                Some(ident) => ident.into_token_stream(),
-                None => LitInt::new(&idx.to_string(), Span::call_site()).to_token_stream(),
-            };
+    let target_fn_body = if let Some((idx, field)) = target_field {
+        let f = match field.ident {
+            Some(ident) => ident.into_token_stream(),
+            None => LitInt::new(&idx.to_string(), Span::call_site()).to_token_stream(),
+        };
 
-            quote!(self.#f)
-        }
-        None => {
-            let message = format!("`{}` is not a targeted event", &input.ident);
-            quote!(::core::unreachable!(#message))
-        }
+        quote!(self.#f)
+    } else {
+        let message = format!("`{}` is not a targeted event", &input.ident);
+        quote!(::core::unreachable!(#message))
     };
 
     let name = &input.ident;

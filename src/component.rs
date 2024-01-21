@@ -1,21 +1,21 @@
+use alloc::borrow::Cow;
+use alloc::collections::btree_map::Entry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::alloc::Layout;
 use core::any::TypeId;
-use std::borrow::Cow;
-use std::collections::btree_map::Entry;
-use std::ops::Index;
+use core::ops::Index;
 
 pub use evenio_macros::Component;
 
 use crate::archetype::Archetype;
-use crate::debug_checked::UnwrapDebugChecked;
+use crate::assert::UnwrapDebugChecked;
+use crate::drop::DropFn;
 use crate::event::{Event, EventId, EventPtr};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::UnsafeWorldCell;
-use crate::{AssertMutable, DropFn};
 
 #[derive(Debug)]
 pub struct Components {
@@ -218,14 +218,6 @@ impl ComponentInfo {
 /// ```
 pub trait Component: Send + Sync + 'static {
     const IS_IMMUTABLE: bool = false;
-}
-
-impl<C: Component> AssertMutable<C> {
-    pub(crate) const COMPONENT: () = assert!(
-        !C::IS_IMMUTABLE,
-        "component does not permit mutation through mutable references (see \
-         `Component::IS_IMMUTABLE`)."
-    );
 }
 
 #[derive(Clone, Debug)]

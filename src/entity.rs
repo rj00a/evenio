@@ -1,5 +1,5 @@
 use core::num::NonZeroU32;
-use std::ops::Index;
+use core::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
 use crate::event::EventPtr;
@@ -175,7 +175,8 @@ impl ReservedEntities {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use alloc::sync::Arc;
+    use std::sync::Mutex;
 
     use crate::entity::Entities;
     use crate::prelude::*;

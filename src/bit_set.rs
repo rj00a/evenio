@@ -1,10 +1,10 @@
-use core::fmt;
+use core::cmp::Ordering;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
-use std::cmp::Ordering;
-use std::ops::{BitOr, BitOrAssign};
+use core::ops::{BitOr, BitOrAssign};
+use core::{any, fmt};
 
-use crate::debug_checked::GetDebugChecked;
+use crate::assert::GetDebugChecked;
 use crate::sparse::SparseIndex;
 
 /// A set data structure backed by a vector of bits.
@@ -17,7 +17,7 @@ impl<T> Clone for BitSet<T> {
     fn clone(&self) -> Self {
         Self {
             blocks: self.blocks.clone(),
-            _marker: self._marker.clone(),
+            _marker: PhantomData,
         }
     }
 }
@@ -47,7 +47,7 @@ impl<T> BitSet<T> {
                 block_idx,
                 usize::MAX,
                 "reached maximum block count in {}",
-                std::any::type_name::<Self>()
+                any::type_name::<Self>()
             );
             self.blocks.resize(block_idx + 1, 0);
         }
@@ -125,7 +125,7 @@ impl<T: SparseIndex> BitSet<T> {
 
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            bits: self.blocks.get(0).copied().unwrap_or(0),
+            bits: self.blocks.first().copied().unwrap_or(0),
             block_idx: 0,
             blocks: &self.blocks,
             _marker: PhantomData,
@@ -188,6 +188,16 @@ impl<T: SparseIndex> FromIterator<T> for BitSet<T> {
     }
 }
 
+impl<'a, T: SparseIndex> IntoIterator for &'a BitSet<T> {
+    type Item = T;
+
+    type IntoIter = Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl<T> fmt::Debug for BitSet<T>
 where
     T: SparseIndex + fmt::Debug,
@@ -195,7 +205,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut set = f.debug_set();
 
-        for elem in self.iter() {
+        for elem in self {
             set.entry(&elem);
         }
 
@@ -295,7 +305,7 @@ mod tests {
 
     #[test]
     fn contains() {
-        let indices = [0u32, 1, 4, 15, 64, 100, 1000, 1001, 1002];
+        let indices = [0_u32, 1, 4, 15, 64, 100, 1000, 1001, 1002];
 
         let set = BitSet::from_iter(indices);
 
@@ -311,7 +321,7 @@ mod tests {
 
     #[test]
     fn iter() {
-        let mut indices = [0u32, 1, 4, 15, 100, 1000, 1001, 1002, 64];
+        let mut indices = [0_u32, 1, 4, 15, 100, 1000, 1001, 1002, 64];
 
         let set = BitSet::from_iter(indices);
 
@@ -324,22 +334,22 @@ mod tests {
 
     #[test]
     fn ordering() {
-        let left = BitSet::from_iter([0u32, 1, 2, 3, 4, 0]);
-        let right = BitSet::from_iter([0u32, 1, 2, 3, 4, 0]);
+        let left = BitSet::from_iter([0_u32, 1, 2, 3, 4, 0]);
+        let right = BitSet::from_iter([0_u32, 1, 2, 3, 4, 0]);
 
         assert_eq!(left, right);
 
-        let mut left = BitSet::from_iter([0u32, 1, 2]);
+        let mut left = BitSet::from_iter([0_u32, 1, 2]);
         left.insert(500);
         left.remove(500);
-        let right = BitSet::from_iter([0u32, 1, 2]);
+        let right = BitSet::from_iter([0_u32, 1, 2]);
 
         assert_eq!(left, right);
         left.shrink_to_fit();
         assert_eq!(left, right);
 
-        let left = BitSet::from_iter([0u32, 1, 2]);
-        let right = BitSet::from_iter([0u32, 1, 2, 3]);
+        let left = BitSet::from_iter([0_u32, 1, 2]);
+        let right = BitSet::from_iter([0_u32, 1, 2, 3]);
 
         assert_ne!(left < right, left > right);
     }

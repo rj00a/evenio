@@ -7,6 +7,7 @@ pub unsafe trait SparseIndex: Copy + Clone {
 
 macro_rules! impl_sparse_index {
     ($t:ty) => {
+        #[allow(trivial_numeric_casts)]
         unsafe impl SparseIndex for $t {
             const MAX: Self = Self::MAX;
 

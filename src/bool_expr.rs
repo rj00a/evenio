@@ -23,6 +23,7 @@ impl<T> Ands<T> {
     }
 }
 
+#[allow(clippy::should_implement_trait)]
 impl<T> BoolExpr<T> {
     pub fn new(b: bool) -> Self {
         Self {
@@ -94,13 +95,13 @@ impl<T> BoolExpr<T> {
         F: FnMut(T) -> bool,
     {
         'ands: for ands in &self.ands {
-            for var in ands.vars.iter() {
+            for var in &ands.vars {
                 if !get_var(var) {
                     continue 'ands;
                 }
             }
 
-            for var in ands.negated_vars.iter() {
+            for var in &ands.negated_vars {
                 if get_var(var) {
                     continue 'ands;
                 }
@@ -158,13 +159,13 @@ impl<T> BoolExpr<T> {
 
             mem::swap(&mut ands.vars, &mut ands.negated_vars);
 
-            for var in ands.vars.iter() {
+            for var in &ands.vars {
                 let mut a = Ands::new();
                 a.vars.insert(var);
                 ors.ands.push(a);
             }
 
-            for negated_var in ands.negated_vars.iter() {
+            for negated_var in &ands.negated_vars {
                 let mut a = Ands::new();
                 a.negated_vars.insert(negated_var);
                 ors.ands.push(a);
@@ -250,7 +251,7 @@ where
         } else {
             let mut first = true;
 
-            for ands in self.ands.iter() {
+            for ands in &self.ands {
                 if !first {
                     write!(f, " ∨ ")?;
                 }
@@ -261,7 +262,7 @@ where
                 } else {
                     let mut first = true;
 
-                    for var in ands.vars.iter() {
+                    for var in &ands.vars {
                         if !first {
                             write!(f, " ∧ ")?;
                         }
@@ -270,7 +271,7 @@ where
                         write!(f, "{var:?}")?;
                     }
 
-                    for var in ands.negated_vars.iter() {
+                    for var in &ands.negated_vars {
                         if !first {
                             write!(f, " ∧ ")?;
                         }

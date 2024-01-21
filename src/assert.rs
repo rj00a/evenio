@@ -1,6 +1,17 @@
-use core::fmt;
+//! Utilities for runtime and compile-time assertions.
+
+use core::marker::PhantomData;
+use core::{fmt, mem};
 
 use slab::Slab;
+
+use crate::component::Component;
+use crate::event::Event;
+
+const _: () = assert!(
+    mem::size_of::<usize>() >= mem::size_of::<u32>(),
+    "unsupported target"
+);
 
 pub(crate) trait GetDebugChecked {
     type Output: ?Sized;
@@ -140,4 +151,33 @@ pub(crate) unsafe fn assume_debug_checked(cond: bool) {
     if !cond {
         unreachable_debug_checked()
     }
+}
+
+pub(crate) struct AssertMutable<T>(PhantomData<T>);
+
+impl<C: Component> AssertMutable<C> {
+    pub(crate) const COMPONENT: () = assert!(
+        !C::IS_IMMUTABLE,
+        "component does not permit mutation through mutable references (see \
+         `Component::IS_IMMUTABLE`)."
+    );
+}
+
+impl<E: Event> AssertMutable<E> {
+    pub(crate) const EVENT: () = assert!(
+        !E::IS_IMMUTABLE,
+        "event does not permit mutation through mutable references (see `Event::IS_IMMUTABLE`)."
+    );
+}
+
+pub(crate) struct AssertUntargetedEvent<E>(PhantomData<E>);
+
+impl<E: Event> AssertUntargetedEvent<E> {
+    pub(crate) const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
+}
+
+pub(crate) struct AssertTargetedEvent<E>(PhantomData<E>);
+
+impl<E: Event> AssertTargetedEvent<E> {
+    pub(crate) const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
 }

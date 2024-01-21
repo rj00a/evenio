@@ -1,10 +1,10 @@
+use core::iter::FusedIterator;
 use core::marker::PhantomData;
+use core::ptr::NonNull;
 use core::{any, fmt};
-use std::iter::FusedIterator;
-use std::ptr::NonNull;
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::debug_checked::{assume_debug_checked, UnwrapDebugChecked};
+use crate::assert::{assume_debug_checked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId};
 use crate::event::EventPtr;
 use crate::query::{Query, ReadOnlyQuery};
@@ -494,7 +494,7 @@ impl<'a, Q: Query> fmt::Debug for Iter<'a, Q> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
 
     use crate::prelude::*;
 
@@ -590,7 +590,7 @@ mod tests {
 
         world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             for _ in f {
-                std::hint::black_box(());
+                core::hint::black_box(());
             }
         });
 
