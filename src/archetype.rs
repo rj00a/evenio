@@ -1,5 +1,8 @@
+use alloc::boxed::Box;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::ptr;
 use core::ptr::NonNull;

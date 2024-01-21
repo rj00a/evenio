@@ -1,5 +1,6 @@
 //! Utilities for runtime and compile-time assertions.
 
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::{fmt, mem};
 

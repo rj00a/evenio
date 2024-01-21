@@ -1,6 +1,8 @@
 use alloc::borrow::Cow;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;

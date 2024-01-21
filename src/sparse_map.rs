@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::mem;
 
 use crate::assert::{assume_debug_checked, GetDebugChecked};

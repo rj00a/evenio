@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::any::{self, TypeId};
 use core::cell::UnsafeCell;

@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;

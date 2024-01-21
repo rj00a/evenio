@@ -1,3 +1,4 @@
+use alloc::format;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::ptr::NonNull;

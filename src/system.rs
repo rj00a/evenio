@@ -1,5 +1,8 @@
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::any::TypeId;
 use core::ops::{Deref, DerefMut, Index};
 use core::ptr::NonNull;

@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![warn(clippy::std_instead_of_alloc, clippy::std_instead_of_core)]
 #![allow(clippy::len_without_is_empty, clippy::let_unit_value)]
 

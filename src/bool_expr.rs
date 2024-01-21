@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::{fmt, mem};
 
 use crate::bit_set::BitSet;
