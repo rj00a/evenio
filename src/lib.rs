@@ -38,9 +38,9 @@ pub mod __private {
 }
 
 /// Re-exports of the most commonly used items in the library.
-/// 
+///
 /// This is intended to be glob-imported like so:
-/// 
+///
 /// ```
 /// use evenio::prelude::*;
 /// ```

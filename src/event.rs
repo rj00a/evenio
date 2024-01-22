@@ -289,7 +289,7 @@ impl EventId {
         generation: 1,
     };
 
-    pub const fn new(index: EventIdx, generation: NonZeroU32) -> Option<Self> {
+    pub const fn new(index: EventIdx, generation: u32) -> Option<Self> {
         match Key::new(index.as_u32(), generation) {
             Some(k) => Some(Self::from_key(k, index.is_targeted())),
             None => None,
@@ -308,7 +308,7 @@ impl EventId {
     }
 
     fn as_key(self) -> Key {
-        Key::new(self.index, self.generation()).unwrap()
+        Key::new(self.index, self.generation().get()).unwrap()
     }
 
     pub const fn is_targeted(&self) -> bool {

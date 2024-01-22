@@ -1,3 +1,5 @@
+//! [`Archetype`] and related items.
+
 use alloc::boxed::Box;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -22,6 +24,20 @@ use crate::system::{
 };
 use crate::world::UnsafeWorldCell;
 
+/// Contains all the [`Archetype`]s and their metadata for a world.
+///
+/// This type can be obtained in a system by using the `&Archetypes` system
+/// parameter.
+///
+/// ```
+/// # use evenio::prelude::*;
+/// # use evenio::archetype::Archetypes;
+/// #
+/// # #[derive(Event)] struct E;
+/// #
+/// # let mut world = World::new();
+/// world.add_system(|_: Receiver<E>, archetypes: &Archetypes| {});
+/// ```
 #[derive(Debug)]
 pub struct Archetypes {
     archetypes: Slab<Archetype>,
@@ -37,6 +53,10 @@ impl Archetypes {
         }
     }
 
+    /// Returns a reference to the empty archetype (The archetype with no
+    /// components).
+    ///
+    /// The empty archetype is always present, so this function is infallible.
     pub fn empty(&self) -> &Archetype {
         // SAFETY: The empty archetype is always at index 0.
         unsafe { self.archetypes.get_debug_checked(0) }
@@ -48,10 +68,17 @@ impl Archetypes {
         unsafe { self.archetypes.get_debug_checked_mut(0) }
     }
 
+    /// Gets a reference to the archetype identified by the given
+    /// [`ArchetypeIdx`]. Returns `None` if the index is invalid.
     pub fn get(&self, idx: ArchetypeIdx) -> Option<&Archetype> {
         self.archetypes.get(idx.0 as usize)
     }
 
+    /// Gets a reference to the archetype with the given set of components.
+    ///
+    /// Returns `None` if there is no archetype with the given set of
+    /// components or the given [`ComponentIdx`] slice is not sorted and
+    /// deduplicated.
     pub fn get_by_components(&self, components: &[ComponentIdx]) -> Option<&Archetype> {
         let idx = *self.by_components.get(components)?;
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
@@ -80,10 +107,12 @@ impl Archetypes {
         }
     }
 
+    /// Returns an iterator over all archetypes in an arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = &Archetype> {
         self.archetypes.iter().map(|(_, v)| v)
     }
 
+    /// Returns a count of the archetypes.
     pub fn len(&self) -> usize {
         self.archetypes.len()
     }
@@ -459,6 +488,9 @@ impl SystemParam for &'_ Archetypes {
     unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
+/// Unique identifier for an archetype.
+///
+/// Old archetype indices may be reused by new archetypes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ArchetypeIdx(pub u32);
 
@@ -481,9 +513,23 @@ unsafe impl SparseIndex for ArchetypeIdx {
     }
 }
 
+/// Offset from the beginning of a component column. Combined with an
+/// [`ArchetypeIdx`], this can identify the location of an entity.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ArchetypeRow(pub u32);
 
+/// A container for all entities with a particular set of components.
+///
+/// Each component has a corresponding columnm of contiguous data in
+/// this archetype. Each row in is then a separate entity.
+///
+/// For instance, an archetype with component set `{A, B, C}` might look like:
+///
+/// | Entity ID | Column A | Column B | Column C |
+/// |-----------|----------|----------|----------|
+/// | Entity 0  | "foo"    | 123      | true     |
+/// | Entity 1  | "bar"    | 456      | false    |
+/// | Entity 2  | "baz"    | 789      | true     |
 #[derive(Debug)]
 pub struct Archetype {
     /// The index of this archetype. Provided here for convenience.
@@ -577,30 +623,37 @@ impl Archetype {
         self.event_listeners.get(idx)
     }
 
+    /// Returns the index of this archetype.
     pub fn index(&self) -> ArchetypeIdx {
         self.index
     }
 
+    /// Returns the total number of entities in this archetype.
     pub fn entity_count(&self) -> u32 {
         debug_assert!(u32::try_from(self.entity_ids.len()).is_ok());
         // This doesn't truncate because entity indices are less than u32::MAX.
         self.entity_ids.len() as u32
     }
 
+    /// Returns a slice of [`EntityId`]s for all the entities in this archetype.
     pub fn entity_ids(&self) -> &[EntityId] {
         &self.entity_ids
     }
 
+    /// Returns a slice of columns sorted by [`ComponentIdx`].
     pub fn columns(&self) -> &[Column] {
         &self.columns
     }
 
+    /// Finds the column with the given component. Returns `None` if it doesn't
+    /// exist.
     pub fn column_of(&self, idx: ComponentIdx) -> Option<&Column> {
         let idx = self
             .columns
             .binary_search_by_key(&idx, |c| c.component_idx)
             .ok()?;
 
+        // SAFETY: `binary_search_by_key` ensures index is in bounds.
         Some(unsafe { self.columns.get_debug_checked(idx) })
     }
 
@@ -610,6 +663,7 @@ impl Archetype {
             .binary_search_by_key(&idx, |c| c.component_idx)
             .ok()?;
 
+        // SAFETY: `binary_search_by_key` ensures index is in bounds.
         Some(unsafe { self.columns.get_debug_checked_mut(idx) })
     }
 
@@ -626,6 +680,7 @@ impl Archetype {
     }
 }
 
+/// All of the component data for a single component type in an [`Archetype`].
 #[derive(Debug)]
 pub struct Column {
     /// Component data in this column.
@@ -635,10 +690,13 @@ pub struct Column {
 }
 
 impl Column {
+    /// Returns a pointer to the beginning of the buffer holding the component
+    /// data, or a dangling pointer if the the buffer is empty.
     pub fn data(&self) -> NonNull<u8> {
         self.data.as_ptr()
     }
 
+    /// Returns the component type for this column.
     pub fn component_index(&self) -> ComponentIdx {
         self.component_idx
     }

@@ -285,11 +285,12 @@ impl Key {
         generation: NonZeroU32::MAX,
     };
 
-    pub(crate) const fn new(index: u32, generation: NonZeroU32) -> Option<Self> {
+    pub(crate) const fn new(index: u32, generation: u32) -> Option<Self> {
         // LSB of generation must be 1 for safety.
-        if generation.get() % 2 == 0 {
+        if generation % 2 == 0 {
             None
         } else {
+            let generation = unsafe { NonZeroU32::new_unchecked(generation) };
             Some(Self { index, generation })
         }
     }

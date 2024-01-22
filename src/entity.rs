@@ -1,4 +1,5 @@
-use core::num::NonZeroU32;
+//! Entity related items.
+
 use core::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
@@ -8,6 +9,20 @@ use crate::slot_map::{Key, NextKeyIter, SlotMap};
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::UnsafeWorldCell;
 
+/// Contains metadata for all the entities in a world.
+///
+/// This type can be obtained in a system by using the `&Entities` system
+/// parameter.
+///
+/// ```
+/// # use evenio::prelude::*;
+/// # use evenio::entity::Entities;
+/// #
+/// # #[derive(Event)] struct E;
+/// #
+/// # let mut world = World::new();
+/// world.add_system(|_: Receiver<E>, entities: &Entities| {});
+/// ```
 #[derive(Debug)]
 pub struct Entities {
     locs: SlotMap<EntityLocation>,
@@ -20,6 +35,8 @@ impl Entities {
         }
     }
 
+    /// Gets the [`EntityLocation`] of the given entity. Returns `None` if the
+    /// ID is invalid.
     pub fn get(&self, id: EntityId) -> Option<EntityLocation> {
         self.locs.get(id.0).copied()
     }
@@ -28,10 +45,13 @@ impl Entities {
         self.locs.get_mut(id.0)
     }
 
+    /// Gets the [`EntityLocation`] of an entity using its [`EntityIdx`].
+    /// Returns `None` if the index is invalid.
     pub fn get_by_index(&self, idx: EntityIdx) -> Option<EntityLocation> {
         self.locs.get_by_index(idx.0).map(|(_, v)| *v)
     }
 
+    /// Does the given entity exist?
     pub fn contains(&self, id: EntityId) -> bool {
         self.get(id).is_some()
     }
@@ -48,6 +68,7 @@ impl Entities {
         self.locs.remove(id.0)
     }
 
+    /// Returns the total number of entities.
     pub fn len(&self) -> u32 {
         self.locs.len()
     }
@@ -56,11 +77,12 @@ impl Entities {
 impl Index<EntityId> for Entities {
     type Output = EntityLocation;
 
-    fn index(&self, index: EntityId) -> &Self::Output {
-        if let Some(loc) = self.locs.get(index.0) {
+    /// Panics if the ID is invalid.
+    fn index(&self, id: EntityId) -> &Self::Output {
+        if let Some(loc) = self.locs.get(id.0) {
             loc
         } else {
-            panic!("no such entity with ID of {index:?} exists")
+            panic!("no such entity with ID of {id:?} exists")
         }
     }
 }
@@ -68,11 +90,12 @@ impl Index<EntityId> for Entities {
 impl Index<EntityIdx> for Entities {
     type Output = EntityLocation;
 
-    fn index(&self, index: EntityIdx) -> &Self::Output {
-        if let Some(loc) = self.locs.get_by_index(index.0).map(|(_, v)| v) {
+    /// Panics if the index is invalid.
+    fn index(&self, idx: EntityIdx) -> &Self::Output {
+        if let Some(loc) = self.locs.get_by_index(idx.0).map(|(_, v)| v) {
             loc
         } else {
-            panic!("no such entity with index of {index:?} exists")
+            panic!("no such entity with index of {idx:?} exists")
         }
     }
 }
@@ -100,37 +123,58 @@ impl SystemParam for &'_ Entities {
     unsafe fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 }
 
+/// The location of an entity in an archetype.
 #[derive(Copy, Clone, Debug)]
 pub struct EntityLocation {
+    /// The archetype where the entity is located.
     pub archetype: ArchetypeIdx,
+    /// The specific row in the archetype where the entity is located.
     pub row: ArchetypeRow,
 }
 
+/// Lightweight identifier for an entity.
+///
+/// entity identifiers are implemented using an [index] and a generation count.
+/// The generation count ensures that IDs from despawned entities are not reused
+/// by new entities.
+///
+/// An entity identifier is only meaningful in the [`World`] it was created
+/// from. Attempting to use an entity ID in a different world will have
+/// unexpected results.
+///
+/// [index]: EntityIdx
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Debug)]
 pub struct EntityId(Key);
 
 impl EntityId {
+    /// The entity ID which never identifies a live entity.
     pub const NULL: Self = Self(Key::NULL);
 
-    pub const fn new(index: u32, generation: NonZeroU32) -> Option<Self> {
+    /// Creates a new entity ID from an index and generation count. Returns
+    /// `None` if a valid ID is not formed.
+    pub const fn new(index: u32, generation: u32) -> Option<Self> {
         match Key::new(index, generation) {
             Some(k) => Some(Self(k)),
             None => None,
         }
     }
 
+    /// Returns the index of this ID.
     pub const fn index(self) -> EntityIdx {
         EntityIdx(self.0.index())
     }
 
+    /// Returns the generation count of this ID.
     pub const fn generation(self) -> u32 {
         self.0.generation().get()
     }
 }
 
+/// An [`EntityId`] with the generation count stripped out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Debug)]
 pub struct EntityIdx(pub u32);
 
+/// A queue of entities to be spawned into the world.
 #[derive(Debug)]
 pub(crate) struct ReservedEntities {
     iter: NextKeyIter<EntityLocation>,
