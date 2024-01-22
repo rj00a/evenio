@@ -507,6 +507,7 @@ impl World {
             return None;
         }
 
+        // Send event first.
         self.send(RemoveComponent(component));
 
         let despawn_idx = self.add_event::<Despawn>().index().as_u32();
@@ -743,8 +744,6 @@ impl World {
         self.event_queue.clear();
 
         fn handle_events(queue_start_idx: usize, world: &mut World) {
-            debug_assert!(queue_start_idx < world.event_queue.len());
-
             'next_event: for queue_idx in queue_start_idx..world.event_queue.len() {
                 let item = unsafe { world.event_queue.get_debug_checked_mut(queue_idx) };
                 let event_meta = item.meta;
@@ -940,8 +939,6 @@ impl World {
                     }
                 }
             }
-
-            debug_assert!(queue_start_idx < world.event_queue.len());
 
             unsafe { world.event_queue.set_len(queue_start_idx) };
         }
