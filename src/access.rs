@@ -1,3 +1,5 @@
+//! Data access checking.
+
 use core::cmp::Ordering;
 use core::fmt;
 
@@ -70,14 +72,15 @@ impl Access {
     }
 }
 
-/// Map from `T` to [`Access`] with sparse index keys. Absent keys implicitly
-/// map to [`Access::None`].
+/// Map from `T` to [`Access`] with sparse index keys. All keys map to
+/// [`Access::None`] by default.
 pub struct AccessMap<T> {
     read: BitSet<T>,
     write: BitSet<T>,
 }
 
 impl<T> AccessMap<T> {
+    /// Creates an empty access map.
     pub fn new() -> Self {
         Self {
             read: BitSet::new(),
@@ -85,11 +88,12 @@ impl<T> AccessMap<T> {
         }
     }
 
-    pub fn get(&self, value: T) -> Access
+    /// Gets the access for `key`.
+    pub fn get(&self, key: T) -> Access
     where
         T: SparseIndex,
     {
-        match (self.read.contains(value), self.write.contains(value)) {
+        match (self.read.contains(key), self.write.contains(key)) {
             (true, true) => Access::ReadWrite,
             (true, false) => Access::Read,
             (false, true) => unreachable!("read-write implies read"),
@@ -97,35 +101,41 @@ impl<T> AccessMap<T> {
         }
     }
 
-    pub fn insert(&mut self, value: T, access: Access)
+    /// Sets the access for `key`.
+    pub fn set(&mut self, key: T, access: Access)
     where
         T: SparseIndex,
     {
         match access {
             Access::None => {
-                self.read.remove(value);
-                self.write.remove(value);
+                self.read.remove(key);
+                self.write.remove(key);
             }
             Access::Read => {
-                self.read.insert(value);
-                self.write.remove(value);
+                self.read.insert(key);
+                self.write.remove(key);
             }
             Access::ReadWrite => {
-                self.read.insert(value);
-                self.write.insert(value);
+                self.read.insert(key);
+                self.write.insert(key);
             }
         }
     }
 
+    /// Clears the access map. All keys will map to [`Access::None`].
     pub fn clear(&mut self) {
         self.read.clear();
         self.write.clear();
     }
 
+    /// Returns whether all values in `self` can be active at the same time as
+    /// all values in `other`.
     pub fn is_compatible(&self, other: &Self) -> bool {
         self.read.is_disjoint(&other.write) && self.write.is_disjoint(&other.read)
     }
 
+    /// Computes the union between `self` and `other` and assigns the result to
+    /// `self`.
     pub fn union_assign(&mut self, other: &Self) {
         self.read |= &other.read;
         self.write |= &other.write;
@@ -181,14 +191,22 @@ where
     }
 }
 
+/// The combination of a [`BoolExpr`] with an [`AccessMap`].
+///
+/// This is capable of precisely describing the components accessed by a query,
+/// e.g. `(&A, &mut B)`.
 #[derive(Clone, Debug)]
 pub struct ComponentAccessExpr {
+    /// The boolean expression part.
     pub expr: BoolExpr<ComponentIdx>,
+    /// The access map part.
     pub access: AccessMap<ComponentIdx>,
 }
 
 #[allow(clippy::should_implement_trait)]
 impl ComponentAccessExpr {
+    /// Creates a new component access expr corresponding to `true` or `false`.
+    /// The access map is initialized empty.
     pub fn new(b: bool) -> Self {
         Self {
             expr: BoolExpr::new(b),
@@ -196,9 +214,11 @@ impl ComponentAccessExpr {
         }
     }
 
+    /// Creates a new component access expr which accesses a single component,
+    /// e.g. `&A` or `&mut A`.
     pub fn with(component: ComponentIdx, access: Access) -> Self {
         let mut map = AccessMap::new();
-        map.insert(component, access);
+        map.set(component, access);
 
         Self {
             expr: BoolExpr::with(component),
@@ -206,6 +226,8 @@ impl ComponentAccessExpr {
         }
     }
 
+    /// Creates a new component access expr which does not access a single
+    /// component, e.g. `Not<A>`.
     pub fn without(component: ComponentIdx) -> Self {
         Self {
             expr: BoolExpr::without(component),
@@ -213,6 +235,8 @@ impl ComponentAccessExpr {
         }
     }
 
+    /// Checks if `self` can be active as the same time as `other` without
+    /// causing access conflicts.
     pub fn is_compatible(&self, other: &Self) -> bool {
         if self.access.is_compatible(&other.access) {
             return true;
@@ -226,6 +250,8 @@ impl ComponentAccessExpr {
         self.expr.is_disjoint(&other.expr)
     }
 
+    /// ANDs two access exprs together. Returns `Err` if the two exprs are
+    /// incompatible.
     pub fn and(mut self, other: &Self) -> Result<Self, Self> {
         if !self.is_compatible(other) {
             return Err(self);
@@ -236,6 +262,8 @@ impl ComponentAccessExpr {
         Ok(self)
     }
 
+    /// ORs two access exprs together. Returns `Err` if the two exprs are
+    /// incompatible.
     pub fn or(mut self, other: &Self) -> Result<Self, Self> {
         if !self.is_compatible(other) {
             return Err(self);
@@ -246,6 +274,7 @@ impl ComponentAccessExpr {
         Ok(self)
     }
 
+    /// Performs a logical NOT on this expr. The access map is cleared.
     pub fn not(mut self) -> Self {
         self.access.clear();
 
@@ -253,6 +282,7 @@ impl ComponentAccessExpr {
         self
     }
 
+    /// XORs two access exprs together.
     pub fn xor(mut self, other: &Self) -> Self {
         self.access.union_assign(&other.access);
         self.expr = self.expr.xor(&other.expr);
