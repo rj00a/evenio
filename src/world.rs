@@ -491,7 +491,7 @@ impl World {
     /// # #[derive(Event)] struct E;
     /// #
     /// let component = world.add_component::<C>();
-    /// let system = world.add_system(|_: Receiver<E>, _: Fetcher<&C>|);
+    /// let system = world.add_system(|_: Receiver<E>, _: Fetcher<&C>| {});
     ///
     /// assert!(world.components().contains(component));
     /// assert!(world.systems().contains(system));
