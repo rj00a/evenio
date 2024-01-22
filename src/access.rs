@@ -221,7 +221,7 @@ impl ComponentAccessExpr {
         map.set(component, access);
 
         Self {
-            expr: BoolExpr::with(component),
+            expr: BoolExpr::var(component),
             access: map,
         }
     }
@@ -230,7 +230,7 @@ impl ComponentAccessExpr {
     /// component, e.g. `Not<A>`.
     pub fn without(component: ComponentIdx) -> Self {
         Self {
-            expr: BoolExpr::without(component),
+            expr: BoolExpr::not_var(component),
             access: AccessMap::new(),
         }
     }

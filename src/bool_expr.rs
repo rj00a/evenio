@@ -1,3 +1,5 @@
+//! Boolean expressions.
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::{fmt, mem};
@@ -5,6 +7,8 @@ use core::{fmt, mem};
 use crate::bit_set::BitSet;
 use crate::sparse::SparseIndex;
 
+/// Represents an arbitrary boolean expression from boolean algebra. Values of
+/// type `T` are used as the variables.
 pub struct BoolExpr<T> {
     // The boolean expression in disjunctive normal form,
     // e.g. (A ∧ B ∧ ¬C) ∨ (D ∧ ¬E ∧ ¬F). This is an "OR of ANDs".
@@ -27,13 +31,15 @@ impl<T> Ands<T> {
 
 #[allow(clippy::should_implement_trait)]
 impl<T> BoolExpr<T> {
+    /// Creates an new expression of either `true` or `false`.
     pub fn new(b: bool) -> Self {
         Self {
             ands: if b { vec![Ands::new()] } else { vec![] },
         }
     }
 
-    pub fn with(value: T) -> Self
+    /// Create an expression from a single variable.
+    pub fn var(value: T) -> Self
     where
         T: SparseIndex,
     {
@@ -49,7 +55,9 @@ impl<T> BoolExpr<T> {
         }
     }
 
-    pub fn without(value: T) -> Self
+    /// Create an expression from a single negated variable. Equivalent to
+    /// `BoolExpr::var(value).not()`.
+    pub fn not_var(value: T) -> Self
     where
         T: SparseIndex,
     {
@@ -76,7 +84,7 @@ impl<T> BoolExpr<T> {
     /// const A: u32 = 0;
     /// const B: u32 = 1;
     ///
-    /// let expr = BoolExpr::with(A).xor(&BoolExpr::with(B));
+    /// let expr = BoolExpr::var(A).xor(&BoolExpr::var(B));
     ///
     /// let get_var = |a, b| {
     ///     move |var| match var {
@@ -115,6 +123,7 @@ impl<T> BoolExpr<T> {
         false
     }
 
+    /// AND two expressions together.
     #[must_use]
     pub fn and(mut self, other: &Self) -> Self
     where
@@ -139,6 +148,7 @@ impl<T> BoolExpr<T> {
         self
     }
 
+    /// OR two expressions together.
     #[must_use]
     pub fn or(mut self, other: &Self) -> Self
     where
@@ -148,6 +158,7 @@ impl<T> BoolExpr<T> {
         self
     }
 
+    /// Negates `self`.
     #[must_use]
     pub fn not(mut self) -> Self
     where
@@ -179,6 +190,7 @@ impl<T> BoolExpr<T> {
         res
     }
 
+    /// XOR two expressions together.
     pub fn xor(self, other: &Self) -> Self
     where
         T: SparseIndex,
