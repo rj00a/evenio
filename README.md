@@ -7,7 +7,7 @@ Rather than restricting systems to run once every frame/update in a fixed order,
 The control flow of the entire program is then defined by the flow of events between systems.
 Structural changes to the world are also mediated by events.
 
-> **For a full step-by-step introduction, please see the [tutorial book 📚](tutorial).** 
+> **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).** 
 
 ```rust
 use evenio::prelude::*;

@@ -1,3 +1,5 @@
+//! Defines the [`World`] and related APIs.
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -25,6 +27,8 @@ use crate::system::{
     SystemList, Systems,
 };
 
+/// A container for all data in the ECS. This includes entities, components,
+/// systems, and events.
 #[derive(Debug)]
 pub struct World {
     entities: Entities,
@@ -37,6 +41,8 @@ pub struct World {
 }
 
 impl World {
+    /// Creates a new, empty world.
+    ///
     /// # Examples
     ///
     /// ```
@@ -56,6 +62,11 @@ impl World {
         }
     }
 
+    /// Broadcast an event to all systems in this world.
+    ///
+    /// Any events sent by systems will also broadcast. This process continues
+    /// recursively until all events have finished broadcasting.
+    ///
     /// # Examples
     ///
     /// ```
@@ -73,10 +84,42 @@ impl World {
     /// world.add_system(my_system);
     /// world.send(MyEvent(123));
     /// ```
+    ///
+    /// Output:
+    ///
+    /// ```txt
+    /// got event: 123
+    /// ```
     pub fn send<E: Event>(&mut self, event: E) {
         self.send_many(|mut s| s.send(event))
     }
 
+    /// Enqueue an arbitrary number of events and send them all at once.
+    ///
+    /// The closure `f` is passed a [`Sender`] used to add events to a queue.
+    /// Once the closure returns, all enqueued events are broadcasted as
+    /// described by [`send`].
+    ///
+    /// [`send`]: World::send
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// #
+    /// # #[derive(Event)]
+    /// # struct A;
+    /// #
+    /// # #[derive(Event)]
+    /// # struct B;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// world.send_many(|mut sender| {
+    ///     sender.send(A);
+    ///     sender.send(B);
+    /// });
+    /// ```
     pub fn send_many<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(Sender) -> R,
@@ -88,7 +131,17 @@ impl World {
         res
     }
 
-    /// Examples
+    /// Creates a new entity, returns its [`EntityId`], and sends the [`Spawn`]
+    /// event to signal its creation.
+    ///
+    /// The new entity is spawned without any components attached. The returned
+    /// `EntityId` is not used by any previous entities in this world.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the maximum number of entities has been reached.
+    ///
+    /// # Examples
     ///
     /// ```
     /// use evenio::prelude::*;
@@ -102,18 +155,62 @@ impl World {
         self.send_many(|mut s| s.spawn())
     }
 
+    /// Sends the [`Insert`] event. This is a shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// # let entity = world.spawn();
+    /// #
+    /// # #[derive(Component)]
+    /// # struct C;
+    /// #
+    /// # let component = C;
+    /// #
+    /// world.send(Insert::new(entity, component));
+    /// ```
     pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
         self.send(Insert::new(entity, component))
     }
 
+    /// Sends the [`Remove`] event. This is a shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// # let entity = world.spawn();
+    /// #
+    /// # #[derive(Component)]
+    /// # struct C;
+    /// #
+    /// world.send(Remove::<C>::new(entity));
+    /// ```
     pub fn remove<C: Component>(&mut self, entity: EntityId) {
         self.send(Remove::<C>::new(entity))
     }
 
+    /// Sends the [`Despawn`] event. This is shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// # let entity = world.spawn();
+    /// #
+    /// world.send(Despawn(entity));
+    /// ```
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
     }
 
+    /// Gets an immutable reference to component `C` on `entity`. Returns `None`
+    /// if `entity` doesn't exist or doesn't have the requested component.
+    ///
     /// # Examples
     ///
     /// ```
@@ -155,6 +252,9 @@ impl World {
         })
     }
 
+    /// Gets a mutable reference to component `C` on `entity`. Returns `None` if
+    /// `entity` doesn't exist or doesn't have the requested component.
+    ///
     /// # Examples
     ///
     /// ```
@@ -191,6 +291,25 @@ impl World {
         Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
+    /// Adds a new system to the world, returns its [`SystemId`], and sends the
+    /// [`AddSystem`] event to signal its creation.
+    ///
+    /// If the system already exists (as determined by [`System::type_id`]) then
+    /// the `SystemId` of the existing system is returned and no event is sent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configuration of the system is invalid. This can occur
+    /// when, for instance, the system does not specify an event to receive.
+    ///
+    /// ```should_panic
+    /// # use evenio::prelude::*;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// world.add_system(|| {}); // Panics
+    /// ```
+    ///
     /// # Examples
     ///
     /// ```
@@ -202,7 +321,11 @@ impl World {
     ///
     /// let mut world = World::new();
     /// let id = world.add_system(my_system);
+    ///
+    /// assert!(world.systems().contains(id));
     /// ```
+    ///
+    /// [`System::type_id`]: crate::system::System::type_id
     #[track_caller]
     pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> SystemId {
         let mut system = system.into_system();
@@ -254,6 +377,10 @@ impl World {
         id
     }
 
+    /// Removes a system from the world, returns its [`SystemInfo`], and sends
+    /// the [`RemoveSystem`] event. If the `system` ID is invalid, then `None`
+    /// is returned and no event is sent.
+    ///
     /// # Example
     ///
     /// ```
@@ -270,20 +397,26 @@ impl World {
     /// assert_eq!(info.id(), system_id);
     /// assert!(!world.systems().contains(system_id));
     /// ```
-    pub fn remove_system(&mut self, id: SystemId) -> Option<SystemInfo> {
-        if !self.systems.contains(id) {
+    pub fn remove_system(&mut self, system: SystemId) -> Option<SystemInfo> {
+        if !self.systems.contains(system) {
             return None;
         }
 
-        self.send(RemoveSystem(id));
+        self.send(RemoveSystem(system));
 
-        let info = self.systems.remove(id).unwrap();
+        let info = self.systems.remove(system).unwrap();
 
         self.archetypes.remove_system(&info);
 
         Some(info)
     }
 
+    /// Adds the component `C` to the world, returns its [`ComponentId`], and
+    /// sends the [`AddComponent`] event to signal its creation.
+    ///
+    /// If the component already exists, then the [`ComponentId`] of the
+    /// existing component is returned and no event is sent.
+    ///
     /// # Examples
     ///
     /// ```
@@ -296,8 +429,6 @@ impl World {
     /// let id = world.add_component::<MyComponent>();
     ///
     /// assert_eq!(id, world.add_component::<MyComponent>());
-    ///
-    /// println!("{}", world.components()[id].name());
     /// ```
     pub fn add_component<C: Component>(&mut self) -> ComponentId {
         let desc = ComponentDescriptor {
@@ -311,6 +442,22 @@ impl World {
         unsafe { self.add_component_with_descriptor(desc) }
     }
 
+    /// Adds a component described by a given [`ComponentDescriptor`].
+    ///
+    /// Like [`add_component`], an [`AddComponent`] event is sent if the
+    /// component is newly added. If the [`TypeId`] of the component matches an
+    /// existing component, then the existing component's [`ComponentId`] is
+    /// returned and no event is sent.
+    ///
+    /// # Safety
+    ///
+    /// - If the component is given a [`TypeId`], then the `layout` and `drop`
+    ///   function must be compatible with the Rust type identified by the type
+    ///   ID.
+    /// - Drop function must be safe to call with a pointer to the component as
+    ///   described by [`DropFn`]'s documentation.
+    ///
+    /// [`add_component`]: World::add_component
     pub unsafe fn add_component_with_descriptor(
         &mut self,
         desc: ComponentDescriptor,
@@ -324,18 +471,49 @@ impl World {
         id
     }
 
-    pub fn remove_component(&mut self, id: ComponentId) -> Option<ComponentInfo> {
-        if !self.components.contains(id) {
+    /// Removes a component from the world and returns its [`ComponentInfo`]. If
+    /// the `component` ID is invalid, then `None` is returned and the function
+    /// has no effect.
+    ///
+    /// Removing a component has the following effects in the order listed:
+    /// 1. The [`RemoveComponent`] event is sent.
+    /// 2. All entities with the component are despawned.
+    /// 3. All systems that reference the component are removed.
+    /// 4. The corresponding [`Insert`] events for the component are removed.
+    /// 5. The corresponding [`Remove`] events for the component are removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// # let mut world = World::new();
+    /// # #[derive(Component)] struct C;
+    /// # #[derive(Event)] struct E;
+    /// #
+    /// let component = world.add_component::<C>();
+    /// let system = world.add_system(|_: Receiver<E>, _: Fetcher<&C>|);
+    ///
+    /// assert!(world.components().contains(component));
+    /// assert!(world.systems().contains(system));
+    ///
+    /// world.remove_component(component);
+    ///
+    /// assert!(!world.components().contains(component));
+    /// // System was also removed because it references `C` in its `Fetcher`.
+    /// assert!(!world.systems().contains(system));
+    /// ```
+    pub fn remove_component(&mut self, component: ComponentId) -> Option<ComponentInfo> {
+        if !self.components.contains(component) {
             return None;
         }
 
-        self.send(RemoveComponent(id));
+        self.send(RemoveComponent(component));
 
         let despawn_idx = self.add_event::<Despawn>().index().as_u32();
 
         // Attempt to despawn all entities that still have this component.
         for arch in self.archetypes.iter() {
-            if arch.column_of(id.index()).is_some() {
+            if arch.column_of(component.index()).is_some() {
                 for &entity_id in arch.entity_ids() {
                     unsafe { self.event_queue.push(Despawn(entity_id), despawn_idx) };
                 }
@@ -348,7 +526,7 @@ impl World {
         let mut systems_to_remove = vec![];
 
         for sys in self.systems.iter() {
-            if sys.referenced_components().contains(id.index()) {
+            if sys.referenced_components().contains(component.index()) {
                 systems_to_remove.push(sys.id());
             }
         }
@@ -357,7 +535,7 @@ impl World {
             self.remove_system(sys_id);
         }
 
-        let info = &self.components[id];
+        let info = &self.components[component];
 
         // Remove all the `Insert` and `Remove` events for this component.
         let events_to_remove = info
@@ -373,13 +551,20 @@ impl World {
 
         // Remove all archetypes with this component. If there are still entities with
         // the component by this point, then they will be silently removed.
-        self.archetypes.remove_component(id.index(), |entity_id| {
-            self.entities.remove(entity_id);
-        });
+        self.archetypes
+            .remove_component(component.index(), |entity_id| {
+                self.entities.remove(entity_id);
+            });
 
-        self.components.remove(id)
+        self.components.remove(component)
     }
 
+    /// Adds the event `E` to the world, returns its [`EventId`], and sends the
+    /// [`AddEvent`] event to signal its creation.
+    ///
+    /// If the event already exists, then the [`EventId`] of the existing event
+    /// is returned and no event is sent.
+    ///
     /// # Examples
     ///
     /// ```
@@ -392,8 +577,6 @@ impl World {
     /// let id = world.add_event::<MyEvent>();
     ///
     /// assert_eq!(id, world.add_event::<MyEvent>());
-    ///
-    /// println!("{}", world.events()[id].name());
     /// ```
     pub fn add_event<E: Event>(&mut self) -> EventId {
         let desc = EventDescriptor {
@@ -409,6 +592,22 @@ impl World {
         unsafe { self.add_event_with_descriptor(desc) }
     }
 
+    /// Adds an event described by a given [`EventDescriptor`].
+    ///
+    /// Like [`add_event`], an [`AddEvent`] event is sent if the
+    /// event is newly added. If the [`TypeId`] of the event matches an
+    /// existing event, then the existing event's [`EventId`] is
+    /// returned and no event is sent.
+    ///
+    /// # Safety
+    ///
+    /// - If the event is given a [`TypeId`], then the `layout` and `drop`
+    ///   function must be compatible with the Rust type identified by the type
+    ///   ID.
+    /// - Drop function must be safe to call with a pointer to the event as
+    ///   described by [`DropFn`]'s documentation.
+    /// - The event's kind must be correct for the descriptor. See
+    ///   [`EventKind`]'s documentation for more information.
     pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
         let kind = desc.kind;
 
@@ -439,6 +638,14 @@ impl World {
         id
     }
 
+    /// Removes an event from the world and returns its [`EventInfo`]. If
+    /// the `event` ID is invalid, then `None` is returned and the function
+    /// has no effect.
+    ///
+    /// Removing an event has the following effects in the order listed:
+    /// 1. The [`RemoveEvent`] event is sent.
+    /// 2. All systems that send or receive the event are removed.
+    ///
     /// # Examples
     ///
     /// ```
@@ -454,22 +661,22 @@ impl World {
     ///
     /// assert!(!world.events().contains(id));
     /// ```
-    pub fn remove_event(&mut self, id: EventId) -> Option<EventInfo> {
+    pub fn remove_event(&mut self, event: EventId) -> Option<EventInfo> {
         assert!(self.event_queue.is_empty());
 
-        if !self.events.contains(id) || id == EventId::SPAWN_QUEUED {
+        if !self.events.contains(event) || event == EventId::SPAWN_QUEUED {
             return None;
         }
 
         // Send event before removing anything.
-        self.send(RemoveEvent(id));
+        self.send(RemoveEvent(event));
 
         // Remove all systems that send or receive this event.
         let mut to_remove = vec![];
 
         for sys in self.systems.iter() {
-            if sys.received_event() == id
-                || match id.index() {
+            if sys.received_event() == event
+                || match event.index() {
                     EventIdx::Targeted(idx) => sys.sent_targeted_events().contains(idx),
                     EventIdx::Untargeted(idx) => sys.sent_untargeted_events().contains(idx),
                 }
@@ -482,18 +689,18 @@ impl World {
             self.remove_system(id);
         }
 
-        let info = self.events.remove(id).unwrap();
+        let info = self.events.remove(event).unwrap();
 
         match info.kind() {
             EventKind::Other => {}
             EventKind::Insert { component_idx, .. } => {
                 if let Some(info) = self.components.get_by_index_mut(component_idx) {
-                    info.insert_events.remove(&id);
+                    info.insert_events.remove(&event);
                 }
             }
             EventKind::Remove { component_idx } => {
                 if let Some(info) = self.components.get_by_index_mut(component_idx) {
-                    info.remove_events.remove(&id);
+                    info.remove_events.remove(&event);
                 }
             }
             EventKind::SpawnQueued => {}
@@ -503,22 +710,27 @@ impl World {
         Some(info)
     }
 
+    /// Returns the [`Entities`] for this world.
     pub fn entities(&self) -> &Entities {
         &self.entities
     }
 
+    /// Returns the [`Components`] for this world.  
     pub fn components(&self) -> &Components {
         &self.components
     }
 
+    /// Returns the [`Systems`] for this world.
     pub fn systems(&self) -> &Systems {
         &self.systems
     }
 
+    /// Returns the [`Archetypes`] for this world.
     pub fn archetypes(&self) -> &Archetypes {
         &self.archetypes
     }
 
+    /// Returns the [`Events`] for this world.
     pub fn events(&self) -> &Events {
         &self.events
     }
@@ -762,7 +974,8 @@ impl Default for World {
 
 impl Drop for World {
     fn drop(&mut self) {
-        // Drop in-flight events in the event queue.
+        // Drop in-flight events still in the event queue. This can happen if a panic
+        // occurs.
         for item in self.event_queue.iter() {
             if let Some(event) = NonNull::new(item.event) {
                 let info = unsafe {
@@ -785,17 +998,23 @@ unsafe impl Sync for World {}
 impl UnwindSafe for World {}
 impl RefUnwindSafe for World {}
 
+/// Used for queueing events. Passed to the closure given in [`send_many`].
+///
+/// [`send_many`]: World::send_many
 #[derive(Debug)]
 pub struct Sender<'a> {
     world: &'a mut World,
 }
 
 impl Sender<'_> {
+    /// Enqueue an event.
     pub fn send<E: Event>(&mut self, event: E) {
         let idx = self.world.add_event::<E>().index().as_u32();
         unsafe { self.world.event_queue.push(event, idx) };
     }
 
+    /// Enqueue the spawning of an entity and [`Spawn`] event. Returns the
+    /// [`EntityId`] of the entity that will be spawned.
     pub fn spawn(&mut self) -> EntityId {
         let id = self.world.reserved_entities.reserve(&self.world.entities);
         unsafe {
@@ -807,19 +1026,25 @@ impl Sender<'_> {
         id
     }
 
+    /// Enqueue an [`Insert`] event.
     pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
         self.send(Insert::new(entity, component))
     }
 
+    /// Enqueue a [`Remove`] event.
     pub fn remove<C: Component>(&mut self, entity: EntityId) {
         self.send(Remove::<C>::new(entity))
     }
 
+    /// Enqueue a [`Despawn`] event.
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
     }
 }
 
+/// Reference to a [`World`] where all methods take `&self` and accesses are not
+/// checked at compile time. It is the caller's responsibility to ensure that
+/// Rust's aliasing rules are not violated.
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {
     world: *mut World,
@@ -846,30 +1071,45 @@ impl<'a> UnsafeWorldCell<'a> {
         entity_id
     }
 
+    /// Returns the [`Entities`] for this world.
     pub fn entities(self) -> &'a Entities {
         unsafe { &(*self.world).entities }
     }
 
+    /// Returns the [`Components`] for this world.
     pub fn components(self) -> &'a Components {
         unsafe { &(*self.world).components }
     }
 
+    /// Returns the [`Systems`] for this world.
     pub fn systems(self) -> &'a Systems {
         unsafe { &(*self.world).systems }
     }
 
+    /// Returns the [`Archetypes`] for this world.
     pub fn archetypes(self) -> &'a Archetypes {
         unsafe { &(*self.world).archetypes }
     }
 
+    /// Returns the [`Events`] for this world.
     pub fn events(self) -> &'a Events {
         unsafe { &(*self.world).events }
     }
 
+    /// Returns an immutable reference to the underlying world.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the entire world immutably.
     pub fn world(self) -> &'a World {
         unsafe { &*self.world }
     }
 
+    /// Returns a mutable reference to the underlying world.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission the access the entire world immutably.
     pub unsafe fn world_mut(self) -> &'a mut World {
         &mut *self.world
     }

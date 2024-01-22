@@ -37,6 +37,13 @@ pub mod __private {
     pub use memoffset::offset_of;
 }
 
+/// Re-exports of the most commonly used items in the library.
+/// 
+/// This is intended to be glob-imported like so:
+/// 
+/// ```
+/// use evenio::prelude::*;
+/// ```
 pub mod prelude {
     pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;

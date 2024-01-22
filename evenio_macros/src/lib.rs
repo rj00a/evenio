@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use proc_macro::TokenStream;
 
 mod all_tuples;
@@ -7,6 +9,34 @@ mod query;
 mod system_param;
 mod util;
 
+/// Helper macro which repeatedly invokes a given macro with an increasing list
+/// of identifiers.
+///
+/// Invoked with `all_tuples!(my_macro, start, end, A, B, ...)` where `start`
+/// and `end` are integer literals and `A`, `B`, ... are identifiers.
+///
+/// `all_tuples!(my_macro, 0, 15, A)` expands to:
+///
+/// ```ignore
+/// my_macro!();
+/// my_macro!(A0);
+/// my_macro!(A0, A1);
+/// my_macro!(A0, A1, A2);
+/// ...
+/// my_macro!(A0, ..., A14);
+/// ```
+///
+/// Now with multiple identifiers. `all_tuples!(my_macro, 0, 15, A, a)` expands
+/// to:
+///
+/// ```ignore
+/// my_macro!();
+/// my_macro!((A0, a0));
+/// my_macro!((A0, a0), (A1, a1));
+/// my_macro!((A0, a0), (A1, a1), (A2, a2));
+/// ...
+/// my_macro!((A0, a0), ..., (A14, a14));
+/// ```
 #[proc_macro]
 pub fn all_tuples(input: TokenStream) -> TokenStream {
     all_tuples::all_tuples(input)
@@ -38,6 +68,8 @@ pub fn derive_query(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Derive macro for `SystemParam`. See `SystemParam`'s documentation for more
+/// information.
 #[proc_macro_derive(SystemParam)]
 pub fn derive_system_param(input: TokenStream) -> TokenStream {
     system_param::derive_system_param(input.into())
