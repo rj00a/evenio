@@ -1,3 +1,5 @@
+//! The [`BitSet`], a set backed by a vector of bits.
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -29,6 +31,7 @@ type Block = usize;
 const BITS: usize = Block::BITS as usize;
 
 impl<T> BitSet<T> {
+    /// Create a new, empty bit set.
     pub const fn new() -> Self {
         Self {
             blocks: vec![],
@@ -36,6 +39,7 @@ impl<T> BitSet<T> {
         }
     }
 
+    /// Clears the set, removing all elements.
     pub fn clear(&mut self) {
         self.blocks.clear();
     }
@@ -58,6 +62,7 @@ impl<T> BitSet<T> {
         unsafe { self.blocks.get_debug_checked_mut(block_idx) }
     }
 
+    /// Returns `true` if `self` has no elements in common with `other`.
     #[must_use]
     pub fn is_disjoint(&self, other: &Self) -> bool {
         self.blocks
@@ -66,6 +71,7 @@ impl<T> BitSet<T> {
             .all(|(a, b)| a & b == 0)
     }
 
+    /// Returns the number of elements in the set.
     #[must_use]
     pub fn len(&self) -> usize {
         self.blocks
@@ -74,6 +80,7 @@ impl<T> BitSet<T> {
             .sum()
     }
 
+    /// Returns `true` if the set contains no elements.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.blocks.iter().all(|&block| block == 0)
@@ -81,6 +88,7 @@ impl<T> BitSet<T> {
 }
 
 impl<T: SparseIndex> BitSet<T> {
+    /// Adds a value to the set. Returns whether the value was newly inserted.
     #[track_caller]
     #[inline]
     pub fn insert(&mut self, value: T) -> bool {
@@ -97,6 +105,8 @@ impl<T: SparseIndex> BitSet<T> {
         newly_inserted
     }
 
+    /// Removes a value from the set. Returns whether such an element was
+    /// present.
     #[inline]
     pub fn remove(&mut self, value: T) -> bool {
         let idx = value.index();
@@ -114,6 +124,7 @@ impl<T: SparseIndex> BitSet<T> {
         }
     }
 
+    /// Returns `true` if the set contains an element equal to the value.
     #[must_use]
     pub fn contains(&self, value: T) -> bool {
         let idx = value.index();
@@ -125,6 +136,7 @@ impl<T: SparseIndex> BitSet<T> {
             .map_or(false, |&block| (block >> bit) & 1 == 1)
     }
 
+    /// Returns an iterator over the element in the set in ascending order.
     pub fn iter(&self) -> Iter<T> {
         Iter {
             bits: self.blocks.first().copied().unwrap_or(0),
@@ -134,6 +146,7 @@ impl<T: SparseIndex> BitSet<T> {
         }
     }
 
+    /// Shrinks the capacity of the set as much as possible.
     pub fn shrink_to_fit(&mut self) {
         while let Some(&last) = self.blocks.last() {
             if last != 0 {
@@ -215,6 +228,7 @@ where
     }
 }
 
+/// An iterator over the items in a [`BitSet`].
 pub struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,
