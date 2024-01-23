@@ -26,7 +26,7 @@ use crate::world::UnsafeWorldCell;
 
 /// Contains all the [`Archetype`]s and their metadata for a world.
 ///
-/// This type can be obtained in a system by using the `&Archetypes` system
+/// This can be obtained in a system by using the `&Archetypes` system
 /// parameter.
 ///
 /// ```
@@ -49,7 +49,6 @@ impl Archetypes {
         Self {
             archetypes: Slab::from_iter([(0, Archetype::empty())]),
             by_components: BTreeMap::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
-            // indices: BinaryHeap::from_iter([ArchetypeIdx::EMPTY]),
         }
     }
 

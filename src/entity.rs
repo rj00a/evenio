@@ -11,7 +11,7 @@ use crate::world::UnsafeWorldCell;
 
 /// Contains metadata for all the entities in a world.
 ///
-/// This type can be obtained in a system by using the `&Entities` system
+/// This can be obtained in a system by using the `&Entities` system
 /// parameter.
 ///
 /// ```
@@ -51,7 +51,7 @@ impl Entities {
         self.locs.get_by_index(idx.0).map(|(_, v)| *v)
     }
 
-    /// Does the given entity exist?
+    /// Does the given entity exist in the world?
     pub fn contains(&self, id: EntityId) -> bool {
         self.get(id).is_some()
     }
