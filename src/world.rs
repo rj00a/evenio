@@ -956,7 +956,7 @@ impl World {
     /// this world.
     pub fn unsafe_cell(&self) -> UnsafeWorldCell {
         UnsafeWorldCell {
-            world: (self as *const World).cast_mut(),
+            world: NonNull::from(self),
             _marker: PhantomData,
         }
     }
@@ -965,7 +965,7 @@ impl World {
     /// all data in this world.
     pub fn unsafe_cell_mut(&mut self) -> UnsafeWorldCell {
         UnsafeWorldCell {
-            world: self,
+            world: NonNull::from(self),
             _marker: PhantomData,
         }
     }
@@ -1052,7 +1052,7 @@ impl Sender<'_> {
 /// Rust's aliasing rules are not violated.
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {
-    world: *mut World,
+    world: NonNull<World>,
     _marker: PhantomData<(&'a World, &'a UnsafeCell<World>)>,
 }
 
@@ -1063,7 +1063,7 @@ impl<'a> UnsafeWorldCell<'a> {
     /// - Must have permission to access the event queue mutably.
     /// - Event index must be correct for the given event.
     pub unsafe fn send_with_index<E: Event>(self, event: E, idx: u32) {
-        unsafe { (*self.world).event_queue.push(event, idx) }
+        unsafe { (*self.world.as_ptr()).event_queue.push(event, idx) }
     }
 
     /// # Safety
@@ -1071,34 +1071,36 @@ impl<'a> UnsafeWorldCell<'a> {
     /// - Must be called from within a system.
     /// - Must have permission to access the event queue mutably.
     pub unsafe fn queue_spawn(self) -> EntityId {
-        let entity_id = (*self.world).reserved_entities.reserve(self.entities());
+        let entity_id = (*self.world.as_ptr())
+            .reserved_entities
+            .reserve(self.entities());
         self.send_with_index(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32());
         entity_id
     }
 
     /// Returns the [`Entities`] for this world.
     pub fn entities(self) -> &'a Entities {
-        unsafe { &(*self.world).entities }
+        unsafe { &(*self.world.as_ptr()).entities }
     }
 
     /// Returns the [`Components`] for this world.
     pub fn components(self) -> &'a Components {
-        unsafe { &(*self.world).components }
+        unsafe { &(*self.world.as_ptr()).components }
     }
 
     /// Returns the [`Systems`] for this world.
     pub fn systems(self) -> &'a Systems {
-        unsafe { &(*self.world).systems }
+        unsafe { &(*self.world.as_ptr()).systems }
     }
 
     /// Returns the [`Archetypes`] for this world.
     pub fn archetypes(self) -> &'a Archetypes {
-        unsafe { &(*self.world).archetypes }
+        unsafe { &(*self.world.as_ptr()).archetypes }
     }
 
     /// Returns the [`Events`] for this world.
     pub fn events(self) -> &'a Events {
-        unsafe { &(*self.world).events }
+        unsafe { &(*self.world.as_ptr()).events }
     }
 
     /// Returns an immutable reference to the underlying world.
@@ -1107,7 +1109,7 @@ impl<'a> UnsafeWorldCell<'a> {
     ///
     /// Must have permission to access the entire world immutably.
     pub fn world(self) -> &'a World {
-        unsafe { &*self.world }
+        unsafe { &*self.world.as_ptr() }
     }
 
     /// Returns a mutable reference to the underlying world.
@@ -1116,7 +1118,7 @@ impl<'a> UnsafeWorldCell<'a> {
     ///
     /// Must have permission the access the entire world immutably.
     pub unsafe fn world_mut(self) -> &'a mut World {
-        &mut *self.world
+        &mut *self.world.as_ptr()
     }
 }
 
