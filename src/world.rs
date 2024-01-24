@@ -155,7 +155,9 @@ impl World {
         self.send_many(|mut s| s.spawn())
     }
 
-    /// Sends the [`Insert`] event. This is a shorthand for:
+    /// Sends the [`Insert`] event.
+    ///
+    /// This is shorthand for:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -175,7 +177,9 @@ impl World {
         self.send(Insert::new(entity, component))
     }
 
-    /// Sends the [`Remove`] event. This is a shorthand for:
+    /// Sends the [`Remove`] event.
+    ///
+    /// This is a shorthand for:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -193,7 +197,9 @@ impl World {
         self.send(Remove::<C>::new(entity))
     }
 
-    /// Sends the [`Despawn`] event. This is shorthand for:
+    /// Sends the [`Despawn`] event.
+    ///
+    /// This is shorthand for:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -609,6 +615,8 @@ impl World {
     ///   described by [`DropFn`]'s documentation.
     /// - The event's kind must be correct for the descriptor. See
     ///   [`EventKind`]'s documentation for more information.
+    /// 
+    /// [`add_event`]: World::add_event
     pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
         let kind = desc.kind;
 
@@ -618,7 +626,7 @@ impl World {
             self.systems.register_event(id.index());
 
             match kind {
-                EventKind::Other => {}
+                EventKind::Normal => {}
                 EventKind::Insert { component_idx, .. } => {
                     if let Some(info) = self.components.get_by_index_mut(component_idx) {
                         info.insert_events.insert(id);
@@ -693,7 +701,7 @@ impl World {
         let info = self.events.remove(event).unwrap();
 
         match info.kind() {
-            EventKind::Other => {}
+            EventKind::Normal => {}
             EventKind::Insert { component_idx, .. } => {
                 if let Some(info) = self.components.get_by_index_mut(component_idx) {
                     info.insert_events.remove(&event);
@@ -854,7 +862,7 @@ impl World {
                 }
 
                 match event_kind {
-                    EventKind::Other => {
+                    EventKind::Normal => {
                         // Ordinary event. Run event dropper destructor.
                     }
                     EventKind::Insert {
@@ -1039,8 +1047,8 @@ impl Sender<'_> {
     }
 }
 
-/// Reference to a [`World`] where all methods take `&self` and accesses are not
-/// checked at compile time. It is the caller's responsibility to ensure that
+/// Reference to a [`World`] where all methods take `&self` and aliasing rules
+/// are not checked. It is the caller's responsibility to ensure that
 /// Rust's aliasing rules are not violated.
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {

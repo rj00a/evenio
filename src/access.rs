@@ -60,7 +60,7 @@ impl Access {
     /// assert_eq!(access, Access::ReadWrite);
     /// ```
     ///
-    /// [compatible](Self::is_compatible)
+    /// [compatible]: Access::is_compatible
     #[must_use]
     pub fn set_if_compatible(&mut self, other: Self) -> bool {
         if self.is_compatible(other) {

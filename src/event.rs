@@ -1,3 +1,5 @@
+//! Types for sending and receiving [`Event`]s.
+
 use alloc::borrow::Cow;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
@@ -32,6 +34,19 @@ use crate::sparse::SparseIndex;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
+/// Stores metadata for all [`Event`]s in the world.
+///
+/// This can be obtained in a system by using the `&Events` system
+/// parameter.
+///
+/// ```
+/// # use evenio::prelude::*;
+/// # use evenio::event::Events;
+/// #
+/// # #[derive(Event)] struct E;
+/// #
+/// # let mut world = World::new();
+/// world.add_system(|_: Receiver<E>, events: &Events| {});
 #[derive(Debug)]
 pub struct Events {
     untargeted_events: SlotMap<EventInfo>,
@@ -97,6 +112,8 @@ impl Events {
         }
     }
 
+    /// Gets the [`EventInfo`] of the given event. Returns `None` if the ID is
+    /// invalid.
     pub fn get(&self, id: EventId) -> Option<&EventInfo> {
         let k = id.as_key();
         match id.index() {
@@ -105,6 +122,8 @@ impl Events {
         }
     }
 
+    /// Gets the [`EventInfo`] for an event using its [`EventIdx`]. Returns
+    /// `None` if the index is invalid.
     #[inline]
     pub fn get_by_index(&self, idx: EventIdx) -> Option<&EventInfo> {
         match idx {
@@ -113,6 +132,8 @@ impl Events {
         }
     }
 
+    /// Gets the [`EventInfo`] for an event using its [`TypeId`]. Returns `None`
+    /// if the `TypeId` does not map to an event.
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&EventInfo> {
         debug_assert_ne!(type_id, TypeId::of::<SpawnQueued>());
 
@@ -120,6 +141,7 @@ impl Events {
         Some(unsafe { self.get(idx).unwrap_debug_checked() })
     }
 
+    /// Does the given event exist in the world?
     pub fn contains(&self, id: EventId) -> bool {
         self.get(id).is_some()
     }
@@ -201,8 +223,25 @@ impl SystemParam for &'_ Events {
 
     unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
-
+/// Messages which systems listen for.
+///
+/// To send and receive events within systems, see [`Sender`] and
+/// [`Receiver`].
+///
+/// # Targeted vs. Untargeted
+///
+/// Targeted events are directed at a particular entity, while untargeted events
+/// may not be. For instance, the standard [`Despawn`] event is targeted because
+/// it contains the [`EntityId`] of the entity it is intended to affect.
+///
+/// Targeted events allow systems to efficiently filter out events whose target
+/// does not match a particular query.
+///
 /// # Deriving
+///
+/// The `Event` trait is automatically implementable by using the associated
+/// derive macro. The type must still satisfy the `Send + Sync + 'static` bound
+/// to do so.
 ///
 /// ```
 /// use evenio::prelude::*;
@@ -210,11 +249,13 @@ impl SystemParam for &'_ Events {
 /// #[derive(Event)]
 /// #[event(immutable)] // Overrides the default mutability.
 /// struct MyEvent {
-///     #[event(target)] // Sets the entity returned by `target()`. If absent, the event is untargeted.
+///     #[event(target)]
+///     // Sets the entity returned by `target()`. If absent, the event is untargeted.
 ///     entity: EntityId,
 /// }
 ///
-/// // Also works on tuple structs, enums, and unions. However, `#[event(target)]` is unavailable for non-struct types.
+/// // Also works on tuple structs, enums, and unions.
+/// // However, `#[event(target)]` is unavailable for non-struct types.
 ///
 /// #[derive(Event)]
 /// struct TupleStruct(i32, #[event(target)] EntityId);
@@ -230,29 +271,64 @@ impl SystemParam for &'_ Events {
 ///     foo: i32,
 ///     bar: f32,
 /// }
+///
+/// #[derive(Event)]
+/// struct EmptyEvent;
 /// ```
 pub trait Event: Send + Sync + 'static {
+    /// If this event is considered "targeted" or "untargeted".
+    ///
+    /// If `true`, [`target`] is expected to successfully return the target of
+    /// the event. Otherwise, the result of [`target`] is unspecified.
+    ///
+    /// [`target`]: Event::target
     const IS_TARGETED: bool = false;
 
+    /// Whether or not this event is considered immutable.
+    ///
+    /// Immutable events disallow mutable references to the event and ownership
+    /// transfer via [`EventMut::take`]. This is useful for ensuring events
+    /// are not altered during their lifespan.
     const IS_IMMUTABLE: bool = false;
 
+    /// Returns the [`EntityId`] target of this event.
+    ///
+    /// If [`IS_TARGETED`] is `false`, then the result is unspecified. The
+    /// default implementation panics.
+    ///
+    /// [`IS_TARGETED`]: Event::IS_TARGETED
     fn target(&self) -> EntityId {
         unimplemented!()
     }
 
+    /// Gets the [`EventKind`] of this event and performs any necessary
+    /// initialization work.
+    ///
+    /// # Safety
+    ///
+    /// Although this method is safe to call, it is unsafe to implement
+    /// because unsafe code relies on the returned [`EventKind`] being correct
+    /// for this type. Additionally, the `world` cannot be used in ways that
+    /// would result in dangling indices.
+    ///
+    /// The exact safety requirements are currently unspecified, but the default
+    /// implementation returns [`EventKind::Normal`] and is always safe.
+    #[doc(hidden)]
     unsafe fn init(world: &mut World) -> EventKind {
         let _ = world;
-        EventKind::Other
+        EventKind::Normal
     }
 }
 
+/// Additional behaviors for an event. This is used to distinguish normal
+/// user events from special built-in events.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 #[non_exhaustive]
 pub enum EventKind {
-    /// An event not covered by one of the other variants. Most events are of
-    /// this kind.
+    /// An event not covered by one of the other variants. Events of this kind
+    /// have no special effects.
     #[default]
-    Other,
+    Normal,
     /// The [`Insert`] event.
     Insert {
         /// The [`ComponentIdx`] of the component to insert.
@@ -266,11 +342,23 @@ pub enum EventKind {
         /// The [`ComponentIdx`] of the component to remove.
         component_idx: ComponentIdx,
     },
+    /// The event which spawns one queued entity. For internal use only.
     SpawnQueued,
     /// The [`Despawn`] event.
     Despawn,
 }
 
+/// Lightweight identifier for an event type.
+///
+/// Event identifiers are implemented using an [index] and a generation count.
+/// The generation count ensures that IDs from removed events are not reused
+/// by new events.
+///
+/// An event identifier is only meaningful in the [`World`] it was created
+/// from. Attempting to use an entity ID in a different world will have
+/// unexpected results.
+///
+/// [index]: EventIdx
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventId {
     index: u32,
@@ -278,6 +366,8 @@ pub struct EventId {
 }
 
 impl EventId {
+    /// The event ID which never identifies a live event. This is the default
+    /// value for `EventId`.
     pub const NULL: Self = Self {
         index: u32::MAX,
         generation: u32::MAX,
@@ -289,6 +379,8 @@ impl EventId {
         generation: 1,
     };
 
+    /// Creates a new event ID from an index and generation count. Returns
+    /// `None` if the ID is malformed.
     pub const fn new(index: EventIdx, generation: u32) -> Option<Self> {
         match Key::new(index.as_u32(), generation) {
             Some(k) => Some(Self::from_key(k, index.is_targeted())),
@@ -311,14 +403,21 @@ impl EventId {
         Key::new(self.index, self.generation().get()).unwrap()
     }
 
+    /// Returns whether this ID refers to a [targeted] event.
+    ///
+    /// [targeted]: Event::IS_TARGETED
     pub const fn is_targeted(&self) -> bool {
         self.generation & 1 == 0
     }
 
+    /// Returns whether this ID refers to an [untargeted] event.
+    ///
+    /// [untargeted]: Event::IS_TARGETED
     pub const fn is_untargeted(&self) -> bool {
         self.generation & 1 == 1
     }
 
+    /// Returns the index of this ID.
     #[inline]
     pub const fn index(self) -> EventIdx {
         if self.is_targeted() {
@@ -328,6 +427,7 @@ impl EventId {
         }
     }
 
+    /// Returns the generation count of this ID.
     pub const fn generation(self) -> NonZeroU32 {
         unsafe { NonZeroU32::new_unchecked(self.generation | 1) }
     }
@@ -348,13 +448,17 @@ impl fmt::Debug for EventId {
     }
 }
 
+/// An [`EventId`] with the generation count stripped out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum EventIdx {
+    /// Index to a targeted event.
     Targeted(TargetedEventIdx),
+    /// Index to an untargeted event.
     Untargeted(UntargetedEventIdx),
 }
 
 impl EventIdx {
+    /// Returns the index as a `u32`.
     pub const fn as_u32(self) -> u32 {
         match self {
             EventIdx::Targeted(idx) => idx.0,
@@ -362,15 +466,18 @@ impl EventIdx {
         }
     }
 
+    /// If this index refers to a targeted event.
     pub const fn is_targeted(self) -> bool {
         matches!(self, Self::Targeted(_))
     }
 
+    /// If this index refers to an untargeted event.
     pub const fn is_untargeted(self) -> bool {
         !self.is_targeted()
     }
 }
 
+/// Event index which is known to refer to a targeted event.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct UntargetedEventIdx(pub u32);
 
@@ -386,6 +493,7 @@ unsafe impl SparseIndex for UntargetedEventIdx {
     }
 }
 
+/// Event index which is known to refer to an untargeted event.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct TargetedEventIdx(pub u32);
 
@@ -409,10 +517,11 @@ impl Event for SpawnQueued {
     }
 }
 
+/// Metadata for an event.
 #[derive(Debug)]
 pub struct EventInfo {
-    id: EventId,
     name: Cow<'static, str>,
+    id: EventId,
     kind: EventKind,
     type_id: Option<TypeId>,
     layout: Layout,
@@ -421,43 +530,67 @@ pub struct EventInfo {
 }
 
 impl EventInfo {
-    pub fn id(&self) -> EventId {
-        self.id
-    }
-
+    /// Gets the name of the event.
+    ///
+    /// This name is intended for debugging purposes and should not be relied
+    /// upon for correctness.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Gets the ID of the event.
+    pub fn id(&self) -> EventId {
+        self.id
+    }
+
+    /// Gets the [`EventKind`] of the event.
     pub fn kind(&self) -> EventKind {
         self.kind
     }
 
+    /// Gets the [`TypeId`] of the event, if any.
     pub fn type_id(&self) -> Option<TypeId> {
         self.type_id
     }
 
+    /// Gets the [`Layout`] of the event.
     pub fn layout(&self) -> Layout {
         self.layout
     }
 
+    /// Gets the [`DropFn`] of the event.
     pub fn drop(&self) -> DropFn {
         self.drop
     }
 
+    /// Gets the [immutability] of the event.
+    ///
+    /// [immutability]: Event::IS_IMMUTABLE
     pub fn is_immutable(&self) -> bool {
         self.is_immutable
     }
 }
 
+/// Data needed to create a new event.
 #[derive(Clone, Debug)]
 pub struct EventDescriptor {
+    /// The name of this event.
+    ///
+    /// This name is intended for debugging purposes and should not be relied
+    /// upon for correctness.
     pub name: Cow<'static, str>,
+    /// The [`TypeId`] of this event, if any.
     pub type_id: Option<TypeId>,
+    /// If this event is [targeted](Event::IS_TARGETED).
     pub is_targeted: bool,
+    /// The [`EventKind`] of the event.
     pub kind: EventKind,
+    /// The [`Layout`] of the event.
     pub layout: Layout,
+    /// The [`DropFn`] of the event. This is passed a pointer to the
+    /// event in order to drop it.
     pub drop: DropFn,
+    /// If this event is [immutable](Event::IS_IMMUTABLE).
     pub is_immutable: bool,
 }
 
@@ -555,6 +688,12 @@ impl EventMeta {
     }
 }
 
+/// Type-erased pointer to an event. Passed to systems in [`System::run`].
+///
+/// This is essentially a reference-to-pointer-to-event where the
+/// pointer-to-event can be set to null.
+///
+/// [`System::run`]: crate::system::System::run
 #[derive(Clone, Copy, Debug)]
 pub struct EventPtr<'a> {
     ptr: NonNull<*mut u8>,
@@ -569,10 +708,24 @@ impl<'a> EventPtr<'a> {
         }
     }
 
+    /// Reinterprets the pointer as a reference to `E`.
+    ///
+    /// # Safety
+    ///
+    /// - Must have permission to access the event immutably.
+    /// - Event data must be safe to reinterpret as an instance of `E`. This
+    ///   implies that layouts of `E` and the event must match.
     pub unsafe fn as_event<E: Event>(self) -> &'a E {
         &*self.ptr.as_ptr().read().cast::<E>()
     }
 
+    /// Reinterprets the pointer as a mutable reference to `E`.
+    ///
+    /// # Safety
+    ///
+    /// - Must have permission to access the event mutably.
+    /// - Event data must be safe to reinterpret as an instance of `E`. This
+    ///   implies that layouts of `E` and the event must match.
     pub unsafe fn as_event_mut<E: Event>(self) -> EventMut<'a, E> {
         EventMut {
             ptr: unsafe { &mut *(self.ptr.as_ptr() as *mut *mut E) },
@@ -580,21 +733,59 @@ impl<'a> EventPtr<'a> {
         }
     }
 
+    /// Gets a reference to the type-erased event pointer.
+    ///
+    /// # Safety
+    ///
+    /// - Must have permission to access the event immutably.
     pub unsafe fn as_ptr(self) -> &'a *const u8 {
         &*(self.ptr.as_ptr() as *const *const u8)
     }
 
+    /// Gets a mutable reference to the type-erased event pointer. The pointer
+    /// can be set to null to take ownership of the event.
+    ///
+    /// # Safety
+    ///
+    /// - Must have permission to access the event mutably.
     pub unsafe fn as_ptr_mut(self) -> &'a mut *mut u8 {
         &mut *self.ptr.as_ptr()
     }
 }
 
+/// Mutable reference to an instance of event `E`.
+///
+/// To get at `E`, use the [`Deref`] and [`DerefMut`] implementations or
+/// [`take`](Self::take).
 pub struct EventMut<'a, E> {
     ptr: &'a mut *mut E,
     _marker: PhantomData<&'a mut E>,
 }
 
 impl<E> EventMut<'_, E> {
+    /// Takes ownership of the event. Any other systems listening for this event
+    /// will not run.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use evenio::prelude::*;
+    /// # let mut world = World::new();
+    /// # #[derive(Event)]
+    /// # struct E;
+    /// #
+    /// # let mut world = World::new();
+    /// #
+    /// world.add_system(|r: ReceiverMut<E>| {
+    ///     EventMut::take(r.event); // Took ownership of event.
+    /// });
+    ///
+    /// world.add_system(|_: Receiver<E>| panic!("boom"));
+    ///
+    /// world.send(E);
+    /// // ^ No panic occurs because the first system took
+    /// // ownership of the event before the second could run.
+    /// ```
     pub fn take(this: Self) -> E {
         let res = unsafe { this.ptr.read() };
 
@@ -624,9 +815,33 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     }
 }
 
+/// A [`SystemParam`] used to listen for events of type `E`.
+///
+/// To listen for targeted events, use a [`Query`] in the `Q` type parameter.
+///
+/// For more information, see the relevant [tutorial
+/// chapter](crate::tutorial::ch01_systems_and_events).
+///
+/// # Examples
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(Event)]
+/// struct E;
+///
+/// let mut world = World::new();
+///
+/// world.add_system(|r: Receiver<E>| {
+///     println!("got event of type E!");
+/// });
+/// ```
 #[derive(Clone, Copy)]
 pub struct Receiver<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery> {
+    /// A reference to the received event.
     pub event: &'a E,
+    /// The result of the query. This field is meaningless if `E` is not a
+    /// targeted event.
     pub query: Q::Item<'a>,
 }
 
@@ -652,8 +867,8 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
         Receiver {
             // SAFETY:
             // - We have permission to access the event immutably.
-            // - Pointer is nonnull.
-            event: event_ptr.as_event(),
+            // - System was configured to listen for `E`.
+            event: event_ptr.as_event::<E>(),
             query: (),
         }
     }
@@ -737,8 +952,15 @@ where
     }
 }
 
+/// Like [`Receiver`], but provides mutable access to the received event.
+///
+/// For more information, see the relevant [tutorial
+/// chapter](crate::tutorial::ch02_event_mutation).
 pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery> {
+    /// A mutable reference to the received event.
     pub event: EventMut<'a, E>,
+    /// The result of the query. This field is meaningless if `E` is not a
+    /// targeted event.
     pub query: Q::Item<'a>,
 }
 
@@ -890,10 +1112,16 @@ fn set_received_event<E: Event>(
     Ok(id)
 }
 
+/// Indicates the absence of a [`ReceiverQuery`].
 #[derive(Clone, Copy, Debug)]
 pub struct NullReceiverQuery;
 
+/// Targeted event queries used in [`Receiver`] and [`ReceiverMut`]. This trait
+/// is implemented for all types which implement [`Query`].
+///
+/// This trait is sealed and cannot be implemented for types outside this crate.
 pub trait ReceiverQuery: private::Sealed {
+    /// The item produced by the query.
     type Item<'a>;
 }
 
@@ -901,7 +1129,7 @@ impl ReceiverQuery for NullReceiverQuery {
     type Item<'a> = ();
 }
 
-impl<Q: Query + 'static> ReceiverQuery for Q {
+impl<Q: Query> ReceiverQuery for Q {
     type Item<'a> = Q::Item<'a>;
 }
 
@@ -915,17 +1143,23 @@ mod private {
     impl<Q: Query> Sealed for Q {}
 }
 
+/// A [`SystemParam`] for sending events from the set `T`.
+///
+/// For more information, see the relevant [tutorial
+/// chapter](crate::tutorial::ch03_sending_events_from_systems).
 #[derive(Clone, Copy)]
 pub struct Sender<'a, T: EventSet> {
-    state: &'a T::State,
+    state: &'a T::EventIndices,
     world: UnsafeWorldCell<'a>,
 }
 
 impl<T: EventSet> Sender<'_, T> {
+    /// Add an [`Event`] to the queue of events to send. The queue is flushed
+    /// once the system returns.
+    ///
     /// # Panics
     ///
-    /// Panics if the given event type `E` is not in the [`EventSet`] of this
-    /// sender. This may become a compile time error in the future.
+    /// Panics if `E` is not in the [`EventSet`] of this sender.
     #[track_caller]
     pub fn send<E: Event>(&mut self, event: E) {
         // The event type and event set are all compile time known, so the compiler
@@ -940,10 +1174,16 @@ impl<T: EventSet> Sender<'_, T> {
         unsafe { self.world.send_with_index(event, event_idx) }
     }
 
+    /// Queues an entity to be spawned, returns its [`EntityId`], and queues the
+    /// [`Spawn`] event. The returned `EntityId` is not used by any previous
+    /// entities in the [`World`].
+    ///
+    /// The entity will not exist in the world until the `Spawn` event has
+    /// started broadcasting.
+    ///
     /// # Panics
     ///
-    /// Panics if the [`EventSet`] of this sender does not contain [`Spawn`].
-    /// This may become a compile time error in the future.
+    /// Panics if `Spawn` is not in the [`EventSet`] of this sender.
     #[track_caller]
     pub fn spawn(&mut self) -> EntityId {
         let id = unsafe { self.world.queue_spawn() };
@@ -951,16 +1191,72 @@ impl<T: EventSet> Sender<'_, T> {
         id
     }
 
+    /// Queue an [`Insert`] event.
+    ///
+    /// This is shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// # let mut world = World::new();
+    /// # #[derive(Event)]
+    /// # struct E;
+    /// # #[derive(Component)]
+    /// # struct C;
+    /// # world.add_system(|_: Receiver<E>, mut sender: Sender<Insert<C>>| {
+    /// #     let entity = EntityId::NULL;
+    /// #     let component = C;
+    /// sender.send(Insert::new(entity, component));
+    /// # });
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Insert<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
     pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
         self.send(Insert::new(entity, component))
     }
 
+    /// Queue a [`Remove`] event.
+    ///
+    /// This is shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// # let mut world = World::new();
+    /// # let entity = world.spawn();
+    /// # #[derive(Event)] struct E;
+    /// # #[derive(Component)] struct C;
+    /// # world.add_system(move |_: Receiver<E>, mut sender: Sender<Remove<C>>| {
+    /// sender.send(Remove::<C>::new(entity));
+    /// # });
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Remove<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
     pub fn remove<C: Component>(&mut self, entity: EntityId) {
         self.send(Remove::<C>::new(entity))
     }
 
+    /// Queue a [`Despawn`] event.
+    ///
+    /// This is a shorthand for:
+    ///
+    /// ```
+    /// # use evenio::prelude::*;
+    /// # let mut world = World::new();
+    /// # let entity = world.spawn();
+    /// # #[derive(Event)] struct E;
+    /// # world.add_system(move |_: Receiver<E>, mut sender: Sender<Despawn>| {
+    /// sender.send(Despawn(entity));
+    /// # });
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Despawn` is not in the [`EventSet`] of this sender.
     #[track_caller]
     pub fn despawn(&mut self, entity: EntityId) {
         self.send(Despawn(entity))
@@ -968,7 +1264,7 @@ impl<T: EventSet> Sender<'_, T> {
 }
 
 impl<T: EventSet> SystemParam for Sender<'_, T> {
-    type State = T::State;
+    type State = T::EventIndices;
 
     type Item<'a> = Sender<'a, T>;
 
@@ -1029,7 +1325,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
 
 impl<T: EventSet> fmt::Debug for Sender<'_, T>
 where
-    T::State: fmt::Debug,
+    T::EventIndices: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sender")
@@ -1039,21 +1335,35 @@ where
     }
 }
 
+/// A set of [`Event`] types.
+///
+/// This trait is implemented for all events and tuples of events, so `E1`,
+/// `()`, `(E1,)`, `(E1, E2)` etc. are all event sets.
+///
+/// # Safety
+///
+/// This trait is marked `unsafe` because unsafe code relies on implementations
+/// being correct.
 pub unsafe trait EventSet {
-    type State: Send + Sync + 'static;
+    /// The set of event indices.
+    type EventIndices: Send + Sync + 'static;
 
-    fn new_state(world: &mut World) -> Self::State;
+    /// Creates the set of event indices.
+    fn new_state(world: &mut World) -> Self::EventIndices;
 
-    fn event_idx_of<E: Event>(state: &Self::State) -> Option<u32>;
+    /// Gets an event index from the set. Returns `None` if event `E`
+    /// is not in the set.
+    fn event_idx_of<E: Event>(state: &Self::EventIndices) -> Option<u32>;
 
-    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, f: F);
+    /// Run a function on each event index in the set.
+    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::EventIndices, f: F);
 }
 
 unsafe impl<E: Event> EventSet for E {
     // Either a targeted event index or an untargeted event index.
-    type State = u32;
+    type EventIndices = u32;
 
-    fn new_state(world: &mut World) -> Self::State {
+    fn new_state(world: &mut World) -> Self::EventIndices {
         match world.add_event::<E>().index() {
             EventIdx::Untargeted(idx) => idx.0,
             EventIdx::Targeted(idx) => idx.0,
@@ -1061,11 +1371,11 @@ unsafe impl<E: Event> EventSet for E {
     }
 
     #[inline]
-    fn event_idx_of<F: Event>(state: &Self::State) -> Option<u32> {
+    fn event_idx_of<F: Event>(state: &Self::EventIndices) -> Option<u32> {
         (TypeId::of::<F>() == TypeId::of::<E>()).then_some(*state)
     }
 
-    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::State, mut f: F) {
+    fn for_each_idx<F: FnMut(EventIdx)>(state: &Self::EventIndices, mut f: F) {
         f(if E::IS_TARGETED {
             EventIdx::Targeted(TargetedEventIdx(*state))
         } else {
@@ -1078,9 +1388,9 @@ macro_rules! impl_event_set_tuple {
     ($(($E:ident, $e:ident)),*) => {
         #[allow(clippy::unused_unit)]
         unsafe impl<$($E: EventSet),*> EventSet for ($($E,)*) {
-            type State = ($($E::State,)*);
+            type EventIndices = ($($E::EventIndices,)*);
 
-            fn new_state(_world: &mut World) -> Self::State {
+            fn new_state(_world: &mut World) -> Self::EventIndices {
                 (
                     $(
                         $E::new_state(_world),
@@ -1089,7 +1399,7 @@ macro_rules! impl_event_set_tuple {
             }
 
             #[inline]
-            fn event_idx_of<E: Event>(($($e,)*): &Self::State) -> Option<u32> {
+            fn event_idx_of<E: Event>(($($e,)*): &Self::EventIndices) -> Option<u32> {
                 $(
                     if let Some(id) = $E::event_idx_of::<E>($e) {
                         return Some(id);
@@ -1099,7 +1409,7 @@ macro_rules! impl_event_set_tuple {
                 None
             }
 
-            fn for_each_idx<F: FnMut(EventIdx)>(($($e,)*): &Self::State, mut _f: F) {
+            fn for_each_idx<F: FnMut(EventIdx)>(($($e,)*): &Self::EventIndices, mut _f: F) {
                 $(
                     $E::for_each_idx($e, &mut _f);
                 )*
@@ -1110,14 +1420,23 @@ macro_rules! impl_event_set_tuple {
 
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
 
+/// An [`Event`] which adds component `C` on an entity when sent. If the entity
+/// already has the component, then the component is replaced.
+///
+/// Any system which listens for `Insert<C>` will run before the component is
+/// inserted. `Insert<C>` has no effect if the target entity does not exist or
+/// the event is consumed before it finishes broadcasting.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(C)] // Field order is significant!
 pub struct Insert<C> {
+    /// The entity to insert the component on.
     pub entity: EntityId,
+    /// The component to insert.
     pub component: C,
 }
 
 impl<C> Insert<C> {
+    /// Create a new instance.
     pub const fn new(entity: EntityId, component: C) -> Self {
         Self { entity, component }
     }
@@ -1140,14 +1459,22 @@ impl<C: Component> Event for Insert<C> {
     }
 }
 
+/// An [`Event`] which removes component `C` from an entity when sent. The
+/// component is dropped and cannot be recovered.
+///
+/// Any system which listens for `Remove<C>` will run before the component is
+/// removed. `Remove<C>` has no effect if the target entity does not exist or
+/// the event is consumed before it finishes broadcasting.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
 pub struct Remove<C> {
+    /// The entity to remove the component from.
     pub entity: EntityId,
     _marker: PhantomData<fn() -> C>,
 }
 
 impl<C> Remove<C> {
+    /// Create a new instance.
     pub const fn new(entity: EntityId) -> Self {
         Self {
             entity,
@@ -1170,15 +1497,20 @@ impl<C: Component> Event for Remove<C> {
     }
 }
 
-/// An [`Event`] which signals the creation of an entity.
+/// An [`Event`] which signals the creation of an entity. Contains the
+/// [`EntityId`] of the new entity.
+///
+/// The event by itself has no additional effects, and cannot be used to spawn
+/// new entities. Use [`World::spawn`] or [`Sender::spawn`] instead.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Spawn(#[event(target)] pub EntityId);
 
-/// An [`Event`] which removes an entity from the [`World`].
+/// An [`Event`] which removes an entity from the [`World`] when sent. All
+/// components of the target entity are dropped.
 ///
-/// `Despawn` has no effect if the target entity does not exist or the event is
-/// consumed before it finishes broadcasting. All components of the target
-/// entity are dropped.
+/// Any system which listens for `Despawn` will run before the entity is
+/// removed. `Despawn` has no effect if the target entity does not exist or the
+/// event is consumed before it finishes broadcasting.
 ///
 /// # Examples
 ///
@@ -1214,11 +1546,15 @@ impl Event for Despawn {
     }
 }
 
-/// An [`Event`] sent immediately after an event is added to the world.
+/// An [`Event`] sent immediately after a new event is added to the world.
+///
+/// Contains the [`EventId`] of the added event.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddEvent(pub EventId);
 
 /// An [`Event`] sent immediately before an event is removed from the world.
+///
+/// Contains the [`EventId`] of the event to be removed.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveEvent(pub EventId);
 
@@ -1227,7 +1563,7 @@ mod tests {
     use crate::prelude::*;
 
     #[test]
-    fn flush_entity_event() {
+    fn remove_spawn_queued_event() {
         let mut world = World::new();
 
         assert!(world.events().contains(EventId::SPAWN_QUEUED));

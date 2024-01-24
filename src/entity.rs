@@ -134,7 +134,7 @@ pub struct EntityLocation {
 
 /// Lightweight identifier for an entity.
 ///
-/// entity identifiers are implemented using an [index] and a generation count.
+/// Entity identifiers are implemented using an [index] and a generation count.
 /// The generation count ensures that IDs from despawned entities are not reused
 /// by new entities.
 ///
@@ -147,7 +147,8 @@ pub struct EntityLocation {
 pub struct EntityId(Key);
 
 impl EntityId {
-    /// The entity ID which never identifies a live entity.
+    /// The entity ID which never identifies a live entity. This is the default
+    /// value for `EntityId`.
     pub const NULL: Self = Self(Key::NULL);
 
     /// Creates a new entity ID from an index and generation count. Returns

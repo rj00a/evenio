@@ -1,6 +1,6 @@
 # Evenio
 
-_Evenio_ is an archetype-based [Entity Component System](https://en.wikipedia.org/wiki/Entity_component_system) framework for building highly event-driven programs.
+_Evenio_ is an archetype-based [Entity Component System](https://en.wikipedia.org/wiki/Entity_component_system) framework for building event-driven programs.
 
 In addition to the usual cast of Entities, Components, and Systems, `evenio` introduces _events_ as a first class citizen.
 Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as _event handlers_.

@@ -227,32 +227,40 @@ impl ComponentInfo {
         self.drop
     }
 
-    /// Gets the immutability of the component.
+    /// Gets the [immutability] of the component.
+    ///
+    /// [immutability]: Component::IS_IMMUTABLE
     pub fn is_immutable(&self) -> bool {
         self.is_immutable
     }
 
-    /// Gets all the [`Insert`] events for this component.
+    /// Gets the set of [`Insert`] events for this component.
+    ///
+    /// [`Insert`]: crate::event::Insert
     pub fn insert_events(&self) -> &BTreeSet<EventId> {
         &self.insert_events
     }
 
-    /// Gets all the [`Remove`] components for this component.
+    /// Gets the set of [`Remove`] components for this component.
+    ///
+    /// [`Remove`]: crate::event::Remove
     pub fn remove_events(&self) -> &BTreeSet<EventId> {
         &self.remove_events
     }
 }
 
-/// Types which store data for [entities].
+/// Types which store data on [entities].
 ///
 /// A `Component` is a piece of data which can be attached to an entity. An
 /// entity can have any combination of components, but cannot have more than one
 /// component of the same type.
 ///
-/// To add a component to an entity, use the [`Insert`] event.
+/// To add a component to an entity, use the [`Insert`] event. To access
+/// components from systems, use the [`Fetcher`] system parameter.
 ///
 /// [entities]: crate::entity
 /// [`Insert`]: crate::event::Insert
+/// [`Fetcher`]: crate::fetch::Fetcher
 ///
 /// # Deriving
 ///
@@ -277,15 +285,15 @@ impl ComponentInfo {
 ///     y: f32,
 ///     z: f32,
 /// }
-/// 
-/// // ...and on enums too.
+///
+/// // ...and on enums.
 /// #[derive(Component)]
 /// enum FriendStatus {
 ///     Friendly,
 ///     Neutral,
-///     Unfriendly
+///     Unfriendly,
 /// }
-/// 
+///
 /// // Components can be immutable, which disallows mutable references
 /// // to the component once it's attached to an entity.
 /// #[derive(Component)]
@@ -293,14 +301,14 @@ impl ComponentInfo {
 /// struct FooCounter(i32);
 /// ```
 pub trait Component: Send + Sync + 'static {
-    /// Whether or not this component is considered immutable.
+    /// Whether or not this component is immutable.
     ///
     /// Immutable components disallow mutable references, which can be used to
     /// ensure components are used in particular ways.
     const IS_IMMUTABLE: bool = false;
 }
 
-/// The data needed to create a new component.
+/// Data needed to create a new component.
 #[derive(Clone, Debug)]
 pub struct ComponentDescriptor {
     /// The name of this component.
@@ -315,14 +323,14 @@ pub struct ComponentDescriptor {
     /// The [`DropFn`] of the component. This is passed a pointer to the
     /// component in order to drop it.
     pub drop: DropFn,
-    /// If this component is immutable (see [`Component::IS_IMMUTABLE`]).
+    /// If this component is [immutable](Component::IS_IMMUTABLE).
     pub is_immutable: bool,
 }
 
 /// Lightweight identifier for a component type.
 ///
 /// component identifiers are implemented using an [index] and a generation
-/// count. The generation count ensures that IDs from despawned components are
+/// count. The generation count ensures that IDs from removed components are
 /// not reused by new components.
 ///
 /// A component identifier is only meaningful in the [`World`] it was created
@@ -334,7 +342,8 @@ pub struct ComponentDescriptor {
 pub struct ComponentId(Key);
 
 impl ComponentId {
-    /// The component ID which never identifies a live component.
+    /// The component ID which never identifies a live component. This is the
+    /// default value for `ComponentId`.
     pub const NULL: Self = Self(Key::NULL);
 
     /// Creates a new component ID from an index and generation count. Returns
