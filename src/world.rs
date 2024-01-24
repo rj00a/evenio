@@ -615,7 +615,7 @@ impl World {
     ///   described by [`DropFn`]'s documentation.
     /// - The event's kind must be correct for the descriptor. See
     ///   [`EventKind`]'s documentation for more information.
-    /// 
+    ///
     /// [`add_event`]: World::add_event
     pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
         let kind = desc.kind;

@@ -1,3 +1,5 @@
+//! Accessing components from entities.
+
 use alloc::format;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
@@ -13,6 +15,8 @@ use crate::sparse_map::SparseMap;
 use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
+/// Internal state for a [`Fetcher`].
+#[doc(hidden)]
 pub struct FetcherState<Q: Query> {
     map: SparseMap<ArchetypeIdx, Q::ArchState>,
     state: Q::State,
@@ -159,12 +163,21 @@ impl<Q: Query> fmt::Debug for FetcherState<Q> {
     }
 }
 
+/// A [`SystemParam`] for accessing data from entities matching a given
+/// [`Query`].
+///
+/// For more information, see the relevant [tutorial
+/// chapter](crate::tutorial::ch05_fetching).
 pub struct Fetcher<'a, Q: Query> {
     state: &'a mut FetcherState<Q>,
     world: UnsafeWorldCell<'a>,
 }
 
 impl<'a, Q: Query> Fetcher<'a, Q> {
+    /// Returns the read-only query item for the given entity.
+    ///
+    /// If the entity doesn't exist or doesn't match the query, then a
+    /// [`GetError`] is returned.
     #[inline]
     pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError>
     where
@@ -173,11 +186,16 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
         unsafe { self.state.get(self.world.entities(), entity) }
     }
 
+    /// Returns the query item for the given entity.
+    ///
+    /// If the entity doesn't exist or doesn't match the query, then a
+    /// [`GetError`] is returned.
     #[inline]
     pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
         unsafe { self.state.get_mut(self.world.entities(), entity) }
     }
 
+    /// Returns an iterator over all entities matching the read-only query.
     pub fn iter(&self) -> Iter<Q>
     where
         Q: ReadOnlyQuery,
@@ -185,6 +203,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
         unsafe { self.state.iter(self.world.archetypes()) }
     }
 
+    /// Returns an iterator over all entities matching the query.
     pub fn iter_mut(&mut self) -> Iter<Q> {
         unsafe { self.state.iter_mut(self.world.archetypes()) }
     }
@@ -229,10 +248,14 @@ impl<'a, Q: Query> fmt::Debug for Fetcher<'a, Q> {
     }
 }
 
+/// An error returned when a random-access entity lookup fails.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetError {
+    /// Entity does not exist.
     NoSuchEntity,
+    /// Entity does not match the query.
     QueryDoesNotMatch,
+    /// Entity was requested mutably more than once.
     AliasedMutability,
 }
 
@@ -241,7 +264,7 @@ impl fmt::Display for GetError {
         match self {
             GetError::NoSuchEntity => write!(f, "entity does not exist"),
             GetError::QueryDoesNotMatch => write!(f, "entity does not match the query"),
-            GetError::AliasedMutability => write!(f, "query violated aliasing rules"),
+            GetError::AliasedMutability => write!(f, "entity was requested mutably more than once"),
         }
     }
 }
@@ -279,6 +302,34 @@ where
     }
 }
 
+/// A [`SystemParam`] which fetches a single entity from the world.
+///
+/// If there isn't exactly one entity that matches the [`Query`], a runtime
+/// panic occurs. This is useful for representing global variables or singleton
+/// entities.
+///
+/// # Examples
+///
+/// ```
+/// # #[derive(Event)] struct E;
+/// use evenio::prelude::*;
+///
+/// #[derive(Component)]
+/// struct MyComponent(i32);
+///
+/// let mut world = World::new();
+///
+/// world.add_system(
+///     |_: Receiver<E>, Single(MyComponent(data)): Single<&MyComponent>| {
+///         println!("The data is: {data}");
+///     },
+/// );
+///
+/// let e = world.spawn();
+/// world.insert(e, MyComponent(123));
+///
+/// world.send(E);
+/// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
 
@@ -318,6 +369,10 @@ impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     }
 }
 
+/// Like [`Single`], but contains a `Result` instead of panicking on error.
+///
+/// This is useful if you need to explicitly handle the situation where the
+/// query does not match exactly one entity.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
 
@@ -358,9 +413,12 @@ impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
     }
 }
 
+/// Error raised when fetching exactly one entity matching a query fails.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum SingleError {
+    /// Query does not match any entities
     QueryDoesNotMatch,
+    /// More than one entity matched the query.
     MoreThanOneMatch,
 }
 
@@ -378,7 +436,7 @@ impl fmt::Display for SingleError {
 #[cfg(feature = "std")]
 impl std::error::Error for SingleError {}
 
-/// Iterator over entities matching the cached query `Q`.
+/// Iterator over entities matching the query `Q`.
 ///
 /// Entities are visited in a deterministic but otherwise unspecified order.
 pub struct Iter<'a, Q: Query> {
@@ -435,8 +493,6 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
         let len = self.len();
         (len, Some(len))
     }
-
-    // TODO: override `.nth()`?
 }
 
 impl<Q: Query> ExactSizeIterator for Iter<'_, Q> {
