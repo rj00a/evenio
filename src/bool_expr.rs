@@ -211,14 +211,14 @@ impl<T> BoolExpr<T> {
     /// use evenio::bool_expr::BoolExpr;
     ///
     /// // `A` is not disjoint with `B`
-    /// assert!(!BoolExpr::with(A).is_disjoint(&BoolExpr::with(B)));
+    /// assert!(!BoolExpr::var(A).is_disjoint(&BoolExpr::var(B)));
     ///
     /// // `A` is disjoint with `¬A`.
-    /// assert!(BoolExpr::with(A).is_disjoint(&BoolExpr::without(A)));
+    /// assert!(BoolExpr::var(A).is_disjoint(&BoolExpr::not_var(A)));
     ///
     /// // `A ∧ ¬A` is disjoint with `B ∧ C`.
-    /// let left = BoolExpr::with(A).and(&BoolExpr::without(A));
-    /// let right = BoolExpr::with(C).and(&BoolExpr::with(D));
+    /// let left = BoolExpr::var(A).and(&BoolExpr::not_var(A));
+    /// let right = BoolExpr::var(C).and(&BoolExpr::var(D));
     /// assert!(left.is_disjoint(&right));
     ///
     /// const A: u32 = 0;
