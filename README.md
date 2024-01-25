@@ -56,8 +56,8 @@ pub fn main() {
 
     // Add our system to the world.
     world.add_system(update_positions_system);
+
     // Run our fake "game loop" by sending the `Tick` event every update.
-    
     for _ in 0..50 {
         world.send(Tick);
     }
