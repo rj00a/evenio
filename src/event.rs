@@ -485,7 +485,7 @@ impl EventIdx {
     }
 }
 
-/// Event index which is known to refer to a targeted event.
+/// Event index which is known to refer to an untargeted event.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct UntargetedEventIdx(pub u32);
 
@@ -501,7 +501,7 @@ unsafe impl SparseIndex for UntargetedEventIdx {
     }
 }
 
-/// Event index which is known to refer to an untargeted event.
+/// Event index which is known to refer to a targeted event.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct TargetedEventIdx(pub u32);
 
