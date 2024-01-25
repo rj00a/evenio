@@ -48,7 +48,7 @@ jobs:
       - name: Setup Rust toolchain and cache
         uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
         with:
-          toolchain: "stable"
+          toolchain: "nightly"
           components: "clippy"
 
       - name: Clippy
@@ -84,7 +84,7 @@ jobs:
           components: "miri"
 
       - name: Run tests
-        run: cargo miri test --workspace --all-features
+        run: cargo miri test --workspace --all-features --all-targets
 
   typos:
     name: Typos
