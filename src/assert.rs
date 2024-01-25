@@ -14,11 +14,29 @@ const _: () = assert!(
     "unsupported target"
 );
 
+/// Extension trait for checked array indexing with checks removed in release
+/// mode.
 pub(crate) trait GetDebugChecked {
     type Output: ?Sized;
 
+    /// Gets a reference to the element at the given index.
+    ///
+    /// If `idx` is not in bounds, a panic occurs in debug mode and Undefined
+    /// Behavior occurs in release mode.
+    ///
+    /// # Safety
+    ///
+    /// - `idx` must be in bounds.
     #[track_caller]
     unsafe fn get_debug_checked(&self, idx: usize) -> &Self::Output;
+    /// Gets a mutable reference to the element at the given index.
+    ///
+    /// If `idx` is not in bounds, a panic occurs in debug mode and Undefined
+    /// Behavior occurs in release mode.
+    ///
+    /// # Safety
+    ///
+    /// - `idx` must be in bounds.
     #[track_caller]
     unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut Self::Output;
 }
@@ -74,11 +92,24 @@ impl<T> GetDebugChecked for Slab<T> {
     }
 }
 
+/// Extension trait for checked unwrapping with checks removed in release
+/// mode.
 pub(crate) trait UnwrapDebugChecked {
     type Output;
 
+    /// Consumes `self` and returns the inner value.
+    ///
+    /// # Safety
+    ///
+    /// - Must successfully unwrap (`Some` in `Option`, `Ok` in `Result`, etc.)
     #[track_caller]
     unsafe fn unwrap_debug_checked(self) -> Self::Output;
+    /// Like [`Self::unwrap_debug_checked`] but panics with the given error
+    /// message. The message is ignored in release mode.
+    ///
+    /// # Safety
+    ///
+    /// - Must successfully unwrap (`Some` in `Option`, `Ok` in `Result`, etc.)
     #[track_caller]
     unsafe fn expect_debug_checked(self, msg: &str) -> Self::Output;
 }
@@ -174,11 +205,17 @@ impl<E: Event> AssertMutable<E> {
 pub(crate) struct AssertUntargetedEvent<E>(PhantomData<E>);
 
 impl<E: Event> AssertUntargetedEvent<E> {
-    pub(crate) const ASSERTION: () = assert!(!E::IS_TARGETED, "TODO: error message");
+    pub(crate) const ASSERTION: () = assert!(
+        !E::IS_TARGETED,
+        "event is targeted (See `Event::IS_TARGETED`)"
+    );
 }
 
 pub(crate) struct AssertTargetedEvent<E>(PhantomData<E>);
 
 impl<E: Event> AssertTargetedEvent<E> {
-    pub(crate) const ASSERTION: () = assert!(E::IS_TARGETED, "TODO: error message");
+    pub(crate) const ASSERTION: () = assert!(
+        E::IS_TARGETED,
+        "event is untargeted (See `Event::IS_TARGETED`)"
+    );
 }

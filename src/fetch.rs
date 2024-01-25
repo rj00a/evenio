@@ -1,4 +1,4 @@
-//! Accessing components from entities.
+//! Accessing components on entities.
 
 use alloc::format;
 use core::iter::FusedIterator;
@@ -141,13 +141,13 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
-    pub(crate) unsafe fn refresh_archetype(&mut self, arch: &Archetype) {
+    pub(crate) fn refresh_archetype(&mut self, arch: &Archetype) {
         if let Some(fetch) = Q::new_arch_state(arch, &mut self.state) {
             self.map.insert(arch.index(), fetch);
         }
     }
 
-    pub(crate) unsafe fn remove_archetype(&mut self, arch: &Archetype) {
+    pub(crate) fn remove_archetype(&mut self, arch: &Archetype) {
         self.map.remove(arch.index());
     }
 
@@ -272,7 +272,7 @@ impl fmt::Display for GetError {
 #[cfg(feature = "std")]
 impl std::error::Error for GetError {}
 
-impl<Q> SystemParam for Fetcher<'_, Q>
+unsafe impl<Q> SystemParam for Fetcher<'_, Q>
 where
     Q: Query + 'static,
 {
@@ -284,7 +284,7 @@ where
         FetcherState::init(world, config)
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -293,11 +293,11 @@ where
         Fetcher { state, world }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.remove_archetype(arch)
     }
 }
@@ -333,7 +333,7 @@ where
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
 
-impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
+unsafe impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = Single<'a, Q>;
@@ -343,13 +343,13 @@ impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     }
 
     #[track_caller]
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        match TrySingle::get_param(state, info, event_ptr, world) {
+        match TrySingle::get(state, info, event_ptr, world) {
             TrySingle(Ok(item)) => Single(item),
             TrySingle(Err(e)) => {
                 panic!(
@@ -360,11 +360,11 @@ impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
         }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.remove_archetype(arch)
     }
 }
@@ -376,7 +376,7 @@ impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
 
-impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
+unsafe impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = TrySingle<'a, Q>;
@@ -385,7 +385,7 @@ impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
         FetcherState::init(world, config)
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -404,11 +404,11 @@ impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
         TrySingle(Ok(item))
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 }

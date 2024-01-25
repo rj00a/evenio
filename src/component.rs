@@ -123,6 +123,11 @@ impl Components {
     pub fn contains(&self, id: ComponentId) -> bool {
         self.get(id).is_some()
     }
+
+    /// Returns an iterator over all component infos.
+    pub fn iter(&self) -> impl Iterator<Item = &ComponentInfo> {
+        self.infos.iter().map(|(_, v)| v)
+    }
 }
 
 impl Index<ComponentId> for Components {
@@ -161,7 +166,7 @@ impl Index<TypeId> for Components {
     }
 }
 
-impl SystemParam for &'_ Components {
+unsafe impl SystemParam for &'_ Components {
     type State = ();
 
     type Item<'a> = &'a Components;
@@ -170,7 +175,7 @@ impl SystemParam for &'_ Components {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -179,9 +184,9 @@ impl SystemParam for &'_ Components {
         world.components()
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 /// Metadata for a component.

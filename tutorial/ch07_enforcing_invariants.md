@@ -85,8 +85,8 @@ Doing so will prevent users from mutating or consuming the event.
 
 ```compile_fail
 # #![cfg(not(miri))] // TODO: miri compiles successfully when it shouldn't.
-use evenio::prelude::*;
-let mut world = World::new();
+# use evenio::prelude::*;
+# let mut world = World::new();
 #[derive(Event)]
 #[event(immutable)]
 struct MyEvent;

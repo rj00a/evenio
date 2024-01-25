@@ -1,19 +1,33 @@
 # Evenio
 
-_Evenio_ is an archetype-based [Entity Component System](https://en.wikipedia.org/wiki/Entity_component_system) framework for building event-driven programs.
+`evenio` is an archetype-based [Entity Component System][ECS] framework for building event-driven programs. 
+It aims to have a small but maximally expressive set of features that are easy and efficient to use.
 
-In addition to the usual cast of Entities, Components, and Systems, `evenio` introduces _events_ as a first class citizen.
+[ECS]: https://en.wikipedia.org/wiki/Entity_component_system
+
+## Features
+
+- In addition to the usual Entities, Components, and Systems, `evenio` introduces _events_ as a first-class citizen.
 Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as _event handlers_.
 The control flow of the entire program is then defined by the flow of events between systems.
-Structural changes to the world are also mediated by events.
+- Structural changes to the world (such as entity despawning, component additions/removals, etc.) are mediated by events, allowing systems to hook into their occurrence.
+- _Targeted events_ enable systems to efficiently filter events based on queries.
+- Component types, event types, and systems are identified with generational indices, allowing them to be added and removed dynamically.
+- The interface to the library does not rely on Rust's type system. `evenio` should also be usable in dynamic contexts such as scripting languages or plugins.
+- A small set of dependencies and `no_std` support.
 
-> **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).** 
+Features such as intra-system parallelism and event batching are planned but not yet implemented.
+
+> **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).**
+
+## Example
+
+Here's how we might make a simple game loop in `evenio`:
 
 ```rust
 use evenio::prelude::*;
 
-// Define some components.
-
+// Define position and velocity components.
 #[derive(Component)]
 struct Position {
     x: f32,
@@ -41,10 +55,9 @@ pub fn main() {
     world.insert(e, Velocity { x: 1.0, y: 0.4 });
 
     // Add our system to the world.
-    world.add_system(update_positions);
-
+    world.add_system(update_positions_system);
     // Run our fake "game loop" by sending the `Tick` event every update.
-    // The `Receiver<Tick>` parameter tells our system to listen for the `Tick` event.
+    
     for _ in 0..50 {
         world.send(Tick);
     }
@@ -55,7 +68,8 @@ pub fn main() {
     println!("Final position of the entity: ({}, {})", pos.x, pos.y);
 }
 
-fn update_positions(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Velocity)>) {
+// The `Receiver<Tick>` parameter tells our system to listen for the `Tick` event.
+fn update_positions_system(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Velocity)>) {
     // Loop over all entities with both the `Position` and `Velocity` components, and update their positions.
     for (pos, vel) in entities {
         pos.x += vel.x;
@@ -64,7 +78,6 @@ fn update_positions(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Veloci
 }
 ```
 
-# `#![no_std]` Support
-
-`#![no_std]` environments are supported, but the `alloc` library is required.
-You'll also need to disable the default `std` cargo feature.
+## Feature Flags
+- `std` (_enabled by default_): Enables support for the standard library.
+  Without this, `evenio` depends only on `core` and `alloc`.

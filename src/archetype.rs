@@ -96,7 +96,7 @@ impl Archetypes {
         if empty.entity_count() == 1 || rellocated {
             for &ptr in &empty.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
-                unsafe { system.refresh_archetype(empty) };
+                system.refresh_archetype(empty);
             }
         }
 
@@ -421,14 +421,14 @@ impl Archetypes {
         if src_arch.entity_ids.is_empty() {
             for &ptr in &src_arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
-                unsafe { system.remove_archetype(src_arch) };
+                system.remove_archetype(src_arch);
             }
         }
 
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
             for &ptr in &dst_arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
-                unsafe { system.refresh_archetype(dst_arch) };
+                system.refresh_archetype(dst_arch);
             }
         }
 
@@ -458,13 +458,13 @@ impl Archetypes {
         if arch.entity_count() == 0 {
             for &ptr in &arch.refresh_listeners {
                 let system = unsafe { &mut (*ptr.as_ptr()).system };
-                unsafe { system.remove_archetype(arch) };
+                system.remove_archetype(arch);
             }
         }
     }
 }
 
-impl SystemParam for &'_ Archetypes {
+unsafe impl SystemParam for &'_ Archetypes {
     type State = ();
 
     type Item<'a> = &'a Archetypes;
@@ -473,7 +473,7 @@ impl SystemParam for &'_ Archetypes {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -482,9 +482,9 @@ impl SystemParam for &'_ Archetypes {
         world.archetypes()
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 /// Unique identifier for an archetype.
@@ -597,7 +597,7 @@ impl Archetype {
             .expr
             .eval(|idx| self.column_of(idx).is_some())
         {
-            unsafe { info.system_mut().refresh_archetype(self) };
+            info.system_mut().refresh_archetype(self);
 
             self.refresh_listeners.insert(info.ptr());
         }

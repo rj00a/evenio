@@ -163,6 +163,14 @@ impl Events {
 
         Some(info)
     }
+
+    /// Returns an iterator over all event infos.
+    pub fn iter(&self) -> impl Iterator<Item = &EventInfo> {
+        self.targeted_events
+            .iter()
+            .chain(self.untargeted_events.iter())
+            .map(|(_, v)| v)
+    }
 }
 
 impl Index<EventId> for Events {
@@ -201,7 +209,7 @@ impl Index<TypeId> for Events {
     }
 }
 
-impl SystemParam for &'_ Events {
+unsafe impl SystemParam for &'_ Events {
     type State = ();
 
     type Item<'a> = &'a Events;
@@ -210,7 +218,7 @@ impl SystemParam for &'_ Events {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -219,9 +227,9 @@ impl SystemParam for &'_ Events {
         world.events()
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 /// Messages which systems listen for.
 ///
@@ -355,7 +363,7 @@ pub enum EventKind {
 /// by new events.
 ///
 /// An event identifier is only meaningful in the [`World`] it was created
-/// from. Attempting to use an entity ID in a different world will have
+/// from. Attempting to use an event ID in a different world will have
 /// unexpected results.
 ///
 /// [index]: EventIdx
@@ -845,7 +853,7 @@ pub struct Receiver<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery
     pub query: Q::Item<'a>,
 }
 
-impl<E: Event> SystemParam for Receiver<'_, E> {
+unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
     type State = ();
 
     type Item<'a> = Receiver<'a, E>;
@@ -858,7 +866,7 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
@@ -873,12 +881,12 @@ impl<E: Event> SystemParam for Receiver<'_, E> {
         }
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
+unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = Receiver<'a, E, Q>;
@@ -910,7 +918,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         Ok(res)
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
@@ -929,11 +937,11 @@ impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         Receiver { event, query }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.remove_archetype(arch)
     }
 }
@@ -964,7 +972,7 @@ pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQu
     pub query: Q::Item<'a>,
 }
 
-impl<E: Event> SystemParam for ReceiverMut<'_, E> {
+unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     type State = ();
 
     type Item<'a> = ReceiverMut<'a, E>;
@@ -978,7 +986,7 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
@@ -990,12 +998,12 @@ impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         }
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
+unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = ReceiverMut<'a, E, Q>;
@@ -1028,7 +1036,7 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         Ok(res)
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
@@ -1047,11 +1055,11 @@ impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
         ReceiverMut { event, query }
     }
 
-    unsafe fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 
-    unsafe fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
+    fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.refresh_archetype(arch)
     }
 }
@@ -1193,7 +1201,7 @@ impl<T: EventSet> Sender<'_, T> {
 
     /// Queue an [`Insert`] event.
     ///
-    /// This is shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -1219,7 +1227,7 @@ impl<T: EventSet> Sender<'_, T> {
 
     /// Queue a [`Remove`] event.
     ///
-    /// This is shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -1242,7 +1250,7 @@ impl<T: EventSet> Sender<'_, T> {
 
     /// Queue a [`Despawn`] event.
     ///
-    /// This is a shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -1263,7 +1271,7 @@ impl<T: EventSet> Sender<'_, T> {
     }
 }
 
-impl<T: EventSet> SystemParam for Sender<'_, T> {
+unsafe impl<T: EventSet> SystemParam for Sender<'_, T> {
     type State = T::EventIndices;
 
     type Item<'a> = Sender<'a, T>;
@@ -1283,20 +1291,6 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
             ));
         }
 
-        if !config
-            .reserve_entity_access
-            .set_if_compatible(Access::ReadWrite)
-        {
-            return Err(InitError(
-                format!(
-                    "`{}` has conflicting access with a previous system parameter. Only one \
-                     system parameter can reserve entities",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        }
-
         let state = T::new_state(world);
 
         T::for_each_idx(&state, |idx| {
@@ -1309,7 +1303,7 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
         Ok(state)
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -1318,9 +1312,9 @@ impl<T: EventSet> SystemParam for Sender<'_, T> {
         Sender { state, world }
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
 impl<T: EventSet> fmt::Debug for Sender<'_, T>

@@ -6,9 +6,7 @@
 //! Each chapter of the book is in a separate module. To begin, start with
 //! [chapter 1](ch01_systems_and_events).
 //!
-//! _Note: this module is intended for documentation purposes only. The contents
-//! of this module should be considered unstable and may change in minor version
-//! updates._
+//! _Note: This module's contents are not stable_
 
 #[doc = include_str!("../tutorial/ch01_systems_and_events.md")]
 pub mod ch01_systems_and_events {}

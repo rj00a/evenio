@@ -137,10 +137,6 @@ impl World {
     /// The new entity is spawned without any components attached. The returned
     /// `EntityId` is not used by any previous entities in this world.
     ///
-    /// # Panics
-    ///
-    /// Panics if the maximum number of entities has been reached.
-    ///
     /// # Examples
     ///
     /// ```
@@ -157,7 +153,7 @@ impl World {
 
     /// Sends the [`Insert`] event.
     ///
-    /// This is shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -179,7 +175,7 @@ impl World {
 
     /// Sends the [`Remove`] event.
     ///
-    /// This is a shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -199,7 +195,7 @@ impl World {
 
     /// Sends the [`Despawn`] event.
     ///
-    /// This is shorthand for:
+    /// This is equivalent to:
     ///
     /// ```
     /// # use evenio::prelude::*;
@@ -359,6 +355,7 @@ impl World {
 
         let info = SystemInfo::new(SystemInfoInner {
             name: system.name(),
+            id: SystemId::NULL, // Filled in later.
             received_event,
             received_event_access: config.received_event_access,
             targeted_event_expr: config.targeted_event_expr,
@@ -368,7 +365,6 @@ impl World {
             component_access: config.component_access,
             referenced_components: config.referenced_components,
             priority: config.priority,
-            id: SystemId::NULL, // Filled in later.
             type_id,
             system,
         });

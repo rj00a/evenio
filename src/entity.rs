@@ -72,6 +72,11 @@ impl Entities {
     pub fn len(&self) -> u32 {
         self.locs.len()
     }
+
+    /// Returns an iterator over all entity locations.
+    pub fn iter(&self) -> impl Iterator<Item = EntityLocation> + '_ {
+        self.locs.iter().map(|(_, v)| *v)
+    }
 }
 
 impl Index<EntityId> for Entities {
@@ -100,7 +105,7 @@ impl Index<EntityIdx> for Entities {
     }
 }
 
-impl SystemParam for &'_ Entities {
+unsafe impl SystemParam for &'_ Entities {
     type State = ();
 
     type Item<'a> = &'a Entities;
@@ -109,7 +114,7 @@ impl SystemParam for &'_ Entities {
         Ok(())
     }
 
-    unsafe fn get_param<'a>(
+    unsafe fn get<'a>(
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
@@ -118,9 +123,9 @@ impl SystemParam for &'_ Entities {
         world.entities()
     }
 
-    unsafe fn refresh_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
+    fn refresh_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 
-    unsafe fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
+    fn remove_archetype(_state: &mut Self::State, _arch: &crate::archetype::Archetype) {}
 }
 
 /// The location of an entity in an archetype.

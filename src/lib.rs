@@ -18,7 +18,6 @@ pub mod component;
 pub mod drop;
 pub mod entity;
 pub mod event;
-#[doc(hidden)]
 pub mod exclusive;
 pub mod fetch;
 mod layout_util;
@@ -52,6 +51,6 @@ pub mod prelude {
     };
     pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
-    pub use crate::system::{IntoSystem, SystemId};
+    pub use crate::system::{IntoSystem, SystemId, SystemParam};
     pub use crate::world::World;
 }

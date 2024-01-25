@@ -1,3 +1,5 @@
+//! Type-level DSL for retrieving data from entities.
+
 use alloc::format;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
@@ -14,9 +16,19 @@ use crate::entity::EntityId;
 use crate::system::{Config, InitError};
 use crate::world::World;
 
+/// Types that can be fetched from an entity.
+///
+/// For more information, see the relevant [tutorial
+/// chapter](crate::tutorial::ch05_fetching).
+///
 /// # Deriving
 ///
+/// This trait can be safely implemented using the `Query` derive macro. For a
+/// struct to derive `Query`, all fields must also implement `Query`.
+///
 /// ```
+/// # #[derive(Event)]
+/// # struct MyEvent;
 /// use evenio::prelude::*;
 ///
 /// #[derive(Component, Debug)]
@@ -41,31 +53,57 @@ use crate::world::World;
 /// });
 ///
 /// world.send(MyEvent);
-/// # #[derive(Event)]
-/// # struct MyEvent;
 /// ```
+///
+/// # Safety
+///
+/// Implementors must ensure that [`Query::init`] correctly registers the data
+/// accessed in [`Query::get`].
 pub unsafe trait Query {
     /// The item returned by this query. This is usually the same type as
     /// `Self`, but with a modified lifetime.
     type Item<'a>;
     /// Per-archetype state.
     type ArchState: Send + Sync + fmt::Debug + 'static;
-    /// Cached data for fetch initialization. This is stored in
-    /// [`FetcherState`].
+    /// Cached data for fetch initialization.
     type State: Send + Sync + fmt::Debug + 'static;
 
+    /// Initialize the query. Returns an expression describing the components
+    /// accessed by the query and a new instance of [`Self::State`].
     fn init(
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError>;
 
+    /// Returns a new [`Self::State`] instance.
     fn new_state(world: &mut World) -> Self::State;
 
+    /// Returns a new [`Self::ArchState`] instance.
     fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState>;
 
+    /// Gets the query item at the given row in the archetype.
+    ///
+    /// # Safety
+    /// - `row` must be in bounds.
+    /// - Must have the appropriate component access permissions described by
+    ///   the [`ComponentAccessExpr`] returned by [`init`].
+    /// - The lifetime of the item is chosen by the caller. The item must not
+    ///   outlive the data it references.
+    ///
+    /// [`init`]: Self::init
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
+/// Marker trait for queries which dot not access data mutably.
+///
+/// For instance, the query `(&A, &B)` is read-only, but `(&A, &mut B)` is not.
+///
+/// # Safety
+///
+/// The query must not access data mutably, as methods like [`Fetcher::get`]
+/// rely on this property to avoid mutable aliasing.
+///
+/// [`Fetcher::get`]: crate::fetch::Fetcher::get
 pub unsafe trait ReadOnlyQuery: Query {}
 
 unsafe impl<C: Component> Query for &'_ C {
@@ -202,6 +240,7 @@ macro_rules! impl_query_tuple {
 // Currently, debug impls for tuples only go up to arity 12.
 all_tuples!(impl_query_tuple, 0, 12, Q, q);
 
+/// Returns the result of `Q` as `Some`, or `None` if `Q` does not match.
 unsafe impl<Q: Query> Query for Option<Q> {
     type Item<'a> = Option<Q::Item<'a>>;
 
@@ -235,14 +274,19 @@ unsafe impl<Q: Query> Query for Option<Q> {
 
 unsafe impl<Q: ReadOnlyQuery> ReadOnlyQuery for Option<Q> {}
 
+/// A [`Query`] which matches if the `L` or `R` queries match.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Or<L, R> {
+    /// Only the left query matched.
     Left(L),
+    /// Only the right query matched.
     Right(R),
+    /// Both the left and right queries matched.
     Both(L, R),
 }
 
 impl<L, R> Or<L, R> {
+    /// Convert `Or<L, R>` to `Or<M, S>` using the supplied closures.
     pub fn map<F, G, M, S>(self, f: F, g: G) -> Or<M, S>
     where
         F: FnOnce(L) -> M,
@@ -255,6 +299,7 @@ impl<L, R> Or<L, R> {
         }
     }
 
+    /// Converts `&Or<L, R>` to `Or<&L, &R>`.
     pub const fn as_ref(&self) -> Or<&L, &R> {
         match self {
             Or::Left(l) => Or::Left(l),
@@ -263,6 +308,7 @@ impl<L, R> Or<L, R> {
         }
     }
 
+    /// Converts `&mut Or<L, R>` to `Or<&mut L, &mut R>`.
     pub fn as_mut(&mut self) -> Or<&mut L, &mut R> {
         match self {
             Or::Left(l) => Or::Left(l),
@@ -335,13 +381,17 @@ where
 {
 }
 
+/// A [`Query`] which matches if the `L` or `R` queries match, but not both.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Xor<L, R> {
+    /// Only the left query matched.
     Left(L),
+    /// Only the right query matched.
     Right(R),
 }
 
 impl<L, R> Xor<L, R> {
+    /// Convert `Xor<L, R>` to `Xor<M, S>` using the supplied closures.
     pub fn map<F, G, M, S>(self, f: F, g: G) -> Xor<M, S>
     where
         F: FnOnce(L) -> M,
@@ -353,6 +403,7 @@ impl<L, R> Xor<L, R> {
         }
     }
 
+    /// Convert `&Xor<L, R>` to `Xor<&L, &R>`.
     pub const fn as_ref(&self) -> Xor<&L, &R> {
         match self {
             Xor::Left(l) => Xor::Left(l),
@@ -360,6 +411,7 @@ impl<L, R> Xor<L, R> {
         }
     }
 
+    /// Convert `&mut Xor<L, R>` to `Xor<&mut L, &mut R>`.
     pub fn as_mut(&mut self) -> Xor<&mut L, &mut R> {
         match self {
             Xor::Left(l) => Xor::Left(l),
@@ -420,9 +472,11 @@ where
 {
 }
 
+/// A [`Query`] which matches if query `Q` doesn't match.
 pub struct Not<Q>(PhantomData<fn() -> Q>);
 
 impl<Q> Not<Q> {
+    /// Create a new instance.
     pub const fn new() -> Self {
         Self(PhantomData)
     }
@@ -482,9 +536,17 @@ unsafe impl<Q: Query> Query for Not<Q> {
 
 unsafe impl<Q: Query> ReadOnlyQuery for Not<Q> {}
 
+/// A [`Query`] which matches if query `Q` matches.
+///
+/// Unlike `Q` however, `With<Q>` does not provide access to the data returned
+/// by `Q`. This is useful for avoiding access conflicts.
+///
+/// Example: `&C` requires read-only access to component `C`, but `With<&C>`
+/// does not require access at all.
 pub struct With<Q>(PhantomData<fn() -> Q>);
 
 impl<Q> With<Q> {
+    /// Create a new instance.
     pub const fn new() -> Self {
         Self(PhantomData)
     }
@@ -543,12 +605,17 @@ unsafe impl<Q: Query> Query for With<Q> {
 
 unsafe impl<Q: Query> ReadOnlyQuery for With<Q> {}
 
+/// A [`Query`] which returns a boolean indicating whether the query `Q`
+/// matches.
+///
+/// Like [`With`], `Has` does not provide access to the data returned by `Q`.
 pub struct Has<Q> {
     has: bool,
     _marker: PhantomData<fn() -> Q>,
 }
 
 impl<Q> Has<Q> {
+    /// Creates a new instance wrapping `has`.
     pub const fn new(has: bool) -> Self {
         Self {
             has,
@@ -556,6 +623,7 @@ impl<Q> Has<Q> {
         }
     }
 
+    /// Extracts the inner boolean.
     pub const fn get(self) -> bool {
         self.has
     }
@@ -615,6 +683,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
 
 unsafe impl<Q: Query> ReadOnlyQuery for Has<Q> {}
 
+/// Returns the `EntityId` of the matched entity.
 unsafe impl Query for EntityId {
     type Item<'a> = Self;
 
@@ -672,6 +741,10 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
 
 unsafe impl<T: ?Sized> ReadOnlyQuery for PhantomData<T> {}
 
+/// Wrapper for `NonNull` which implements [`Send`] and [`Sync`]
+/// unconditionally.
+#[doc(hidden)]
+#[repr(transparent)]
 pub struct ColumnPtr<T>(NonNull<T>);
 
 impl<T> Clone for ColumnPtr<T> {

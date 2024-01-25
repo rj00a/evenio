@@ -5,6 +5,10 @@
 
 use core::fmt;
 
+/// A wrapper which implements [`Sync`] irrespective of the wrapped type `T`.
+///
+/// This is safe because only mutable access to the inner value is provided if
+/// `T` is `!Sync`.
 #[derive(Default)]
 #[repr(transparent)]
 pub struct Exclusive<T> {
@@ -16,19 +20,28 @@ pub struct Exclusive<T> {
 unsafe impl<T> Sync for Exclusive<T> {}
 
 impl<T> Exclusive<T> {
+    /// Create a new `Exclusive` wrapper.
     pub fn new(t: T) -> Self {
         Self { inner: t }
     }
 
+    /// For types that implement [`Sync`], get an immutable reference to the
+    /// underlying value.
+    pub fn get(&self) -> &T
+    where
+        T: Sync,
+    {
+        &self.inner
+    }
+
+    /// Get a mutable reference to the underlying value.
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.inner
     }
-}
 
-impl<T: Sync> Exclusive<T> {
-    pub fn get(&self) -> &T {
-        // This is safe because `T: Sync`.
-        &self.inner
+    /// Unwrap the contained value.
+    pub fn into_inner(self) -> T {
+        self.inner
     }
 }
 

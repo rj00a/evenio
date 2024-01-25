@@ -10,7 +10,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
 
     let lifetimes;
     let tuple_ty;
-    let get_param_body;
+    let get_body;
 
     match &input.data {
         Data::Struct(struct_) => {
@@ -43,7 +43,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 );
             }
 
-            get_param_body = match &struct_.fields {
+            get_body = match &struct_.fields {
                 syn::Fields::Named(fields) => {
                     let idents: Vec<_> = fields
                         .named
@@ -52,7 +52,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                         .collect();
 
                     quote! {
-                        let (#(#idents,)*) = <#tuple_ty as ::evenio::system::SystemParam>::get_param(
+                        let (#(#idents,)*) = <#tuple_ty as ::evenio::system::SystemParam>::get(
                             state,
                             info,
                             event_ptr,
@@ -72,7 +72,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                         .map(|(i, _)| LitInt::new(&format!("{i}"), Span::call_site()));
 
                     quote! {
-                        let tuple = <#tuple_ty as ::evenio::system::SystemParam>::get_param(
+                        let tuple = <#tuple_ty as ::evenio::system::SystemParam>::get(
                             state,
                             info,
                             event_ptr,
@@ -108,7 +108,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::evenio::system::SystemParam for #name #ty_generics #where_clause {
+        unsafe impl #impl_generics ::evenio::system::SystemParam for #name #ty_generics #where_clause {
             type State = <#tuple_ty as ::evenio::system::SystemParam>::State;
 
             type Item<'__a> = #item;
@@ -121,16 +121,16 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 <#tuple_ty as ::evenio::system::SystemParam>::init(world, config)
             }
 
-            unsafe fn get_param<'__a>(
+            unsafe fn get<'__a>(
                 state: &'__a mut Self::State,
                 info: &'__a ::evenio::system::SystemInfo,
                 event_ptr: ::evenio::event::EventPtr<'__a>,
                 world: ::evenio::world::UnsafeWorldCell<'__a>,
             ) -> Self::Item<'__a> {
-                #get_param_body
+                #get_body
             }
 
-            unsafe fn refresh_archetype(
+            fn refresh_archetype(
                 state: &mut Self::State,
                 arch: &::evenio::archetype::Archetype
             ) {
@@ -140,7 +140,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 )
             }
 
-            unsafe fn remove_archetype(
+            fn remove_archetype(
                 state: &mut Self::State,
                 arch: &::evenio::archetype::Archetype
             ) {

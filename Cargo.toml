@@ -98,7 +98,7 @@ try_err = "warn"
 # undocumented_unsafe_blocks = "warn"
 uninlined_format_args = "warn"
 unnecessary_join = "warn"
-unnecessary_safety_doc = "warn"
+# unnecessary_safety_doc = "warn"
 unnecessary_self_imports = "warn"
 unneeded_field_pattern = "warn"
 unnested_or_patterns = "warn"
@@ -120,7 +120,7 @@ zero_sized_map_values = "warn"
 
 [package]
 name = "evenio"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [features]
