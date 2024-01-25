@@ -1,0 +1,97 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
+        with:
+          toolchain: "nightly"
+          components: "rustfmt"
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
+
+      - name: Validate documentation
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
+        with:
+          toolchain: "stable"
+          components: "clippy"
+
+      - name: Clippy
+        run: cargo clippy --workspace --no-deps --all-features --all-targets -- -D warnings
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
+
+      - name: All features
+        run: cargo test --workspace --all-features --all-targets
+
+      - name: No default features
+        run: cargo test --workspace --no-default-features --all-targets
+
+  miri:
+    name: Miri Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Rust toolchain and cache
+        uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
+        with:
+          toolchain: "nightly"
+          components: "miri"
+
+      - name: Run tests
+        run: cargo miri test --workspace --all-features
+
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v3
+
+      - name: Check for spelling errors
+        uses: crate-ci/typos@v1.16.5
