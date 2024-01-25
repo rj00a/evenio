@@ -1,5 +1,40 @@
+[package]
+name = "evenio"
+version = "0.1.1"
+description = "An event-driven entity component system"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["game", "ecs"]
+categories = ["data-structures", "no-std", "game-development"]
+
+[features]
+default = ["std"]
+# rayon = ["std"]
+std = []
+
+[dependencies]
+bumpalo = "3.14.0"
+evenio_macros = { path = "evenio_macros" }
+memoffset = "0.9.0"
+rayon = { version = "1.8.0", optional = true }
+slab = "0.4.9"
+
+[dev-dependencies]
+# divan = "0.1.2"
+
+[lints]
+workspace = true
+
+#### WORKSPACE ####
+
 [workspace]
 members = ["evenio_macros"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/rj00a/evenio"
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "allow" # Warned by `future_incompatible`.
@@ -18,7 +53,6 @@ alloc_instead_of_core = "warn"
 as_ptr_cast_mut = "warn"
 as_underscore = "warn"
 bool_to_int_with_if = "warn"
-cargo_common_metadata = "warn"
 case_sensitive_file_extension_comparisons = "warn"
 cast_lossless = "warn"
 checked_conversions = "warn"
@@ -108,35 +142,12 @@ used_underscore_binding = "warn"
 wildcard_dependencies = "warn"
 zero_sized_map_values = "warn"
 
-# # Deny rustdoc stuff so CI fails.
-# [workspace.lints.rustdoc]
-# broken_intra_doc_links = "deny"
-# private_intra_doc_links = "deny"
-# missing_crate_level_docs = "deny"
-# invalid_codeblock_attributes = "deny"
-# invalid_rust_codeblocks = "deny"
-# bare_urls = "deny"
-# invalid_html_tags = "deny"
-
-[package]
-name = "evenio"
-version = "0.1.1"
-edition = "2021"
-
-[features]
-default = ["std"]
-# rayon = ["std"]
-std = []
-
-[dependencies]
-bumpalo = "3.14.0"
-evenio_macros = { path = "evenio_macros" }
-memoffset = "0.9.0"
-rayon = { version = "1.8.0", optional = true }
-slab = "0.4.9"
-
-[dev-dependencies]
-# divan = "0.1.2"
-
-[lints]
-workspace = true
+# Deny rustdoc stuff so CI fails.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+missing_crate_level_docs = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_rust_codeblocks = "deny"
+bare_urls = "deny"
+invalid_html_tags = "deny"
