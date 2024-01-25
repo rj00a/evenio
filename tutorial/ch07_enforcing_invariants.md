@@ -8,7 +8,7 @@ When defining a component, we have the option to mark the component as immutable
 An immutable component disallows direct `&mut` access, but permits manipulation through `Insert` and `Remove` events.
 This gives the component author more control over its usage.
 
-Let's say we had a component to represet [UUID]s for entities.
+Let's say we had a component to represent [UUID]s for entities.
 UUIDs are usually not meant to change during the lifetime of the entity, so let's see how we can prevent mutation entirely.
 
 To start, we'll mark the component as immutable.

@@ -823,12 +823,10 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     }
 }
 
-/// A [`SystemParam`] used to listen for events of type `E`.
-///
-/// To listen for targeted events, use a [`Query`] in the `Q` type parameter.
+/// A [`SystemParam`] which listens for events of type `E`.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch01_systems_and_events).
+/// chapter](crate::tutorial::ch01_systems_and_events#systems-and-events).
 ///
 /// # Examples
 ///

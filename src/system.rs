@@ -529,7 +529,7 @@ pub trait IntoSystem<Marker>: Sized {
         Before(self.into_system())
     }
 
-    /// Returns a wrapper which sets the priority of this sytem to
+    /// Returns a wrapper which sets the priority of this system to
     /// [`Priority::After`].
     fn after(self) -> After<Self::System> {
         After(self.into_system())
