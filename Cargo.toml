@@ -14,7 +14,7 @@ std = []
 
 [dependencies]
 bumpalo = "3.14.0"
-evenio_macros = { path = "evenio_macros" }
+evenio_macros = { path = "evenio_macros", version = "0.1.1" }
 memoffset = "0.9.0"
 slab = "0.4.9"
 
