@@ -2,7 +2,8 @@
 
 use petgraph::graphmap::DiGraphMap;
 
-use crate::{prelude::SystemId, system::SystemInfo};
+use crate::prelude::SystemId;
+use crate::system::SystemInfo;
 
 #[derive(Debug)]
 pub(crate) struct SystemSchedule {
