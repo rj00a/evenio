@@ -61,20 +61,20 @@ world.add_system(|| {});
 
 When multiple systems listen for the same event, we'll need to consider the order those systems should run when the event is sent.
 
-System order is first determined by the system's [`Priority`]. This is a enum with three states: `Before`, `Normal`, and `After`. `Normal` is the default.
-If systems have the same priority, then we fall back on the order the systems were added to the `World` to decide the order.
+System order is determined by the system's [`Dependencies`]. Those contain information about which systems should run before or after a certain system.
 
-[`Priority`]: crate::system::Priority
+[`Dependencies`]: crate::system::Dependencies
 
 ```rust
 use evenio::prelude::*;
 
 let mut world = World::new();
 
-world.add_system(system_a);
-world.add_system(system_b);
-// Give this system the `Before` priority.
-world.add_system(system_c.before());
+let a = world.add_system(system_a);
+// Run system B after A
+world.add_system(system_b.after(a));
+// Run system C before A
+world.add_system(system_c.before(a));
 
 world.send(MyEvent);
 
@@ -95,12 +95,13 @@ fn system_c(_: Receiver<MyEvent>) {
 ```
 
 Output:
+
 ```txt
 system C
 system A
 system B
 ```
 
-Although `system_c` was added to the world last, it was given `Priority::Before`, so it ran first.
+Although `system_c` was added to the world last, it was forced to run before `system_a`, which should run before `system_b`.
 
 [^1]: Be careful when mixing identifiers from different worlds. An identifier for an item in one `World`, such as an `EntityId`, is meaningless when used in a different `World`.

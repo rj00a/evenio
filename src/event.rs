@@ -784,11 +784,11 @@ impl<E> EventMut<'_, E> {
     /// #
     /// # let mut world = World::new();
     /// #
-    /// world.add_system(|r: ReceiverMut<E>| {
+    /// let taking = world.add_system(|r: ReceiverMut<E>| {
     ///     EventMut::take(r.event); // Took ownership of event.
     /// });
     ///
-    /// world.add_system(|_: Receiver<E>| panic!("boom"));
+    /// world.add_system((|_: Receiver<E>| panic!("boom")).after(taking));
     ///
     /// world.send(E);
     /// // ^ No panic occurs because the first system took
