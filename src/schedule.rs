@@ -98,5 +98,7 @@ mod tests {
             })
             .after(third),
         );
+
+        world.send(OrderEvent(vec![]));
     }
 }
