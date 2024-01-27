@@ -57,3 +57,46 @@ impl SystemSchedule {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use evenio_macros::Event;
+
+    use crate::{
+        event::{Receiver, ReceiverMut},
+        prelude::{IntoSystem, World},
+    };
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum MyOrder {
+        First,
+        Second,
+        Third,
+    }
+
+    #[derive(Event)]
+    struct OrderEvent(Vec<MyOrder>);
+
+    #[test]
+    fn correct_schedule_ordering() {
+        let mut world = World::new();
+
+        let second =
+            world.add_system(|mut r: ReceiverMut<OrderEvent>| r.event.0.push(MyOrder::Second));
+        let _first = world.add_system(
+            (|mut r: ReceiverMut<OrderEvent>| r.event.0.push(MyOrder::First)).before(second),
+        );
+        let third = world.add_system(
+            (|mut r: ReceiverMut<OrderEvent>| r.event.0.push(MyOrder::Third)).after(second),
+        );
+        let _check = world.add_system(
+            (|r: Receiver<OrderEvent>| {
+                assert_eq!(
+                    r.event.0.as_slice(),
+                    &[MyOrder::First, MyOrder::Second, MyOrder::Third]
+                )
+            })
+            .after(third),
+        );
+    }
+}
