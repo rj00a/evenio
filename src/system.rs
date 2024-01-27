@@ -46,10 +46,6 @@ pub struct Systems {
     infos: SlotMap<SystemInfo>,
     /// Maps untargeted event indices to a schedule that holds the order of execution.
     untargeted_event_schedulers: Vec<SystemSchedule>,
-    /// Maps untargeted event indices to the ordered list of systems that handle
-    /// the event.
-    // TODO: replace with `untargeted_event_schedulers`
-    by_untargeted_event: Vec<SystemList>,
     by_type_id: BTreeMap<TypeId, SystemInfoPtr>,
 }
 
@@ -58,7 +54,6 @@ impl Systems {
         Self {
             infos: SlotMap::new(),
             untargeted_event_schedulers: vec![],
-            by_untargeted_event: vec![],
             by_type_id: BTreeMap::new(),
         }
     }
@@ -78,20 +73,13 @@ impl Systems {
             if let EventIdx::Untargeted(idx) = info.received_event().index() {
                 let idx = idx.0 as usize;
 
-                // TODO: replace with `untargeted_event_schedulers`
-                if idx >= self.by_untargeted_event.len() {
-                    self.by_untargeted_event
-                        .resize_with(idx + 1, SystemList::default);
-                }
                 if idx >= self.untargeted_event_schedulers.len() {
                     self.untargeted_event_schedulers
                         .resize_with(idx + 1, SystemSchedule::new);
                 }
 
-                // TODO: replace with `untargeted_event_schedulers`
-                self.by_untargeted_event[idx].insert(ptr, info.priority());
                 self.untargeted_event_schedulers[idx]
-                    .insert(ptr)
+                    .insert(&info)
                     .expect("Cyclic dependency in system");
             }
 
@@ -109,8 +97,9 @@ impl Systems {
         let received_event = info.received_event();
 
         if received_event.is_untargeted() {
-            let list = &mut self.by_untargeted_event[received_event.index().as_u32() as usize];
-            list.remove(info.ptr());
+            let schedule =
+                &mut self.untargeted_event_schedulers[received_event.index().as_u32() as usize];
+            schedule.remove(info.id());
         }
 
         if let Some(type_id) = info.type_id() {
@@ -122,15 +111,18 @@ impl Systems {
 
     pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
         if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
-            if idx as usize >= self.by_untargeted_event.len() {
-                self.by_untargeted_event
-                    .resize_with(idx as usize + 1, SystemList::default);
+            if idx as usize >= self.untargeted_event_schedulers.len() {
+                self.untargeted_event_schedulers
+                    .resize_with(idx as usize + 1, SystemSchedule::new);
             }
         }
     }
 
-    pub(crate) fn get_untargeted_list(&self, idx: UntargetedEventIdx) -> Option<&SystemList> {
-        self.by_untargeted_event.get(idx.0 as usize)
+    pub(crate) fn get_untargeted_schedule(
+        &self,
+        idx: UntargetedEventIdx,
+    ) -> Option<&SystemSchedule> {
+        self.untargeted_event_schedulers.get(idx.0 as usize)
     }
 
     /// Gets the [`SystemInfo`] of the given system. Returns `None` if the ID is
@@ -262,7 +254,7 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) event_queue_access: Access,
     pub(crate) component_access: ComponentAccessExpr,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
-    pub(crate) priority: Priority,
+    pub(crate) dependencies: Dependencies,
     pub(crate) type_id: Option<TypeId>,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
     // aliasing.
@@ -336,9 +328,9 @@ impl SystemInfo {
         unsafe { &(*self.inner.as_ptr()).referenced_components }
     }
 
-    /// Gets the [`Priority`] of this system.
-    pub fn priority(&self) -> Priority {
-        unsafe { (*self.inner.as_ptr()).priority }
+    /// Gets the [`Dependencies`] of this system.
+    pub fn dependencies(&self) -> &Dependencies {
+        unsafe { &(*self.inner.as_ptr()).dependencies }
     }
 
     /// Gets the [`TypeId`] of this system, if any.
@@ -376,7 +368,7 @@ impl fmt::Debug for SystemInfo {
             .field("sent_untargeted_events", &self.sent_untargeted_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
-            .field("priority", &self.priority())
+            .field("dependencies", &self.dependencies())
             .field("id", &self.id())
             .field("type_id", &self.type_id())
             // Don't access the `system` field.
@@ -389,68 +381,6 @@ impl Drop for SystemInfo {
         // SAFETY: The inner data was derived from a `Box` and is owned by this system
         // info.
         let _ = unsafe { Box::from_raw(self.inner.as_ptr()) };
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct SystemList {
-    before: u32,
-    after: u32,
-    entries: Vec<SystemInfoPtr>,
-}
-
-unsafe impl Sync for SystemList {}
-
-impl SystemList {
-    pub(crate) const fn new() -> SystemList {
-        Self {
-            before: 0,
-            after: 0,
-            entries: vec![],
-        }
-    }
-
-    pub(crate) fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
-        assert!(self.entries.len() < u32::MAX as usize);
-
-        match priority {
-            Priority::Before => {
-                self.entries.insert(self.before as usize, ptr);
-                self.before += 1;
-                self.after += 1;
-            }
-            Priority::Normal => {
-                self.entries.insert(self.after as usize, ptr);
-                self.after += 1;
-            }
-            Priority::After => {
-                self.entries.push(ptr);
-            }
-        }
-    }
-
-    pub(crate) fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
-        if let Some(idx) = self.entries.iter().position(|&p| p == ptr) {
-            self.entries.remove(idx);
-
-            let idx = idx as u32;
-
-            if idx < self.after {
-                self.after -= 1;
-
-                if idx < self.before {
-                    self.before -= 1;
-                }
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
-    pub(crate) fn systems(&self) -> &[SystemInfoPtr] {
-        &self.entries
     }
 }
 
@@ -537,16 +467,14 @@ pub trait IntoSystem<Marker>: Sized {
         NoTypeId(self.into_system())
     }
 
-    /// Returns a wrapper which sets the priority of this system to
-    /// [`Priority::Before`].
-    fn before(self) -> Before<Self::System> {
-        Before(self.into_system())
+    /// Returns a wrapper which hints to run the given system before this.
+    fn before(self, other: SystemId) -> Before<Self::System> {
+        Before(self.into_system(), other)
     }
 
-    /// Returns a wrapper which sets the priority of this system to
-    /// [`Priority::After`].
-    fn after(self) -> After<Self::System> {
-        After(self.into_system())
+    /// Returns a wrapper which hints to run the given system after this.
+    fn after(self, other: SystemId) -> After<Self::System> {
+        After(self.into_system(), other)
     }
 }
 
@@ -606,7 +534,7 @@ impl<S: System> System for NoTypeId<S> {
 
 /// The wrapper system returned by [`IntoSystem::before`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Before<S>(pub S);
+pub struct Before<S>(pub S, SystemId);
 
 impl<S: System> System for Before<S> {
     fn type_id(&self) -> Option<TypeId> {
@@ -619,7 +547,7 @@ impl<S: System> System for Before<S> {
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::Before;
+        config.dependencies.before.push(self.1);
         res
     }
 
@@ -638,7 +566,7 @@ impl<S: System> System for Before<S> {
 
 /// The wrapper system returned by [`IntoSystem::after`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct After<S>(pub S);
+pub struct After<S>(pub S, SystemId);
 
 impl<S: System> System for After<S> {
     fn type_id(&self) -> Option<TypeId> {
@@ -651,7 +579,7 @@ impl<S: System> System for After<S> {
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::After;
+        config.dependencies.after.push(self.1);
         res
     }
 
@@ -737,28 +665,20 @@ impl fmt::Display for InitError {
 #[cfg(feature = "std")]
 impl std::error::Error for InitError {}
 
-/// The priority of a system relative to other systems that handle the same
+/// The dependencies of a system relative to other systems that handle the same
 /// event.
-///
-/// If multiple systems have the same priority, then the order they were added
-/// to the [`World`] is used as a fallback.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub enum Priority {
-    /// The system runs before other systems.
-    Before,
-    /// The default system priority.
-    #[default]
-    Normal,
-    /// The system runs after other systems.
-    After,
+#[derive(Clone, Debug, Default)]
+pub struct Dependencies {
+    pub(crate) before: Vec<SystemId>,
+    pub(crate) after: Vec<SystemId>,
 }
 
 /// The Configuration of a system. Accessible during system initialization.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Config {
-    /// The priority of this system.
-    pub priority: Priority,
+    /// The dependencies of this system.
+    pub dependencies: Dependencies,
     /// The event type to be received by the system.
     ///
     /// Defaults to `None`, but must be assigned to `Some` before configuration
@@ -791,7 +711,7 @@ impl Config {
     /// Creates the default configuration.
     pub fn new() -> Self {
         Self {
-            priority: Default::default(),
+            dependencies: Default::default(),
             received_event: Default::default(),
             received_event_access: Default::default(),
             targeted_event_expr: BoolExpr::new(false),

@@ -24,7 +24,7 @@ use crate::event::{
 };
 use crate::system::{
     AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
-    SystemList, Systems,
+    Systems,
 };
 
 /// A container for all data in the ECS. This includes entities, components,
@@ -364,7 +364,7 @@ impl World {
             event_queue_access: config.event_queue_access,
             component_access: config.component_access,
             referenced_components: config.referenced_components,
-            priority: config.priority,
+            dependencies: config.dependencies,
             type_id,
             system,
         });
@@ -798,12 +798,13 @@ impl World {
                     }
                 }
 
-                let system_list = match event_meta {
+                let system_ids = match event_meta {
                     EventMeta::Untargeted { idx } => unsafe {
                         world
                             .systems
-                            .get_untargeted_list(idx)
+                            .get_untargeted_schedule(idx)
                             .unwrap_debug_checked()
+                            .systems()
                     },
                     EventMeta::Targeted { idx, target } => {
                         let Some(location) = world.entities.get(target) else {
@@ -817,22 +818,25 @@ impl World {
                                 .unwrap_debug_checked()
                         };
 
-                        static EMPTY: SystemList = SystemList::new();
-
-                        // Return an empty system list instead of continuing in case this event is
+                        // Return an empty slice instead of continuing in case this event is
                         // special.
-                        arch.system_list_for(idx).unwrap_or(&EMPTY)
+                        match arch.system_list_for(idx) {
+                            Some(schedule) => schedule.systems(),
+                            None => &[],
+                        }
                     }
                 };
 
-                let systems: *const [_] = system_list.systems();
+                let system_ids: *const [_] = system_ids;
 
-                for info_ptr in unsafe { &*systems } {
+                for system_id in unsafe { &*system_ids } {
+                    let info_ptr = world.systems.get(*system_id).unwrap().ptr();
+
                     let events_before = world.event_queue.len();
 
                     let system = unsafe { &mut (*info_ptr.as_ptr()).system };
 
-                    let info = unsafe { SystemInfo::ref_from_ptr(info_ptr) };
+                    let info = unsafe { SystemInfo::ref_from_ptr(&info_ptr) };
 
                     let event_ptr = EventPtr::new(NonNull::from(&mut event.event));
                     let world_cell = world.unsafe_cell_mut();

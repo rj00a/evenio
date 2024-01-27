@@ -17,11 +17,10 @@ use crate::component::{ComponentIdx, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::prelude::World;
+use crate::schedule::SystemSchedule;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
-use crate::system::{
-    Config, InitError, SystemInfo, SystemInfoPtr, SystemList, SystemParam, Systems,
-};
+use crate::system::{Config, InitError, SystemInfo, SystemInfoPtr, SystemParam, Systems};
 use crate::world::UnsafeWorldCell;
 
 /// Contains all the [`Archetype`]s and their metadata for a world.
@@ -130,7 +129,7 @@ impl Archetypes {
 
             if let EventIdx::Targeted(idx) = info.received_event().index() {
                 if let Some(list) = arch.event_listeners.get_mut(idx) {
-                    list.remove(info.ptr());
+                    list.remove(info.id());
                 }
             }
         }
@@ -542,7 +541,7 @@ pub struct Archetype {
     /// Systems that need to be notified about column changes.
     refresh_listeners: BTreeSet<SystemInfoPtr>,
     /// Targeted event listeners for this archetype.
-    event_listeners: SparseMap<TargetedEventIdx, SystemList>,
+    event_listeners: SparseMap<TargetedEventIdx, SystemSchedule>,
 }
 
 impl Archetype {
@@ -606,19 +605,19 @@ impl Archetype {
             (info.targeted_event_expr(), info.received_event().index())
         {
             if expr.eval(|idx| self.column_of(idx).is_some()) {
-                if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
-                    list.insert(info.ptr(), info.priority());
+                if let Some(schedule) = self.event_listeners.get_mut(targeted_event_idx) {
+                    schedule.insert(info).expect("Cyclic dependency in system");
                 } else {
-                    let mut list = SystemList::new();
-                    list.insert(info.ptr(), info.priority());
+                    let mut schedule = SystemSchedule::new();
+                    schedule.insert(info).expect("Cyclic dependency in system");
 
-                    self.event_listeners.insert(targeted_event_idx, list);
+                    self.event_listeners.insert(targeted_event_idx, schedule);
                 }
             }
         }
     }
 
-    pub(crate) fn system_list_for(&self, idx: TargetedEventIdx) -> Option<&SystemList> {
+    pub(crate) fn system_list_for(&self, idx: TargetedEventIdx) -> Option<&SystemSchedule> {
         self.event_listeners.get(idx)
     }
 
