@@ -44,7 +44,8 @@ use crate::world::{UnsafeWorldCell, World};
 #[derive(Debug)]
 pub struct Systems {
     infos: SlotMap<SystemInfo>,
-    /// Maps untargeted event indices to a schedule that holds the order of execution.
+    /// Maps untargeted event indices to a schedule that holds the order of
+    /// execution.
     untargeted_event_schedulers: Vec<SystemSchedule>,
     by_type_id: BTreeMap<TypeId, SystemInfoPtr>,
 }

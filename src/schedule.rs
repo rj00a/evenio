@@ -62,10 +62,8 @@ impl SystemSchedule {
 mod tests {
     use evenio_macros::Event;
 
-    use crate::{
-        event::{Receiver, ReceiverMut},
-        prelude::{IntoSystem, World},
-    };
+    use crate::event::{Receiver, ReceiverMut};
+    use crate::prelude::{IntoSystem, World};
 
     #[derive(Debug, PartialEq, Eq)]
     enum MyOrder {
