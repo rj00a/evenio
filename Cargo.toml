@@ -16,6 +16,9 @@ std = []
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros", version = "0.1.1" }
 memoffset = "0.9.0"
+petgraph = { version = "0.6.4", default-features = false, features = [
+    "graphmap",
+] }
 slab = "0.4.9"
 
 [lints]
@@ -32,7 +35,7 @@ license = "MIT"
 repository = "https://github.com/rj00a/evenio"
 
 [workspace.lints.rust]
-elided_lifetimes_in_paths = "allow" # Warned by `future_incompatible`.
+elided_lifetimes_in_paths = "allow"    # Warned by `future_incompatible`.
 future_incompatible = "warn"
 missing_debug_implementations = "warn"
 missing_docs = "warn"

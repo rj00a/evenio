@@ -22,6 +22,7 @@ use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
+use crate::schedule::SystemSchedule;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
@@ -43,8 +44,11 @@ use crate::world::{UnsafeWorldCell, World};
 #[derive(Debug)]
 pub struct Systems {
     infos: SlotMap<SystemInfo>,
+    /// Maps untargeted event indices to a schedule that holds the order of execution.
+    untargeted_event_schedulers: Vec<SystemSchedule>,
     /// Maps untargeted event indices to the ordered list of systems that handle
     /// the event.
+    // TODO: replace with `untargeted_event_schedulers`
     by_untargeted_event: Vec<SystemList>,
     by_type_id: BTreeMap<TypeId, SystemInfoPtr>,
 }
@@ -53,6 +57,7 @@ impl Systems {
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
+            untargeted_event_schedulers: vec![],
             by_untargeted_event: vec![],
             by_type_id: BTreeMap::new(),
         }
@@ -73,12 +78,21 @@ impl Systems {
             if let EventIdx::Untargeted(idx) = info.received_event().index() {
                 let idx = idx.0 as usize;
 
+                // TODO: replace with `untargeted_event_schedulers`
                 if idx >= self.by_untargeted_event.len() {
                     self.by_untargeted_event
                         .resize_with(idx + 1, SystemList::default);
                 }
+                if idx >= self.untargeted_event_schedulers.len() {
+                    self.untargeted_event_schedulers
+                        .resize_with(idx + 1, SystemSchedule::new);
+                }
 
-                self.by_untargeted_event[idx].insert(ptr, info.priority())
+                // TODO: replace with `untargeted_event_schedulers`
+                self.by_untargeted_event[idx].insert(ptr, info.priority());
+                self.untargeted_event_schedulers[idx]
+                    .insert(ptr)
+                    .expect("Cyclic dependency in system");
             }
 
             info
