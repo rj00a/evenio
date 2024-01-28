@@ -1,4 +1,5 @@
-//! Performance of spawning an entity, adding many components to it, and despawning.
+//! Performance of spawning an entity, adding many components to it, and
+//! despawning.
 
 use divan::{black_box, Bencher};
 

@@ -40,7 +40,7 @@ fn insert_u32_btreeset(bencher: Bencher, len: u32) {
 
 #[divan::bench(args = LENS)]
 fn lookup_u128_hashset(bencher: Bencher, len: u32) {
-    let set: AHashSet<u128> = (0..len).map(|n| n as u128 * 10000).collect();
+    let set: AHashSet<u128> = (0..len).map(|n| u128::from(n) * 10000).collect();
 
     bencher.bench(|| {
         black_box(set.get(&black_box(123456789)));
@@ -49,7 +49,7 @@ fn lookup_u128_hashset(bencher: Bencher, len: u32) {
 
 #[divan::bench(args = LENS)]
 fn lookup_u128_btreeset(bencher: Bencher, len: u32) {
-    let set: BTreeSet<u128> = (0..len).map(|n| n as u128 * 10000).collect();
+    let set: BTreeSet<u128> = (0..len).map(|n| u128::from(n) * 10000).collect();
 
     bencher.bench(|| {
         black_box(set.get(&black_box(123456789)));
@@ -58,7 +58,7 @@ fn lookup_u128_btreeset(bencher: Bencher, len: u32) {
 
 #[divan::bench(args = LENS)]
 fn lookup_u128_linear_search(bencher: Bencher, len: u32) {
-    let set: Vec<u128> = (0..len).map(|n| n as u128 * 10000).collect();
+    let set: Vec<u128> = (0..len).map(|n| u128::from(n) * 10000).collect();
 
     bencher.bench(|| {
         let n = black_box(123456789);
@@ -68,7 +68,7 @@ fn lookup_u128_linear_search(bencher: Bencher, len: u32) {
 
 #[divan::bench(args = LENS)]
 fn lookup_128_binary_search(bencher: Bencher, len: u32) {
-    let set: Vec<u128> = (0..len).map(|n| n as u128 * 10000).collect();
+    let set: Vec<u128> = (0..len).map(|n| u128::from(n) * 10000).collect();
 
     bencher.bench(|| {
         let n = black_box(123456789);
