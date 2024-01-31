@@ -1,8 +1,6 @@
 //! Types for sending and receiving [`Event`]s.
 
 use alloc::borrow::Cow;
-use alloc::collections::btree_map::Entry;
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::alloc::Layout;
@@ -27,6 +25,7 @@ use crate::component::ComponentIdx;
 use crate::drop::DropFn;
 use crate::entity::EntityId;
 use crate::fetch::FetcherState;
+use crate::map::{Entry, TypeIdMap};
 use crate::prelude::Component;
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
@@ -51,7 +50,7 @@ use crate::world::{UnsafeWorldCell, World};
 pub struct Events {
     untargeted_events: SlotMap<EventInfo>,
     targeted_events: SlotMap<EventInfo>,
-    by_type_id: BTreeMap<TypeId, EventId>,
+    by_type_id: TypeIdMap<EventId>,
 }
 
 impl Events {
@@ -59,7 +58,7 @@ impl Events {
         let mut this = Self {
             untargeted_events: SlotMap::new(),
             targeted_events: SlotMap::new(),
-            by_type_id: BTreeMap::new(),
+            by_type_id: TypeIdMap::default(),
         };
 
         this.add(EventDescriptor {

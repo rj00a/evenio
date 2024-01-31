@@ -1,7 +1,7 @@
 //! [`Archetype`] and related items.
 
 use alloc::boxed::Box;
-use alloc::collections::btree_map::Entry;
+use alloc::collections::btree_map::Entry as BTreeEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,6 +16,7 @@ use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
+use crate::map::{Entry, Map};
 use crate::prelude::World;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
@@ -41,14 +42,14 @@ use crate::world::UnsafeWorldCell;
 #[derive(Debug)]
 pub struct Archetypes {
     archetypes: Slab<Archetype>,
-    by_components: BTreeMap<Box<[ComponentIdx]>, ArchetypeIdx>,
+    by_components: Map<Box<[ComponentIdx]>, ArchetypeIdx>,
 }
 
 impl Archetypes {
     pub(crate) fn new() -> Self {
         Self {
             archetypes: Slab::from_iter([(0, Archetype::empty())]),
-            by_components: BTreeMap::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
+            by_components: Map::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
         }
     }
 
@@ -192,7 +193,7 @@ impl Archetypes {
         };
 
         match src_arch.insert_components.entry(component_idx) {
-            Entry::Vacant(vacant_insert_components) => {
+            BTreeEntry::Vacant(vacant_insert_components) => {
                 let Err(idx) = src_arch
                     .columns
                     .binary_search_by_key(&component_idx, |c| c.component_idx)
@@ -236,7 +237,7 @@ impl Archetypes {
                     Entry::Occupied(o) => *vacant_insert_components.insert(*o.get()),
                 }
             }
-            Entry::Occupied(o) => *o.get(),
+            BTreeEntry::Occupied(o) => *o.get(),
         }
     }
 
@@ -257,7 +258,7 @@ impl Archetypes {
         };
 
         match src_arch.remove_components.entry(component_idx) {
-            Entry::Vacant(vacant_remove_components) => {
+            BTreeEntry::Vacant(vacant_remove_components) => {
                 if src_arch
                     .columns
                     .binary_search_by_key(&component_idx, |c| c.component_idx)
@@ -307,7 +308,7 @@ impl Archetypes {
                     Entry::Occupied(o) => *vacant_remove_components.insert(*o.get()),
                 }
             }
-            Entry::Occupied(o) => *o.get(),
+            BTreeEntry::Occupied(o) => *o.get(),
         }
     }
 

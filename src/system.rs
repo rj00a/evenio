@@ -2,7 +2,6 @@
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::TypeId;
@@ -22,6 +21,7 @@ use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
+use crate::map::TypeIdMap;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
@@ -46,7 +46,7 @@ pub struct Systems {
     /// Maps untargeted event indices to the ordered list of systems that handle
     /// the event.
     by_untargeted_event: Vec<SystemList>,
-    by_type_id: BTreeMap<TypeId, SystemInfoPtr>,
+    by_type_id: TypeIdMap<SystemInfoPtr>,
 }
 
 impl Systems {
@@ -54,7 +54,7 @@ impl Systems {
         Self {
             infos: SlotMap::new(),
             by_untargeted_event: vec![],
-            by_type_id: BTreeMap::new(),
+            by_type_id: Default::default(),
         }
     }
 
