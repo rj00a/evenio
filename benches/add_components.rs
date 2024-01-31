@@ -10,7 +10,7 @@ fn main() {
 const COUNTS: [u64; 10] = [1, 2, 3, 5, 10, 15, 20, 25, 30, 40];
 
 #[divan::bench(args = COUNTS, sample_size = 10)]
-fn spawn_ent_many_comps_n_evenio(bencher: Bencher, count: u64) {
+fn spawn_many_comps_n_evenio(bencher: Bencher, count: u64) {
     use evenio::prelude::*;
 
     macro_rules! add_components {
@@ -49,7 +49,7 @@ fn spawn_ent_many_comps_n_evenio(bencher: Bencher, count: u64) {
 }
 
 #[divan::bench(sample_size = 10)]
-fn spawn_ent_many_comps_40_bevy(bencher: Bencher) {
+fn spawn_many_comps_40_bevy(bencher: Bencher) {
     use bevy_ecs::prelude::*;
 
     macro_rules! def_bundle {

@@ -1,4 +1,5 @@
-//! Compares performance of hashsets and btreesets in relevant scenarios.
+//! Compares performance of hashsets, btreesets, and other search methods in
+//! relevant scenarios.
 
 use std::collections::BTreeSet;
 use std::hash::Hash;
