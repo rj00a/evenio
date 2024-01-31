@@ -19,8 +19,6 @@ const FETCHED_COUNT: usize = 1000;
 fn random_access_evenio(bencher: Bencher) {
     use evenio::prelude::*;
 
-    let mut world = World::new();
-
     let mut entities = vec![];
     let mut world = World::new();
 
@@ -32,7 +30,7 @@ fn random_access_evenio(bencher: Bencher) {
             )*
 
             #[derive(Query)]
-            #[allow(non_snake_case)]
+            #[allow(non_snake_case, dead_code)]
             struct ComponentQuery<'a> {
                 $(
                     $name: &'a $name,
@@ -74,6 +72,8 @@ fn random_access_evenio(bencher: Bencher) {
 
 #[divan::bench]
 fn random_access_bevy(bencher: Bencher) {
+    #![allow(non_snake_case)] // Can't add attributes to the generated `ComponentQueryItem`.
+
     use bevy_ecs::prelude::*;
     use bevy_ecs::query::WorldQuery;
     use bevy_ecs::schedule::ScheduleLabel;
@@ -89,7 +89,7 @@ fn random_access_bevy(bencher: Bencher) {
             )*
 
             #[derive(WorldQuery)]
-            #[allow(non_snake_case)]
+            #[allow(dead_code)]
             struct ComponentQuery<'a> {
                 $(
                     $name: &'a $name,
