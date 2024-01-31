@@ -21,7 +21,7 @@ pub mod event;
 pub mod exclusive;
 pub mod fetch;
 mod layout_util;
-pub mod map;
+mod map;
 pub mod query;
 mod slot_map;
 pub mod sparse;
