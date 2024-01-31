@@ -1,4 +1,4 @@
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{parse2, parse_quote, Data, DeriveInput, Error, GenericParam, LitInt, Result, Type};
 
@@ -59,11 +59,16 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                         .map(|f| f.ident.clone().unwrap())
                         .collect();
 
+                    let underscored_idents: Vec<_> = idents
+                        .iter()
+                        .map(|i| Ident::new(&format!("__{i}"), Span::call_site()))
+                        .collect();
+
                     quote! {
-                        let (#(#idents,)*) = <#tuple_ty as ::evenio::query::Query>::get(state, row);
+                        let (#(#underscored_idents,)*) = <#tuple_ty as ::evenio::query::Query>::get(state, row);
 
                         #name {
-                            #(#idents),*
+                            #(#idents: #underscored_idents),*
                         }
                     }
                 }
@@ -75,9 +80,9 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                         .map(|(i, _)| LitInt::new(&format!("{i}"), Span::call_site()));
 
                     quote! {
-                        let tuple = <#tuple_ty as ::evenio::query::Query>::get(state, row);
+                        let __tuple = <#tuple_ty as ::evenio::query::Query>::get(state, row);
 
-                        #name(#(tuple.#indices),*)
+                        #name(#(__tuple.#indices),*)
                     }
                 }
                 syn::Fields::Unit => quote!(#name),
