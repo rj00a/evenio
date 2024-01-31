@@ -1,6 +1,6 @@
 [package]
 name = "evenio_macros"
-version = "0.1.1"
+version = "0.1.2"
 description = "Procedural macros for `evenio`"
 edition.workspace = true
 repository.workspace = true

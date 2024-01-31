@@ -38,6 +38,14 @@ harness = false
 name = "event"
 harness = false
 
+[[bench]]
+name = "iter"
+harness = false
+
+[[bench]]
+name = "random_access"
+harness = false
+
 #### WORKSPACE ####
 
 [workspace]
