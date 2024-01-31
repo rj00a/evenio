@@ -10,11 +10,6 @@ fn main() {
 const TOTAL_ENTITIES: usize = 10_000;
 const FETCHED_COUNT: usize = 1000;
 
-// fn setup_evenio() -> (evenio::world::World, Vec<evenio::entity::EntityId>) {
-//     use evenio::prelude::*;
-
-// }
-
 #[divan::bench]
 fn random_access_evenio(bencher: Bencher) {
     use evenio::prelude::*;
