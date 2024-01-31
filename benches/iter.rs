@@ -51,7 +51,7 @@ fn iter_bevy(bencher: Bencher) {
     let mut sched = Schedule::new(Whatever);
 
     sched.add_systems(|mut q: Query<&mut Data>| {
-        for mut data in q.iter_mut() {
+        for mut data in &mut q {
             data.bypass_change_detection().0 = data.0.sqrt();
         }
     });
