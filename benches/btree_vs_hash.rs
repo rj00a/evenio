@@ -95,3 +95,34 @@ where
         let _ = black_box(set.binary_search(&n));
     });
 }
+
+const ARRAY_LENS: [usize; 10] = [1, 2, 3, 4, 5, 10, 20, 30, 40, 50];
+const ARRAY_COUNT: usize = 100;
+
+#[divan::bench(args = ARRAY_LENS)]
+fn lookup_u32_array_hashset(bencher: Bencher, array_len: usize) {
+    let set: AHashSet<Box<[u32]>> = (0..ARRAY_COUNT)
+        .map(|n| vec![n as u32; n % array_len + 1].into_boxed_slice())
+        .chain([[].into()])
+        .collect();
+
+    let val = vec![12345; array_len].into_boxed_slice();
+
+    bencher.bench(|| {
+        black_box(set.get(black_box(&*val)));
+    });
+}
+
+#[divan::bench(args = ARRAY_LENS)]
+fn lookup_u32_array_btreeset(bencher: Bencher, array_len: usize) {
+    let set: BTreeSet<Box<[u32]>> = (0..ARRAY_COUNT)
+        .map(|n| vec![n as u32; n % array_len + 1].into_boxed_slice())
+        .chain([[].into()])
+        .collect();
+
+    let val = vec![12345; array_len].into_boxed_slice();
+
+    bencher.bench(|| {
+        black_box(set.get(black_box(&*val)));
+    });
+}

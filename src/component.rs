@@ -1,8 +1,7 @@
 //! Types for working with [`Component`]s.
 
 use alloc::borrow::Cow;
-use alloc::collections::btree_map::Entry;
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeSet;
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::ops::Index;
@@ -13,6 +12,7 @@ use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::event::{Event, EventId, EventPtr};
+use crate::map::{Entry, TypeIdMap};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -36,14 +36,14 @@ use crate::world::UnsafeWorldCell;
 #[derive(Debug)]
 pub struct Components {
     infos: SlotMap<ComponentInfo>,
-    by_type_id: BTreeMap<TypeId, ComponentId>,
+    by_type_id: TypeIdMap<ComponentId>,
 }
 
 impl Components {
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
-            by_type_id: BTreeMap::new(),
+            by_type_id: TypeIdMap::default(),
         }
     }
 

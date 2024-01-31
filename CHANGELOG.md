@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed potential "cannot shadow tuple struct with let binding" errors in derived `Query` and `SystemParam` impls.
+- Minor performance improvements.
 
 ## 0.1.1 - 2024-01-25
 
