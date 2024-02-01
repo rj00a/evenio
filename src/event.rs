@@ -8,6 +8,7 @@ use core::any::TypeId;
 use core::marker::PhantomData;
 use core::num::NonZeroU32;
 use core::ops::{Deref, DerefMut, Index};
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -665,6 +666,9 @@ impl EventQueue {
 // the event queue.
 unsafe impl Sync for EventQueue {}
 
+impl UnwindSafe for EventQueue {}
+impl RefUnwindSafe for EventQueue {}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EventQueueItem {
     pub(crate) meta: EventMeta,
@@ -672,6 +676,10 @@ pub(crate) struct EventQueueItem {
     /// has been transferred and no destructor needs to run.
     pub(crate) event: *mut u8,
 }
+
+// SAFETY: Events are always Send + Sync.
+unsafe impl Send for EventQueueItem {}
+unsafe impl Sync for EventQueueItem {}
 
 /// Metadata for an event in the event queue.
 #[derive(Clone, Copy, Debug)]
@@ -1057,7 +1065,7 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> 
     }
 
     fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        state.refresh_archetype(arch)
+        state.remove_archetype(arch)
     }
 }
 

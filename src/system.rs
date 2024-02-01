@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use core::any::TypeId;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut, Index};
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -157,6 +158,9 @@ impl Systems {
         self.infos.iter_mut().map(|(_, v)| v)
     }
 }
+
+unsafe impl Send for Systems {}
+unsafe impl Sync for Systems {}
 
 impl Index<SystemId> for Systems {
     type Output = SystemInfo;
@@ -348,6 +352,9 @@ impl SystemInfo {
         unsafe { &mut (*self.inner.as_ptr()).system }
     }
 }
+
+impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
+impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
 
 unsafe impl Send for SystemInfo {}
 unsafe impl Sync for SystemInfo {}
@@ -691,11 +698,12 @@ pub trait System: Send + Sync + 'static {
     /// internal state updated.
     ///
     /// This is invoked in the following scenarios:
-    /// - The archetype is brand new.
-    /// - The archetype's columns were reallocated, and any pointers into the
-    ///   archetype's columns need to be reacquired.
     /// - The archetype was previously empty, but has now gained at least one
     ///   entity.
+    /// - The archetype's columns were reallocated, and any pointers into the
+    ///   archetype's columns need to be reacquired.
+    ///
+    /// This method must not be called with empty archetypes.
     fn refresh_archetype(&mut self, arch: &Archetype);
 
     /// Notifies the system that an archetype it might care about is no longer
@@ -704,6 +712,10 @@ pub trait System: Send + Sync + 'static {
     /// This is invoked in the following scenarios:
     /// - The archetype was removed from the world.
     /// - The archetype previously had entities in it, but is now empty.
+    ///
+    /// In either case, the system must assume that the archetype is no longer
+    /// available. Attempting to read the component data from a removed
+    /// archetype is illegal.
     fn remove_archetype(&mut self, arch: &Archetype);
 }
 
@@ -1207,7 +1219,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
     }
 
     fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        P::refresh_archetype(state, arch)
+        P::remove_archetype(state, arch)
     }
 }
 
@@ -1235,7 +1247,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
     }
 
     fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        P::refresh_archetype(state, arch)
+        P::remove_archetype(state, arch)
     }
 }
 

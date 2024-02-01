@@ -98,6 +98,8 @@ impl<Q: Query> FetcherState<Q> {
         Ok(Q::get(state, loc.row))
     }
 
+    // TODO: get_many_mut
+
     #[inline]
     pub(crate) unsafe fn iter<'a>(&'a self, archetypes: &'a Archetypes) -> Iter<'a, Q>
     where
@@ -141,7 +143,38 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    #[cfg(feature = "rayon")]
+    pub(crate) unsafe fn par_iter<'a>(&'a self, archetypes: &'a Archetypes) -> ParIter<'a, Q>
+    where
+        Q: ReadOnlyQuery,
+    {
+        ParIter {
+            arch_states: self.map.values(),
+            arch_indices: self.map.keys(),
+            archetypes,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "rayon")]
+    pub(crate) unsafe fn par_iter_mut<'a>(
+        &'a mut self,
+        archetypes: &'a Archetypes,
+    ) -> ParIter<'a, Q> {
+        ParIter {
+            arch_states: self.map.values(),
+            arch_indices: self.map.keys(),
+            archetypes,
+            _marker: PhantomData,
+        }
+    }
+
     pub(crate) fn refresh_archetype(&mut self, arch: &Archetype) {
+        debug_assert!(
+            arch.entity_count() != 0,
+            "`refresh_archetype` called with empty archetype"
+        );
+
         if let Some(fetch) = Q::new_arch_state(arch, &mut self.state) {
             self.map.insert(arch.index(), fetch);
         }
@@ -150,8 +183,6 @@ impl<Q: Query> FetcherState<Q> {
     pub(crate) fn remove_archetype(&mut self, arch: &Archetype) {
         self.map.remove(arch.index());
     }
-
-    // TODO: get_many_mut
 }
 
 impl<Q: Query> fmt::Debug for FetcherState<Q> {
@@ -409,7 +440,7 @@ unsafe impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
     }
 
     fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
-        state.refresh_archetype(arch)
+        state.remove_archetype(arch)
     }
 }
 
@@ -439,6 +470,7 @@ impl std::error::Error for SingleError {}
 /// Iterator over entities matching the query `Q`.
 ///
 /// Entities are visited in a deterministic but otherwise unspecified order.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Iter<'a, Q: Query> {
     /// Pointer into the array of archetype states. This pointer moves forward
     /// until it reaches `state_last`.
@@ -454,7 +486,7 @@ pub struct Iter<'a, Q: Query> {
     /// Number of entities in the current archetype.
     len: u32,
     archetypes: &'a Archetypes,
-    // Iterator should inherit the variance of the query item.
+    // Variance and auto traits should be inherited from the query item.
     _marker: PhantomData<Q::Item<'a>>,
 }
 
@@ -534,7 +566,7 @@ impl<'a, Q: ReadOnlyQuery> Clone for Iter<'a, Q> {
     }
 }
 
-impl<'a, Q: Query> fmt::Debug for Iter<'a, Q> {
+impl<Q: Query> fmt::Debug for Iter<'_, Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Iter")
             .field("state", &self.state)
@@ -547,7 +579,133 @@ impl<'a, Q: Query> fmt::Debug for Iter<'a, Q> {
     }
 }
 
-// TODO `Send` and `Sync` impls for `Iter`.
+unsafe impl<'a, Q> Send for Iter<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: Send,
+{
+}
+
+unsafe impl<'a, Q> Sync for Iter<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: Sync,
+{
+}
+
+#[cfg(feature = "rayon")]
+pub use rayon_impl::*;
+
+#[cfg(feature = "rayon")]
+mod rayon_impl {
+    use rayon::iter::plumbing::UnindexedConsumer;
+    use rayon::prelude::*;
+
+    use super::*;
+
+    /// A [`ParallelIterator`] over entities matching the query `Q`.
+    ///
+    /// This is the parallel version of [`Iter`].
+    #[must_use = "iterators are lazy and do nothing unless consumed"]
+    pub struct ParIter<'a, Q: Query> {
+        pub(super) arch_states: &'a [Q::ArchState],
+        pub(super) arch_indices: &'a [ArchetypeIdx],
+        pub(super) archetypes: &'a Archetypes,
+        pub(super) _marker: PhantomData<Q::Item<'a>>,
+    }
+
+    impl<Q: ReadOnlyQuery> Clone for ParIter<'_, Q> {
+        fn clone(&self) -> Self {
+            Self {
+                arch_states: self.arch_states,
+                arch_indices: self.arch_indices,
+                archetypes: self.archetypes,
+                _marker: PhantomData,
+            }
+        }
+    }
+
+    impl<Q: Query> fmt::Debug for ParIter<'_, Q> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ParIter")
+                .field("arch_states", &self.arch_states)
+                .field("arch_indices", &self.arch_indices)
+                .field("archetypes", &self.archetypes)
+                .finish()
+        }
+    }
+
+    impl<'a, Q> ParallelIterator for ParIter<'a, Q>
+    where
+        Q: Query,
+        Q::Item<'a>: Send,
+    {
+        type Item = Q::Item<'a>;
+
+        fn drive_unindexed<C>(self, consumer: C) -> C::Result
+        where
+            C: UnindexedConsumer<Self::Item>,
+        {
+            unsafe { assume_debug_checked(self.arch_states.len() == self.arch_indices.len()) };
+
+            self.arch_states
+                .par_iter()
+                .zip_eq(self.arch_indices)
+                .flat_map(|(state, &index)| {
+                    let entity_count =
+                        unsafe { self.archetypes.get(index).unwrap_debug_checked() }.entity_count();
+
+                    (0..entity_count).into_par_iter().map(|row| {
+                        let item: Q::Item<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
+                        item
+                    })
+                })
+                .drive_unindexed(consumer)
+        }
+    }
+
+    impl<'a, Q> IntoParallelIterator for Fetcher<'a, Q>
+    where
+        Q: Query,
+        Q::Item<'a>: Send,
+    {
+        type Iter = ParIter<'a, Q>;
+
+        type Item = Q::Item<'a>;
+
+        fn into_par_iter(self) -> Self::Iter {
+            unsafe { self.state.par_iter_mut(self.world.archetypes()) }
+        }
+    }
+
+    impl<'a, Q> IntoParallelIterator for &'a Fetcher<'_, Q>
+    where
+        Q: ReadOnlyQuery,
+        Q::Item<'a>: Send,
+    {
+        type Iter = ParIter<'a, Q>;
+
+        type Item = Q::Item<'a>;
+
+        fn into_par_iter(self) -> Self::Iter {
+            unsafe { self.state.par_iter(self.world.archetypes()) }
+        }
+    }
+
+    impl<'a, Q: Query> IntoParallelIterator for &'a mut Fetcher<'_, Q>
+    where
+        Q: Query,
+        Q::Item<'a>: Send,
+    {
+        type Iter = ParIter<'a, Q>;
+
+        type Item = Q::Item<'a>;
+
+        fn into_par_iter(self) -> Self::Iter {
+            unsafe { self.state.par_iter_mut(self.world.archetypes()) }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -610,13 +768,14 @@ mod tests {
     }
 
     #[test]
-    fn iter_cached() {
+    fn iter() {
         let mut world = World::new();
 
         let mut set = BTreeSet::new();
 
         for i in 0..100_u32 {
             let e = world.spawn();
+
             world.insert(e, C1(i.pow(2)));
 
             if i % 2 == 0 {
@@ -641,8 +800,39 @@ mod tests {
         world.send(E1);
     }
 
+    #[cfg(feature = "rayon")]
     #[test]
-    fn iter_cached_empty() {
+    fn par_iter() {
+        use rayon::prelude::*;
+
+        let mut world = World::new();
+
+        const N: u32 = 100;
+
+        for i in 0..N {
+            let e = world.spawn();
+
+            world.insert(e, C1(i));
+
+            if i % 2 == 0 {
+                world.insert(e, C2(i));
+            }
+
+            if i % 3 == 0 {
+                world.insert(e, C3(i));
+            }
+        }
+
+        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+            let sum = f.par_iter().map(|c| c.0).sum::<u32>();
+            assert_eq!(sum, N * (N - 1) / 2);
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn iter_empty() {
         let mut world = World::new();
 
         world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
@@ -655,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn iter_cached_len() {
+    fn iter_len() {
         let mut world = World::new();
 
         let count = 100;
