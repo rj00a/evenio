@@ -31,6 +31,9 @@ pub mod system;
 pub mod tutorial;
 pub mod world;
 
+#[cfg(feature = "rayon")]
+pub use rayon;
+
 /// For macros only.
 #[doc(hidden)]
 pub mod __private {

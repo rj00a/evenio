@@ -7,7 +7,6 @@ use core::any::{self, TypeId};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem;
-use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::{self, NonNull};
 
 use crate::archetype::Archetypes;
@@ -993,12 +992,6 @@ impl Drop for World {
     }
 }
 
-unsafe impl Send for World {}
-unsafe impl Sync for World {}
-
-impl UnwindSafe for World {}
-impl RefUnwindSafe for World {}
-
 /// Used for queueing events. Passed to the closure given in [`send_many`].
 ///
 /// [`send_many`]: World::send_many
@@ -1121,6 +1114,7 @@ impl<'a> UnsafeWorldCell<'a> {
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
     use std::panic;
 
     use crate::prelude::*;
@@ -1229,5 +1223,12 @@ mod tests {
         assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
         assert_eq!(Arc::strong_count(&arc), 1);
+    }
+
+    /// Asserts that `World` has the expected auto trait implementations.
+    fn _assert_auto_trait_impls()
+    where
+        World: Send + Sync + UnwindSafe + RefUnwindSafe,
+    {
     }
 }

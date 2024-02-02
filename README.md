@@ -16,7 +16,7 @@ The control flow of the entire program is then defined by the flow of events bet
 - The interface to the library does not rely on Rust's type system. `evenio` should also be usable in dynamic contexts such as scripting languages or plugins.
 - A small set of dependencies and `no_std` support.
 
-Features such as intra-system parallelism and event batching are planned but not yet implemented.
+Features such as inter-system parallelism and event batching are planned but not yet implemented.
 
 > **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).**
 
@@ -81,3 +81,6 @@ fn update_positions_system(_: Receiver<Tick>, entities: Fetcher<(&mut Position, 
 ## Feature Flags
 - `std` (_enabled by default_): Enables support for the standard library.
   Without this, `evenio` depends only on `core` and `alloc`.
+- `rayon`: Adds parallel iterator support for `Fetcher`. Uses the [Rayon] library.
+
+[Rayon]: https://github.com/rayon-rs/rayon

@@ -229,6 +229,7 @@ where
 }
 
 /// An iterator over the items in a [`BitSet`].
+#[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,

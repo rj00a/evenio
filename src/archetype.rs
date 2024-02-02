@@ -176,6 +176,9 @@ impl Archetypes {
 
     /// Traverses one edge of the archetype graph in the insertion direction.
     /// Returns the destination archetype.
+    ///
+    /// If the archetype with the added component does not exist, then it is
+    /// created. Otherwise, the existing archetype is returned.
     pub(crate) unsafe fn traverse_insert(
         &mut self,
         src_arch_idx: ArchetypeIdx,
@@ -243,6 +246,9 @@ impl Archetypes {
 
     /// Traverses one edge of the archetype graph in the remove direction.
     /// Returns the destination archetype.
+    ///
+    /// If the archetype with the removed component does not exist, then it is
+    /// created. Otherwise, the existing archetype is returned.
     pub(crate) unsafe fn traverse_remove(
         &mut self,
         src_arch_idx: ArchetypeIdx,
@@ -598,7 +604,9 @@ impl Archetype {
             .expr
             .eval(|idx| self.column_of(idx).is_some())
         {
-            info.system_mut().refresh_archetype(self);
+            if self.entity_count() > 0 {
+                info.system_mut().refresh_archetype(self);
+            }
 
             self.refresh_listeners.insert(info.ptr());
         }
@@ -679,6 +687,9 @@ impl Archetype {
             || self.entity_ids.capacity() == self.entity_ids.len()
     }
 }
+
+unsafe impl Send for Archetype {}
+unsafe impl Sync for Archetype {}
 
 /// All of the component data for a single component type in an [`Archetype`].
 #[derive(Debug)]
