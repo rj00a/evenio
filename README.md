@@ -16,7 +16,7 @@ The control flow of the entire program is then defined by the flow of events bet
 - The interface to the library does not rely on Rust's type system. `evenio` should also be usable in dynamic contexts such as scripting languages or plugins.
 - A small set of dependencies and `no_std` support.
 
-Features such as intra-system parallelism and event batching are planned but not yet implemented.
+Features such as inter-system parallelism and event batching are planned but not yet implemented.
 
 > **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).**
 

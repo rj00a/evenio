@@ -9,7 +9,7 @@ keywords = ["game", "ecs"]
 categories = ["data-structures", "no-std", "game-development"]
 
 [features]
-default = ["std"]
+default = ["std", "rayon"]
 std = ["dep:ahash"]
 rayon = ["dep:rayon"]
 

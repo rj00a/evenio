@@ -139,7 +139,6 @@ impl<Q: Query> FetcherState<Q> {
             row: ArchetypeRow(0),
             len: first_arch_len,
             archetypes,
-            _marker: PhantomData,
         }
     }
 
@@ -152,7 +151,6 @@ impl<Q: Query> FetcherState<Q> {
             arch_states: self.map.values(),
             arch_indices: self.map.keys(),
             archetypes,
-            _marker: PhantomData,
         }
     }
 
@@ -165,7 +163,6 @@ impl<Q: Query> FetcherState<Q> {
             arch_states: self.map.values(),
             arch_indices: self.map.keys(),
             archetypes,
-            _marker: PhantomData,
         }
     }
 
@@ -486,8 +483,6 @@ pub struct Iter<'a, Q: Query> {
     /// Number of entities in the current archetype.
     len: u32,
     archetypes: &'a Archetypes,
-    // Variance and auto traits should be inherited from the query item.
-    _marker: PhantomData<Q::Item<'a>>,
 }
 
 impl<'a, Q: Query> Iterator for Iter<'a, Q> {
@@ -561,7 +556,6 @@ impl<'a, Q: ReadOnlyQuery> Clone for Iter<'a, Q> {
             row: self.row,
             len: self.len,
             archetypes: self.archetypes,
-            _marker: self._marker,
         }
     }
 }
@@ -579,19 +573,10 @@ impl<Q: Query> fmt::Debug for Iter<'_, Q> {
     }
 }
 
-unsafe impl<'a, Q> Send for Iter<'a, Q>
-where
-    Q: Query,
-    Q::Item<'a>: Send,
-{
-}
-
-unsafe impl<'a, Q> Sync for Iter<'a, Q>
-where
-    Q: Query,
-    Q::Item<'a>: Sync,
-{
-}
+// SAFETY: `Iter` iterates over component data only, which is always `Send` and
+// `Sync`.
+unsafe impl<Q: Query> Send for Iter<'_, Q> {}
+unsafe impl<Q: Query> Sync for Iter<'_, Q> {}
 
 #[cfg(feature = "rayon")]
 pub use rayon_impl::*;
@@ -611,7 +596,6 @@ mod rayon_impl {
         pub(super) arch_states: &'a [Q::ArchState],
         pub(super) arch_indices: &'a [ArchetypeIdx],
         pub(super) archetypes: &'a Archetypes,
-        pub(super) _marker: PhantomData<Q::Item<'a>>,
     }
 
     impl<Q: ReadOnlyQuery> Clone for ParIter<'_, Q> {
@@ -620,7 +604,6 @@ mod rayon_impl {
                 arch_states: self.arch_states,
                 arch_indices: self.arch_indices,
                 archetypes: self.archetypes,
-                _marker: PhantomData,
             }
         }
     }
@@ -732,7 +715,7 @@ mod tests {
     struct C3(u32);
 
     #[test]
-    fn random_access_cached() {
+    fn random_access() {
         let mut world = World::new();
 
         let e = world.spawn();
