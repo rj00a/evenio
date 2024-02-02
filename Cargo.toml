@@ -1,6 +1,6 @@
 [package]
 name = "evenio"
-version = "0.2.0"
+version = "0.2.1"
 description = "An event-driven entity component system"
 edition.workspace = true
 license.workspace = true
@@ -9,14 +9,14 @@ keywords = ["game", "ecs"]
 categories = ["data-structures", "no-std", "game-development"]
 
 [features]
-default = ["std", "rayon"]
+default = ["std"]
 std = ["dep:ahash"]
 rayon = ["dep:rayon"]
 
 [dependencies]
 ahash = { version = "0.8.7", optional = true }
 bumpalo = "3.14.0"
-evenio_macros = { path = "evenio_macros", version = "0.2.0" }
+evenio_macros = { path = "evenio_macros", version = "0.2.1" }
 memoffset = "0.9.0"
 rayon = { version = "1.8.1", optional = true }
 slab = "0.4.9"
