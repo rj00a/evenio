@@ -81,3 +81,6 @@ fn update_positions_system(_: Receiver<Tick>, entities: Fetcher<(&mut Position, 
 ## Feature Flags
 - `std` (_enabled by default_): Enables support for the standard library.
   Without this, `evenio` depends only on `core` and `alloc`.
+- `rayon`: Adds parallel iterator support for `Fetcher`. Uses the [Rayon] library.
+
+[Rayon]: https://github.com/rayon-rs/rayon
