@@ -741,7 +741,8 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
 
 unsafe impl<T: ?Sized> ReadOnlyQuery for PhantomData<T> {}
 
-/// Transparent wrapper around a [`NonNull`]. This implements [`Send`] and [`Sync`] unconditionally.
+/// Transparent wrapper around a [`NonNull`]. This implements [`Send`] and
+/// [`Sync`] unconditionally.
 #[doc(hidden)]
 #[repr(transparent)]
 pub struct ColumnPtr<T>(pub NonNull<T>);
