@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 0.2.0 - 2024-02-2
 
 - Added Rayon parallel iterator for `Fetcher`, available behind the `rayon` feature flag.
 - Fixed archetype refresh bugs and changed semantics of `refresh_archetype`.
