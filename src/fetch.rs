@@ -800,7 +800,10 @@ mod tests {
         world.send(E1);
     }
 
-    #[cfg(feature = "rayon")]
+    #[cfg(all(
+        feature = "rayon",
+        not(miri) // Rayon isn't working with Miri.
+    ))]
     #[test]
     fn par_iter() {
         use rayon::prelude::*;
