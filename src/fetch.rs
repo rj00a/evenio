@@ -782,7 +782,7 @@ mod tests {
         world.send(E1);
     }
 
-    #[cfg(all(feature = "rayon"))]
+    #[cfg(feature = "rayon")]
     #[test]
     fn par_iter() {
         use rayon::prelude::*;
