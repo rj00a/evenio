@@ -10,14 +10,14 @@ categories = ["data-structures", "no-std", "game-development"]
 
 [features]
 default = ["std"]
-std = ["dep:hashbrown", "ahash/std", "ahash/runtime-rng"]
+std = ["ahash/std", "ahash/runtime-rng"]
 rayon = ["dep:rayon"]
 
 [dependencies]
 ahash = { version = "0.8.7", default-features = false }
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros", version = "0.2.1" }
-hashbrown = { version = "0.14.3", optional = true, default-features = false, features = ["inline-more"] }
+hashbrown = { version = "0.14.3", default-features = false, features = ["inline-more"] }
 memoffset = "0.9.0"
 rayon = { version = "1.8.1", optional = true }
 slab = "0.4.9"

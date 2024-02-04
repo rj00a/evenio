@@ -1,4 +1,5 @@
-use core::{any::TypeId, hash::{Hasher, BuildHasherDefault}};
+use core::any::TypeId;
+use core::hash::{BuildHasherDefault, Hasher};
 
 use ahash::AHasher;
 
@@ -12,7 +13,7 @@ pub(crate) type HashMap<K, V, S = ahash::RandomState> = hashbrown::HashMap<K, V,
 pub(crate) type Entry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
 
 #[cfg(not(feature = "std"))]
-pub(crate) type Entry<'a, K, V> = hashbrown::hash_map::Entry<'a, K, V, ahash::RandomState>;
+pub(crate) type Entry<'a, K, V, S = ahash::RandomState> = hashbrown::hash_map::Entry<'a, K, V, S>;
 
 /// Map type optimized for [`TypeId`] keys.
 pub(crate) type TypeIdMap<V> = HashMap<TypeId, V, BuildHasherDefault<TypeIdHasher>>;
