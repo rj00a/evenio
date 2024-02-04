@@ -1,42 +1,32 @@
-//! Contains the general-purpose map type [`Map`] and specialized map for
-//! [`TypeId`] keys [`TypeIdMap`].
-//!
-//! These maps are hash maps when the `std` feature is enabled and fall back to
-//! `BTreeMap` otherwise.
+use core::{any::TypeId, hash::{Hasher, BuildHasherDefault}};
 
-use core::any::TypeId;
+use ahash::AHasher;
 
 #[cfg(feature = "std")]
-pub(crate) type Map<K, V> = ahash::AHashMap<K, V>;
+pub(crate) type HashMap<K, V, S = ahash::RandomState> = std::collections::HashMap<K, V, S>;
 
 #[cfg(not(feature = "std"))]
-pub(crate) type Map<K, V> = alloc::collections::BTreeMap<K, V>;
+pub(crate) type HashMap<K, V, S = ahash::RandomState> = hashbrown::HashMap<K, V, S>;
 
 #[cfg(feature = "std")]
 pub(crate) type Entry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
 
 #[cfg(not(feature = "std"))]
-pub(crate) type Entry<'a, K, V> = alloc::collections::btree_map::Entry<'a, K, V>;
+pub(crate) type Entry<'a, K, V> = hashbrown::hash_map::Entry<'a, K, V, ahash::RandomState>;
 
-#[cfg(feature = "std")]
-pub(crate) type TypeIdMap<V> =
-    std::collections::HashMap<TypeId, V, core::hash::BuildHasherDefault<TypeIdHasher>>;
-
-#[cfg(not(feature = "std"))]
-pub(crate) type TypeIdMap<V> = alloc::collections::BTreeMap<TypeId, V>;
+/// Map type optimized for [`TypeId`] keys.
+pub(crate) type TypeIdMap<V> = HashMap<TypeId, V, BuildHasherDefault<TypeIdHasher>>;
 
 /// A hasher optimized for hashing a single [`TypeId`].
 ///
 /// `TypeId` is already thoroughly hashed, so there's no reason to hash it
 /// again. Just leave the bits unchanged.
-#[cfg(feature = "std")]
 #[derive(Default)]
 pub(crate) struct TypeIdHasher {
     hash: u64,
 }
 
-#[cfg(feature = "std")]
-impl core::hash::Hasher for TypeIdHasher {
+impl Hasher for TypeIdHasher {
     fn write_u64(&mut self, n: u64) {
         debug_assert_eq!(self.hash, 0, "value was already hashed");
 
@@ -56,7 +46,7 @@ impl core::hash::Hasher for TypeIdHasher {
         // This will only be called if TypeId is neither u64 nor u128, which is not
         // anticipated. In that case we'll just fall back to using a different
         // hash implementation.
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = AHasher::default();
 
         hasher.write(bytes);
         self.hash = hasher.finish();

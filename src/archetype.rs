@@ -16,7 +16,7 @@ use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
-use crate::map::{Entry, Map};
+use crate::map::{Entry, HashMap};
 use crate::prelude::World;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
@@ -42,14 +42,14 @@ use crate::world::UnsafeWorldCell;
 #[derive(Debug)]
 pub struct Archetypes {
     archetypes: Slab<Archetype>,
-    by_components: Map<Box<[ComponentIdx]>, ArchetypeIdx>,
+    by_components: HashMap<Box<[ComponentIdx]>, ArchetypeIdx>,
 }
 
 impl Archetypes {
     pub(crate) fn new() -> Self {
         Self {
             archetypes: Slab::from_iter([(0, Archetype::empty())]),
-            by_components: Map::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
+            by_components: HashMap::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
         }
     }
 
