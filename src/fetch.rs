@@ -297,6 +297,7 @@ impl fmt::Display for GetError {
 }
 
 #[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for GetError {}
 
 unsafe impl<Q> SystemParam for Fetcher<'_, Q>
@@ -461,6 +462,7 @@ impl fmt::Display for SingleError {
 }
 
 #[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for SingleError {}
 
 /// Iterator over entities matching the query `Q`.
@@ -578,6 +580,7 @@ unsafe impl<Q: Query> Send for Iter<'_, Q> {}
 unsafe impl<Q: Query> Sync for Iter<'_, Q> {}
 
 #[cfg(feature = "rayon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 pub use rayon_impl::*;
 
 #[cfg(feature = "rayon")]
@@ -646,6 +649,7 @@ mod rayon_impl {
         }
     }
 
+    #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
     impl<'a, Q> IntoParallelIterator for Fetcher<'a, Q>
     where
         Q: Query,
@@ -660,6 +664,7 @@ mod rayon_impl {
         }
     }
 
+    #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
     impl<'a, Q> IntoParallelIterator for &'a Fetcher<'_, Q>
     where
         Q: ReadOnlyQuery,
@@ -674,6 +679,7 @@ mod rayon_impl {
         }
     }
 
+    #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
     impl<'a, Q: Query> IntoParallelIterator for &'a mut Fetcher<'_, Q>
     where
         Q: Query,

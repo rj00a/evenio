@@ -2,6 +2,8 @@
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![warn(clippy::std_instead_of_alloc, clippy::std_instead_of_core)]
 #![allow(clippy::len_without_is_empty, clippy::let_unit_value)]
+// Run locally with `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --open`
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 extern crate alloc;
 
@@ -32,6 +34,7 @@ pub mod tutorial;
 pub mod world;
 
 #[cfg(feature = "rayon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 pub use rayon;
 
 /// For macros only.

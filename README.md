@@ -13,8 +13,9 @@ The control flow of the entire program is then defined by the flow of events bet
 - Structural changes to the world (such as entity despawning, component additions/removals, etc.) are mediated by events, allowing systems to hook into their occurrence.
 - _Targeted events_ enable systems to efficiently filter events based on queries.
 - Component types, event types, and systems are identified with generational indices, allowing them to be added and removed dynamically.
-- The interface to the library does not rely on Rust's type system. `evenio` should also be usable in dynamic contexts such as scripting languages or plugins.
-- A small set of dependencies and `no_std` support.
+- Execute systems in parallel with [Rayon].
+- Core of the library does not depend on Rust's type system.
+- `no_std` support.
 
 Features such as inter-system parallelism and event batching are planned but not yet implemented.
 

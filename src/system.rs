@@ -733,6 +733,7 @@ impl fmt::Display for InitError {
 }
 
 #[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for InitError {}
 
 /// The priority of a system relative to other systems that handle the same
@@ -1196,6 +1197,7 @@ unsafe impl SystemParam for &'_ SystemInfo {
 }
 
 #[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
     type State = P::State;
 
@@ -1224,6 +1226,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
 }
 
 #[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
     type State = P::State;
 
