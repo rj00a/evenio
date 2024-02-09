@@ -55,6 +55,9 @@ pub fn main() {
     world.insert(e, Position { x: 0.0, y: 0.0 });
     world.insert(e, Velocity { x: 1.0, y: 0.4 });
 
+    let pos = world.get_component::<Position>(e).unwrap();
+    println!("Starting position of the entity: ({}, {})", pos.x, pos.y);
+
     // Add our system to the world.
     world.add_system(update_positions_system);
 
