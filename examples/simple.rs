@@ -45,9 +45,11 @@ pub fn main() {
     println!("Final position of the entity: ({}, {})", pos.x, pos.y);
 }
 
-// The `Receiver<Tick>` parameter tells our system to listen for the `Tick` event.
+// The `Receiver<Tick>` parameter tells our system to listen for the `Tick`
+// event.
 fn update_positions_system(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Velocity)>) {
-    // Loop over all entities with both the `Position` and `Velocity` components, and update their positions.
+    // Loop over all entities with both the `Position` and `Velocity` components,
+    // and update their positions.
     for (pos, vel) in entities {
         pos.x += vel.x;
         pos.y += vel.y;
