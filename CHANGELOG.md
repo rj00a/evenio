@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.2.2 - 2024-02-8
+
+- Update documentation
+
 ## 0.2.1 - 2024-02-2
 
 - Added Rayon parallel iterator for `Fetcher`, available behind the `rayon` feature flag.

@@ -19,7 +19,7 @@ The control flow of the entire program is then defined by the flow of events bet
 
 Features such as inter-system parallelism and event batching are planned but not yet implemented.
 
-> **For a full step-by-step introduction, please read the [tutorial book 📚](tutorial).**
+> **For a full step-by-step introduction, please read the [tutorial book 📚](https://docs.rs/evenio/latest/evenio/tutorial/).**
 
 ## Example
 

@@ -1,6 +1,6 @@
 [package]
 name = "evenio"
-version = "0.2.1"
+version.workspace = true
 description = "An event-driven entity component system"
 edition.workspace = true
 license.workspace = true
@@ -57,11 +57,9 @@ harness = false
 
 #### WORKSPACE ####
 
-[workspace]
-members = ["evenio_macros"]
-
 [workspace.package]
 edition = "2021"
+version = "0.2.2"
 license = "MIT"
 repository = "https://github.com/rj00a/evenio"
 

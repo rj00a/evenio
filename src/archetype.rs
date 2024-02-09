@@ -141,6 +141,7 @@ impl Archetypes {
     where
         F: FnMut(EntityId),
     {
+        // TODO: this iteration is non-deterministic.
         self.by_components.retain(|comps, &mut idx| {
             if comps.binary_search(&component_idx).is_ok() {
                 let arch = self.archetypes.remove(idx.0 as usize);
