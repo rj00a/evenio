@@ -7,11 +7,11 @@ It aims to have a small but maximally expressive set of features that are easy a
 
 ## Features
 
-- In addition to the usual Entities, Components, and Systems, `evenio` introduces _events_ as a first-class citizen.
-Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as _event handlers_.
+- In addition to the usual Entities, Components, and Systems, `evenio` introduces events as a first-class citizen.
+Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as event handlers.
 The control flow of the entire program is then defined by the flow of events between systems.
 - Structural changes to the world (such as entity despawning, component additions/removals, etc.) are mediated by events, allowing systems to hook into their occurrence.
-- _Targeted events_ enable systems to efficiently filter events based on queries.
+- Targeted events enable systems to efficiently filter events based on queries.
 - Component types, event types, and systems are identified with generational indices, allowing them to be added and removed dynamically.
 - Execute systems in parallel with [Rayon].
 - Core of the library does not depend on Rust's type system.

@@ -1,7 +1,7 @@
 //! Utilities for runtime and compile-time assertions.
 
-use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::slice::SliceIndex;
 use core::{fmt, mem};
 
 use slab::Slab;
@@ -16,7 +16,7 @@ const _: () = assert!(
 
 /// Extension trait for checked array indexing with checks removed in release
 /// mode.
-pub(crate) trait GetDebugChecked {
+pub(crate) trait GetDebugChecked<Idx> {
     type Output: ?Sized;
 
     /// Gets a reference to the element at the given index.
@@ -28,7 +28,7 @@ pub(crate) trait GetDebugChecked {
     ///
     /// - `idx` must be in bounds.
     #[track_caller]
-    unsafe fn get_debug_checked(&self, idx: usize) -> &Self::Output;
+    unsafe fn get_debug_checked(&self, idx: Idx) -> &Self::Output;
     /// Gets a mutable reference to the element at the given index.
     ///
     /// If `idx` is not in bounds, a panic occurs in debug mode and Undefined
@@ -38,14 +38,16 @@ pub(crate) trait GetDebugChecked {
     ///
     /// - `idx` must be in bounds.
     #[track_caller]
-    unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut Self::Output;
+    unsafe fn get_debug_checked_mut(&mut self, idx: Idx) -> &mut Self::Output;
 }
 
-impl<T> GetDebugChecked for [T] {
-    type Output = T;
+impl<T, I> GetDebugChecked<I> for [T]
+where
+    I: SliceIndex<[T]>,
+{
+    type Output = I::Output;
 
-    #[inline]
-    unsafe fn get_debug_checked(&self, idx: usize) -> &Self::Output {
+    unsafe fn get_debug_checked(&self, idx: I) -> &Self::Output {
         #[cfg(debug_assertions)]
         return &self[idx];
 
@@ -53,8 +55,7 @@ impl<T> GetDebugChecked for [T] {
         return self.get_unchecked(idx);
     }
 
-    #[inline]
-    unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut Self::Output {
+    unsafe fn get_debug_checked_mut(&mut self, idx: I) -> &mut Self::Output {
         #[cfg(debug_assertions)]
         return &mut self[idx];
 
@@ -63,22 +64,8 @@ impl<T> GetDebugChecked for [T] {
     }
 }
 
-impl<T> GetDebugChecked for Vec<T> {
-    type Output = T;
-
-    #[inline]
-    unsafe fn get_debug_checked(&self, idx: usize) -> &Self::Output {
-        self.as_slice().get_debug_checked(idx)
-    }
-
-    #[inline]
-    unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut Self::Output {
-        self.as_mut_slice().get_debug_checked_mut(idx)
-    }
-}
-
 // Don't use `Slab::get_unchecked` because there's a panicking branch. https://github.com/tokio-rs/slab/pull/74
-impl<T> GetDebugChecked for Slab<T> {
+impl<T> GetDebugChecked<usize> for Slab<T> {
     type Output = T;
 
     #[inline]

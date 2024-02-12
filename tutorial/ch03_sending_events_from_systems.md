@@ -36,20 +36,34 @@ got C!
 In the parameter `Sender<(B, C)>`, the `(B, C)` is the set of events the sender is allowed to send.
 Attempting to send an event that is not in this set will fail.
 
-Note that [`Sender::send`] does not immediately send the event. It is instead added to an _event queue_, which is flushed once the system returns.
-
-Finally, note that events are evaluated recursively – events sent by systems will finish broadcasting before the outer event has finished broadcasting.
-This is similar to a call stack or pre-order tree traversal. Consider the program:
+Note that [`Sender::send`] does not immediately send events, but rather adds them to the front of the **event queue** in reverse order.
+The next event in the queue begins broadcasting once all handlers for the current event have finished.
 
 ```rust
 use evenio::prelude::*;
 
 #[derive(Event)]
 struct A;
-#[derive(Event)]
-struct B;
-#[derive(Event)]
-struct C;
+#[derive(Event, Debug)]
+struct B(i32);
+#[derive(Event, Debug)]
+struct C(i32);
+
+fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
+    sender.send(B(0));
+    sender.send(B(3));
+    println!("got A, sending B twice!");
+}
+
+fn get_b_send_c(r: Receiver<B>, mut sender: Sender<C>) {
+    sender.send(C(r.event.0 + 1));
+    sender.send(C(r.event.0 + 2));
+    println!("got {:?}, sending C twice!", r.event);
+}
+
+fn get_c(r: Receiver<C>) {
+    println!("got {:?}!", r.event);
+}
 
 let mut world = World::new();
 
@@ -59,50 +73,18 @@ world.add_system(get_c);
 
 println!("sending A!");
 world.send(A);
-
-fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
-    sender.send(B);
-    sender.send(B);
-    println!("got A, sending B twice!");
-}
-
-fn get_b_send_c(_: Receiver<B>, mut sender: Sender<C>) {
-    sender.send(C);
-    sender.send(C);
-    println!("got B, sending C twice!");
-}
-
-fn get_c(_: Receiver<C>) {
-    println!("got C!");
-}
 ```
 
 Output:
 ```txt
 sending A!
 got A, sending B twice!
-got B, sending C twice!
-got C!
-got C!
-got B, sending C twice!
-got C!
-got C!
-```
-
-The control flow of the above program can be visualized with the following diagram:
-
-```txt
-        ┌─┐
-    ┌───┤A├───┐
-    │   └─┘   │
-    │         │
-   ┌▼┐       ┌▼┐
- ┌─┤B├─┐   ┌─┤B├─┐
- │ └─┘ │   │ └─┘ │
- │     │   │     │
-┌▼┐   ┌▼┐ ┌▼┐   ┌▼┐
-│C│   │C│ │C│   │C│
-└─┘   └─┘ └─┘   └─┘
+got B(0), sending C twice!
+got C(1)!
+got C(2)!
+got B(3), sending C twice!
+got C(4)!
+got C(5)!
 ```
 
 [`World::send`]: crate::world::World::send
