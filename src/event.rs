@@ -19,7 +19,7 @@ use memoffset::offset_of;
 use crate::access::Access;
 use crate::archetype::Archetype;
 use crate::assert::{
-    AssertMutable, AssertTargetedEvent, AssertUntargetedEvent, GetDebugChecked, UnwrapDebugChecked
+    AssertMutable, AssertTargetedEvent, AssertUntargetedEvent, GetDebugChecked, UnwrapDebugChecked,
 };
 use crate::component::ComponentIdx;
 use crate::drop::DropFn;
@@ -637,9 +637,9 @@ impl EventQueue {
     }
 
     /// Reverses elements in the range `from..`.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// `from` must be in bounds.
     pub(crate) unsafe fn reverse_from(&mut self, from: usize) {
         self.items.get_debug_checked_mut(from..).reverse();
@@ -731,7 +731,10 @@ impl<'a> EventPtr<'a> {
     #[track_caller]
     pub fn as_ptr(self) -> NonNull<u8> {
         let is_owned = unsafe { *self.ownership_flag.as_ptr() };
-        debug_assert!(!is_owned, "`as_ptr` cannot be called after the event has been marked as owned");
+        debug_assert!(
+            !is_owned,
+            "`as_ptr` cannot be called after the event has been marked as owned"
+        );
 
         self.event
     }
@@ -743,7 +746,7 @@ impl<'a> EventPtr<'a> {
     ///
     /// - Must have permission to access the event mutably.
     /// - Once the event is set as owned, [`as_ptr`] cannot be called.
-    /// 
+    ///
     /// [`as_ptr`]: Self::as_ptr
     pub unsafe fn set_owned(self) {
         *self.ownership_flag.as_ptr() = true;
@@ -1600,13 +1603,13 @@ mod tests {
         }
 
         fn get_b_send_c(r: Receiver<B>, mut sender: Sender<C>, res: Single<&mut Result>) {
-            res.0.0.push(r.event.0);
+            res.0 .0.push(r.event.0);
             sender.send(C(r.event.0 + 1));
             sender.send(C(r.event.0 + 2));
         }
 
         fn get_c(r: Receiver<C>, res: Single<&mut Result>) {
-            res.0.0.push(r.event.0);
+            res.0 .0.push(r.event.0);
         }
 
         let mut world = World::new();
