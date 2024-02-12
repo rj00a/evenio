@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+- Fixed a bug in event propagation.
+- The behavior of the event queue has changed. The next event in the queue is handled only once the current event has finished broadcasting.
+- Changed `EventPtr` interface and relaxed `Send` and `Sync` bounds for `EventMut`.
+
 ## 0.2.2 - 2024-02-8
 
 - Update documentation

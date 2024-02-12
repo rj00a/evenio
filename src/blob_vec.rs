@@ -27,9 +27,6 @@ impl BlobVec {
     /// - `drop` must be safe to call with elements of this `BlobVec` as
     ///   described by [`DropFn`]'s documentation.
     pub(crate) unsafe fn new(layout: Layout, drop: DropFn) -> Self {
-        // // SAFETY: `Layout` guarantees alignment is non-zero.
-        // let data = NonNull::new(layout.align() as *mut u8).unwrap_debug_checked();
-
         Self {
             elem_layout: pad_to_align(&layout),
             len: 0,

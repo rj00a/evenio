@@ -616,12 +616,12 @@ impl EventQueue {
         }
     }
 
-    pub(crate) unsafe fn get_debug_checked_mut(&mut self, idx: usize) -> &mut EventQueueItem {
-        self.items.get_debug_checked_mut(idx)
+    pub(crate) fn pop_front(&mut self) -> Option<EventQueueItem> {
+        self.items.pop()
     }
 
     #[inline]
-    pub(crate) unsafe fn push<E: Event>(&mut self, event: E, idx: u32) {
+    pub(crate) unsafe fn push_front<E: Event>(&mut self, event: E, idx: u32) {
         let meta = if E::IS_TARGETED {
             EventMeta::Targeted {
                 idx: TargetedEventIdx(idx),
@@ -633,8 +633,17 @@ impl EventQueue {
             }
         };
 
-        let event = self.bump.alloc(event) as *mut E as *mut u8;
+        let event = NonNull::from(self.bump.alloc(event)).cast::<u8>();
         self.items.push(EventQueueItem { meta, event });
+    }
+
+    /// Reverses elements in the range `from..`.
+    ///
+    /// # Safety
+    ///
+    /// `from` must be in bounds.
+    pub(crate) unsafe fn reverse_from(&mut self, from: usize) {
+        self.items.get_debug_checked_mut(from..).reverse();
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> {
@@ -656,10 +665,6 @@ impl EventQueue {
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    pub(crate) unsafe fn set_len(&mut self, new_len: usize) {
-        self.items.set_len(new_len)
-    }
 }
 
 // SAFETY: The bump allocator is only accessed behind an exclusive reference to
@@ -674,7 +679,7 @@ pub(crate) struct EventQueueItem {
     pub(crate) meta: EventMeta,
     /// Type-erased pointer to this event. When null, ownership of the event
     /// has been transferred and no destructor needs to run.
-    pub(crate) event: *mut u8,
+    pub(crate) event: NonNull<u8>,
 }
 
 // SAFETY: Events are always Send + Sync.
@@ -705,66 +710,47 @@ impl EventMeta {
 
 /// Type-erased pointer to an event. Passed to systems in [`System::run`].
 ///
-/// This is essentially a reference-to-pointer-to-event where the
-/// pointer-to-event can be set to null.
-///
 /// [`System::run`]: crate::system::System::run
 #[derive(Clone, Copy, Debug)]
 pub struct EventPtr<'a> {
-    ptr: NonNull<*mut u8>,
+    event: NonNull<u8>,
+    // `false` when borrowed, `true` when taken.
+    ownership_flag: NonNull<bool>,
     _marker: PhantomData<&'a mut u8>,
 }
 
 impl<'a> EventPtr<'a> {
-    pub(crate) fn new(ptr: NonNull<*mut u8>) -> Self {
+    pub(crate) fn new(event: NonNull<u8>, ownership_flag: NonNull<bool>) -> Self {
         Self {
-            ptr,
+            event,
+            ownership_flag,
             _marker: PhantomData,
         }
     }
 
-    /// Reinterprets the pointer as a reference to `E`.
-    ///
-    /// # Safety
-    ///
-    /// - Must have permission to access the event immutably.
-    /// - Event data must be safe to reinterpret as an instance of `E`. This
-    ///   implies that layouts of `E` and the event must match.
-    pub unsafe fn as_event<E: Event>(self) -> &'a E {
-        &*self.ptr.as_ptr().read().cast::<E>()
+    /// Returns the underlying pointer to the type-erased event.
+    #[track_caller]
+    pub fn as_ptr(self) -> NonNull<u8> {
+        let is_owned = unsafe { *self.ownership_flag.as_ptr() };
+        debug_assert!(
+            !is_owned,
+            "`as_ptr` cannot be called after the event has been marked as owned"
+        );
+
+        self.event
     }
 
-    /// Reinterprets the pointer as a mutable reference to `E`.
+    /// Marks the event as owned. It is then the system's responsibility to drop
+    /// the event.
     ///
     /// # Safety
     ///
     /// - Must have permission to access the event mutably.
-    /// - Event data must be safe to reinterpret as an instance of `E`. This
-    ///   implies that layouts of `E` and the event must match.
-    pub unsafe fn as_event_mut<E: Event>(self) -> EventMut<'a, E> {
-        EventMut {
-            ptr: unsafe { &mut *(self.ptr.as_ptr() as *mut *mut E) },
-            _marker: PhantomData,
-        }
-    }
-
-    /// Gets a reference to the type-erased event pointer.
+    /// - Once the event is set as owned, [`as_ptr`] cannot be called.
     ///
-    /// # Safety
-    ///
-    /// - Must have permission to access the event immutably.
-    pub unsafe fn as_ptr(self) -> &'a *const u8 {
-        &*(self.ptr.as_ptr() as *const *const u8)
-    }
-
-    /// Gets a mutable reference to the type-erased event pointer. The pointer
-    /// can be set to null to take ownership of the event.
-    ///
-    /// # Safety
-    ///
-    /// - Must have permission to access the event mutably.
-    pub unsafe fn as_ptr_mut(self) -> &'a mut *mut u8 {
-        &mut *self.ptr.as_ptr()
+    /// [`as_ptr`]: Self::as_ptr
+    pub unsafe fn set_owned(self) {
+        *self.ownership_flag.as_ptr() = true;
     }
 }
 
@@ -773,11 +759,18 @@ impl<'a> EventPtr<'a> {
 /// To get at `E`, use the [`Deref`] and [`DerefMut`] implementations or
 /// [`take`](Self::take).
 pub struct EventMut<'a, E> {
-    ptr: &'a mut *mut E,
+    ptr: EventPtr<'a>,
     _marker: PhantomData<&'a mut E>,
 }
 
-impl<E> EventMut<'_, E> {
+impl<'a, E> EventMut<'a, E> {
+    fn new(ptr: EventPtr<'a>) -> Self {
+        Self {
+            ptr,
+            _marker: PhantomData,
+        }
+    }
+
     /// Takes ownership of the event. Any other systems listening for this event
     /// will not run.
     ///
@@ -802,25 +795,26 @@ impl<E> EventMut<'_, E> {
     /// // ownership of the event before the second could run.
     /// ```
     pub fn take(this: Self) -> E {
-        let res = unsafe { this.ptr.read() };
-
-        *this.ptr = core::ptr::null_mut();
-
+        let res = unsafe { this.ptr.as_ptr().as_ptr().cast::<E>().read() };
+        unsafe { this.ptr.set_owned() };
         res
     }
 }
+
+unsafe impl<E: Send> Send for EventMut<'_, E> {}
+unsafe impl<E: Sync> Sync for EventMut<'_, E> {}
 
 impl<E> Deref for EventMut<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &**self.ptr }
+        unsafe { self.ptr.as_ptr().cast::<E>().as_ref() }
     }
 }
 
 impl<E> DerefMut for EventMut<'_, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut **self.ptr }
+        unsafe { self.ptr.as_ptr().cast::<E>().as_mut() }
     }
 }
 
@@ -881,7 +875,7 @@ unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
             // SAFETY:
             // - We have permission to access the event immutably.
             // - System was configured to listen for `E`.
-            event: event_ptr.as_event::<E>(),
+            event: event_ptr.as_ptr().cast().as_ref(),
             query: (),
         }
     }
@@ -929,9 +923,8 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        let event = event_ptr.as_event::<E>();
-
         assert!(E::IS_TARGETED);
+        let event = event_ptr.as_ptr().cast::<E>().as_ref();
         let target = event.target();
 
         // SAFETY: The target entity is guaranteed to match the query.
@@ -998,7 +991,7 @@ unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         ReceiverMut {
-            event: event_ptr.as_event_mut(),
+            event: EventMut::new(event_ptr),
             query: (),
         }
     }
@@ -1047,9 +1040,9 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> 
         event_ptr: EventPtr<'a>,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        let event = event_ptr.as_event_mut::<E>();
-
         assert!(E::IS_TARGETED);
+
+        let event = EventMut::<E>::new(event_ptr);
         let target = event.target();
 
         // SAFETY: The target entity is guaranteed to match the query.
@@ -1567,5 +1560,73 @@ mod tests {
 
         assert!(world.events().contains(EventId::SPAWN_QUEUED));
         assert!(world.remove_event(EventId::SPAWN_QUEUED).is_none());
+    }
+
+    #[test]
+    fn change_entity_during_broadcast() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E(#[event(target)] EntityId);
+
+        #[derive(Component)]
+        struct C(String);
+
+        world.add_system(|r: Receiver<E, ()>, mut s: Sender<Remove<C>>| {
+            s.remove::<C>(r.event.0);
+        });
+
+        world.add_system(|r: Receiver<E, &mut C>| {
+            r.query.0.push_str("123");
+        });
+
+        let e = world.spawn();
+        world.insert(e, C("abc".into()));
+
+        world.send(E(e));
+    }
+
+    #[test]
+    fn event_order() {
+        #[derive(Event)]
+        struct A;
+        #[derive(Event, Debug)]
+        struct B(i32);
+        #[derive(Event, Debug)]
+        struct C(i32);
+
+        #[derive(Component)]
+        struct Result(Vec<i32>);
+
+        fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
+            sender.send(B(0));
+            sender.send(B(3));
+        }
+
+        fn get_b_send_c(r: Receiver<B>, mut sender: Sender<C>, res: Single<&mut Result>) {
+            res.0 .0.push(r.event.0);
+            sender.send(C(r.event.0 + 1));
+            sender.send(C(r.event.0 + 2));
+        }
+
+        fn get_c(r: Receiver<C>, res: Single<&mut Result>) {
+            res.0 .0.push(r.event.0);
+        }
+
+        let mut world = World::new();
+
+        let res = world.spawn();
+        world.insert(res, Result(vec![]));
+
+        world.add_system(get_a_send_b);
+        world.add_system(get_b_send_c);
+        world.add_system(get_c);
+
+        world.send(A);
+
+        assert_eq!(
+            world.get_component::<Result>(res).unwrap().0.as_slice(),
+            &[0, 1, 2, 3, 4, 5]
+        );
     }
 }
