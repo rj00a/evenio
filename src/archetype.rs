@@ -9,6 +9,7 @@ use core::cmp::Ordering;
 use core::ptr;
 use core::ptr::NonNull;
 
+use ahash::RandomState;
 use slab::Slab;
 
 use crate::assert::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
@@ -47,9 +48,12 @@ pub struct Archetypes {
 
 impl Archetypes {
     pub(crate) fn new() -> Self {
+        let mut map = HashMap::with_hasher(RandomState::new());
+        map.insert(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY);
+
         Self {
             archetypes: Slab::from_iter([(0, Archetype::empty())]),
-            by_components: HashMap::from_iter([(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY)]),
+            by_components: map,
         }
     }
 
