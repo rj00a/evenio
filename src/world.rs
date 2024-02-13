@@ -123,7 +123,9 @@ impl World {
     where
         F: FnOnce(Sender) -> R,
     {
+        let event_count = self.event_queue.len();
         let res = f(Sender { world: self });
+        unsafe { self.event_queue.reverse_from(event_count) };
 
         self.flush_event_queue();
 
