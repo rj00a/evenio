@@ -11,6 +11,7 @@ pub use evenio_macros::Component;
 use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
+use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventPtr};
 use crate::map::{Entry, TypeIdMap};
 use crate::prelude::World;
@@ -179,6 +180,7 @@ unsafe impl SystemParam for &'_ Components {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.components()

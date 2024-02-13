@@ -24,7 +24,7 @@ use crate::assert::{
 };
 use crate::component::ComponentIdx;
 use crate::drop::DropFn;
-use crate::entity::EntityId;
+use crate::entity::{EntityId, EntityLocation};
 use crate::fetch::FetcherState;
 use crate::map::{Entry, TypeIdMap};
 use crate::prelude::Component;
@@ -222,6 +222,7 @@ unsafe impl SystemParam for &'_ Events {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.events()
@@ -869,6 +870,7 @@ unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Receiver {
@@ -921,16 +923,15 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
+        target_location: EntityLocation,
+        _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         assert!(E::IS_TARGETED);
-        let event = event_ptr.as_ptr().cast::<E>().as_ref();
-        let target = event.target();
 
-        // SAFETY: The target entity is guaranteed to match the query.
-        let query = state
-            .get_mut(world.entities(), target)
-            .unwrap_debug_checked();
+        let event = event_ptr.as_ptr().cast::<E>().as_ref();
+
+        // SAFETY: Caller guarantees the target entity matches the query.
+        let query = state.get_by_location_mut(target_location);
 
         Receiver { event, query }
     }
@@ -988,6 +989,7 @@ unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         ReceiverMut {
@@ -1038,17 +1040,15 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> 
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
-        world: UnsafeWorldCell<'a>,
+        target_location: EntityLocation,
+        _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         assert!(E::IS_TARGETED);
 
         let event = EventMut::<E>::new(event_ptr);
-        let target = event.target();
 
-        // SAFETY: The target entity is guaranteed to match the query.
-        let query = state
-            .get_mut(world.entities(), target)
-            .unwrap_debug_checked();
+        // SAFETY: Caller guarantees the target entity matches the query.
+        let query = state.get_by_location_mut(target_location);
 
         ReceiverMut { event, query }
     }
@@ -1305,6 +1305,7 @@ unsafe impl<T: EventSet> SystemParam for Sender<'_, T> {
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Sender { state, world }
@@ -1378,14 +1379,14 @@ unsafe impl<E: Event> EventSet for E {
 
 macro_rules! impl_event_set_tuple {
     ($(($E:ident, $e:ident)),*) => {
-        #[allow(clippy::unused_unit)]
+        #[allow(unused_variables, clippy::unused_unit)]
         unsafe impl<$($E: EventSet),*> EventSet for ($($E,)*) {
             type EventIndices = ($($E::EventIndices,)*);
 
-            fn new_state(_world: &mut World) -> Self::EventIndices {
+            fn new_state(world: &mut World) -> Self::EventIndices {
                 (
                     $(
-                        $E::new_state(_world),
+                        $E::new_state(world),
                     )*
                 )
             }
@@ -1401,9 +1402,9 @@ macro_rules! impl_event_set_tuple {
                 None
             }
 
-            fn for_each_idx<F: FnMut(EventIdx)>(($($e,)*): &Self::EventIndices, mut _f: F) {
+            fn for_each_idx<F: FnMut(EventIdx)>(($($e,)*): &Self::EventIndices, #[allow(unused_mut)] mut f: F) {
                 $(
-                    $E::for_each_idx($e, &mut _f);
+                    $E::for_each_idx($e, &mut f);
                 )*
             }
         }
@@ -1655,5 +1656,27 @@ mod tests {
 
         let Result(values) = world.get_component_mut::<Result>(e).unwrap();
         assert_eq!(values, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn change_event_target() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E(#[event(target)] EntityId);
+
+        #[derive(Component)]
+        struct C;
+
+        world.add_system(|mut r: ReceiverMut<E, &C>| {
+            r.event.0 = EntityId::NULL;
+        });
+
+        world.add_system(|_: Receiver<E, &C>| {});
+
+        let e = world.spawn();
+        world.insert(e, C);
+
+        world.send(E(e));
     }
 }

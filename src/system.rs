@@ -20,6 +20,7 @@ use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
+use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
 use crate::map::TypeIdMap;
@@ -211,6 +212,7 @@ unsafe impl SystemParam for &'_ Systems {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.systems()
@@ -584,8 +586,14 @@ impl<S: System> System for NoTypeId<S> {
         self.0.init(world, config)
     }
 
-    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
-        self.0.run(info, event_ptr, world)
+    unsafe fn run(
+        &mut self,
+        info: &SystemInfo,
+        event_ptr: EventPtr,
+        target_location: EntityLocation,
+        world: UnsafeWorldCell,
+    ) {
+        self.0.run(info, event_ptr, target_location, world)
     }
 
     fn refresh_archetype(&mut self, arch: &Archetype) {
@@ -616,8 +624,14 @@ impl<S: System> System for Before<S> {
         res
     }
 
-    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
-        self.0.run(info, event_ptr, world)
+    unsafe fn run(
+        &mut self,
+        info: &SystemInfo,
+        event_ptr: EventPtr,
+        target_location: EntityLocation,
+        world: UnsafeWorldCell,
+    ) {
+        self.0.run(info, event_ptr, target_location, world)
     }
 
     fn refresh_archetype(&mut self, arch: &Archetype) {
@@ -648,8 +662,14 @@ impl<S: System> System for After<S> {
         res
     }
 
-    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell) {
-        self.0.run(info, event_ptr, world)
+    unsafe fn run(
+        &mut self,
+        info: &SystemInfo,
+        event_ptr: EventPtr,
+        target_location: EntityLocation,
+        world: UnsafeWorldCell,
+    ) {
+        self.0.run(info, event_ptr, target_location, world)
     }
 
     fn refresh_archetype(&mut self, arch: &Archetype) {
@@ -680,19 +700,30 @@ pub trait System: Send + Sync + 'static {
     /// Initializes the system. Returns [`InitError`] on failure.
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError>;
 
-    /// Execute the system, passing in the system's metadata, a pointer to the
-    /// received event of the configured type, and an [`UnsafeWorldCell`] with
-    /// permission to access the data described in the configuration.
+    /// Execute the system by passing in the system's metadata, a pointer to the
+    /// received event of the configured type, the entity location of the
+    /// event's target, and an [`UnsafeWorldCell`] with permission to access
+    /// the data described in the configuration.
     ///
     /// # Safety
     ///
-    /// - System must be initialized via `init`.
+    /// - System must be initialized via [`init`].
     /// - `info` must be the correct information for this system.
     /// - `event_ptr` must point to the correct type of event configured by this
-    ///   system in `init`.
+    ///   system in [`init`].
+    /// - `target_location` must be a valid location to an entity matching
+    ///   [`Config::targeted_event_expr`], unless the event is not targeted.
     /// - `world` must have permission to access all data configured by this
-    ///   system in `init`.
-    unsafe fn run(&mut self, info: &SystemInfo, event_ptr: EventPtr, world: UnsafeWorldCell);
+    ///   system in [`init`].
+    ///
+    /// [`init`]: Self::init
+    unsafe fn run(
+        &mut self,
+        info: &SystemInfo,
+        event_ptr: EventPtr,
+        target_location: EntityLocation,
+        world: UnsafeWorldCell,
+    );
 
     /// Notifies the system that an archetype it might care about had its
     /// internal state updated.
@@ -859,19 +890,21 @@ pub unsafe trait SystemParam {
     /// considered initialized.
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError>;
 
-    /// Obtain an instance of the system parameter. Called whenever the system
-    /// is called.
+    /// Obtains a new instance of the system parameter.
     ///
     /// # Safety
     ///
-    /// - `state` must be up to date and originate from `init`.
-    /// - `info` must be correct for the currently running system.
-    /// - `event_ptr` must point to an event of the correct type.
-    /// - `world` must have permission to access the data configured in `init`.
+    /// - `state` must be up to date and originate from [`SystemParam::init`].
+    /// - `info` must be correct for the system which this is invoked from.
+    /// - `event_ptr`: See [`System::run`].
+    /// - `target_location`: See [`System::run`].
+    /// - `world` must have permission to access the data configured in
+    ///   [`SystemParam::init`].
     unsafe fn get<'a>(
         state: &'a mut Self::State,
         info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a>;
 
@@ -897,6 +930,7 @@ unsafe impl<T> SystemParam for PhantomData<T> {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Self
@@ -909,17 +943,17 @@ unsafe impl<T> SystemParam for PhantomData<T> {
 
 macro_rules! impl_system_param_tuple {
     ($(($P:ident, $s:ident)),*) => {
-        #[allow(clippy::unused_unit)]
+        #[allow(unused_variables, clippy::unused_unit)]
         unsafe impl<$($P: SystemParam),*> SystemParam for ($($P,)*) {
             type State = ($($P::State,)*);
 
             type Item<'a> = ($($P::Item<'a>,)*);
 
             #[inline]
-            fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+            fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
                 Ok((
                     $(
-                        $P::init(_world, _config)?,
+                        $P::init(world, config)?,
                     )*
                 ))
             }
@@ -927,34 +961,35 @@ macro_rules! impl_system_param_tuple {
             #[inline]
             unsafe fn get<'a>(
                 ($($s,)*): &'a mut Self::State,
-                _info: &'a SystemInfo,
-                _event_ptr: EventPtr<'a>,
-                _world: UnsafeWorldCell<'a>,
+                info: &'a SystemInfo,
+                event_ptr: EventPtr<'a>,
+                target_location: EntityLocation,
+                world: UnsafeWorldCell<'a>,
             ) -> Self::Item<'a> {
                 (
                     $(
-                        $P::get($s, _info, _event_ptr, _world),
+                        $P::get($s, info, event_ptr, target_location, world),
                     )*
                 )
             }
 
             fn refresh_archetype(
                 ($($s,)*): &mut Self::State,
-                _arch: &Archetype
+                arch: &Archetype
             )
             {
                 $(
-                    $P::refresh_archetype($s, _arch);
+                    $P::refresh_archetype($s, arch);
                 )*
             }
 
             fn remove_archetype(
                 ($($s,)*): &mut Self::State,
-                _arch: &Archetype
+                arch: &Archetype
             )
             {
                 $(
-                    $P::remove_archetype($s, _arch);
+                    $P::remove_archetype($s, arch);
                 )*
             }
         }
@@ -1017,6 +1052,7 @@ where
         &mut self,
         system_info: &SystemInfo,
         event_ptr: EventPtr,
+        target_location: EntityLocation,
         world: UnsafeWorldCell,
     ) {
         let state = unsafe {
@@ -1025,7 +1061,8 @@ where
                 .expect_debug_checked("system must be initialized")
         };
 
-        let param = <F::Param as SystemParam>::get(state, system_info, event_ptr, world);
+        let param =
+            <F::Param as SystemParam>::get(state, system_info, event_ptr, target_location, world);
         self.func.run(param);
     }
 
@@ -1140,6 +1177,7 @@ unsafe impl<T: Default + Send + 'static> SystemParam for Local<'_, T> {
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Local {
@@ -1186,6 +1224,7 @@ unsafe impl SystemParam for &'_ SystemInfo {
         _state: &'a mut Self::State,
         info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         info
@@ -1211,9 +1250,10 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
         state: &'a mut Self::State,
         info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        std::sync::Mutex::new(P::get(state, info, event_ptr, world))
+        std::sync::Mutex::new(P::get(state, info, event_ptr, target_location, world))
     }
 
     fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
@@ -1240,9 +1280,10 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
         state: &'a mut Self::State,
         info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        std::sync::RwLock::new(P::get(state, info, event_ptr, world))
+        std::sync::RwLock::new(P::get(state, info, event_ptr, target_location, world))
     }
 
     fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
