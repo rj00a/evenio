@@ -7,7 +7,7 @@ use core::{any, fmt};
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
 use crate::assert::{assume_debug_checked, UnwrapDebugChecked};
-use crate::entity::{Entities, EntityId};
+use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
@@ -64,7 +64,7 @@ impl<Q: Query> FetcherState<Q> {
             return Err(GetError::NoSuchEntity);
         };
 
-        // Eliminate a panicking branch.
+        // Eliminate a branch in `SparseMap::get`.
         assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
 
         let Some(state) = self.map.get(loc.archetype) else {
@@ -95,6 +95,15 @@ impl<Q: Query> FetcherState<Q> {
         };
 
         Ok(Q::get(state, loc.row))
+    }
+
+    #[inline]
+    pub(crate) unsafe fn get_by_location_mut(&mut self, loc: EntityLocation) -> Q::Item<'_> {
+        let state = self
+            .map
+            .get(loc.archetype)
+            .expect_debug_checked("invalid entity location");
+        Q::get(state, loc.row)
     }
 
     // TODO: get_many_mut
@@ -316,6 +325,7 @@ where
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         Fetcher { state, world }
@@ -375,9 +385,10 @@ unsafe impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
         state: &'a mut Self::State,
         info: &'a SystemInfo,
         event_ptr: EventPtr<'a>,
+        target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        match TrySingle::get(state, info, event_ptr, world) {
+        match TrySingle::get(state, info, event_ptr, target_location, world) {
             TrySingle(Ok(item)) => Single(item),
             TrySingle(Err(e)) => {
                 panic!(
@@ -417,6 +428,7 @@ unsafe impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
         state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         let mut it = state.iter_mut(world.archetypes());

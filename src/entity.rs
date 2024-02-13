@@ -118,6 +118,7 @@ unsafe impl SystemParam for &'_ Entities {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.entities()
@@ -135,6 +136,14 @@ pub struct EntityLocation {
     pub archetype: ArchetypeIdx,
     /// The specific row in the archetype where the entity is located.
     pub row: ArchetypeRow,
+}
+
+impl EntityLocation {
+    /// A location which is always invalid.
+    pub(crate) const NULL: Self = Self {
+        archetype: ArchetypeIdx::NULL,
+        row: ArchetypeRow::NULL,
+    };
 }
 
 /// Lightweight identifier for an entity.

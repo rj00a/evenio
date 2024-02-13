@@ -61,6 +61,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                             state,
                             info,
                             event_ptr,
+                            target_location,
                             world
                         );
 
@@ -81,6 +82,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                             state,
                             info,
                             event_ptr,
+                            target_location,
                             world
                         );
 
@@ -130,6 +132,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 state: &'__a mut Self::State,
                 info: &'__a ::evenio::system::SystemInfo,
                 event_ptr: ::evenio::event::EventPtr<'__a>,
+                target_location: ::evenio::entity::EntityLocation,
                 world: ::evenio::world::UnsafeWorldCell<'__a>,
             ) -> Self::Item<'__a> {
                 #get_body

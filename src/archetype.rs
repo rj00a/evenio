@@ -489,6 +489,7 @@ unsafe impl SystemParam for &'_ Archetypes {
         _state: &'a mut Self::State,
         _info: &'a SystemInfo,
         _event_ptr: EventPtr<'a>,
+        _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
         world.archetypes()
@@ -528,6 +529,11 @@ unsafe impl SparseIndex for ArchetypeIdx {
 /// [`ArchetypeIdx`], this can identify the location of an entity.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ArchetypeRow(pub u32);
+
+impl ArchetypeRow {
+    /// The archetype row that is always invalid.
+    pub const NULL: Self = Self(u32::MAX);
+}
 
 /// A container for all entities with a particular set of components.
 ///

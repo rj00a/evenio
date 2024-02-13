@@ -16,7 +16,7 @@ use crate::component::{
     RemoveComponent,
 };
 use crate::drop::{drop_fn_of, DropFn};
-use crate::entity::{Entities, EntityId, ReservedEntities};
+use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{
     AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
     EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
@@ -792,10 +792,11 @@ impl World {
                 ownership_flag: false,
             };
 
-            let system_list = match event_meta {
-                EventMeta::Untargeted { idx } => unsafe {
-                    self.systems.get_untargeted_list(idx).unwrap_debug_checked()
-                },
+            let (system_list, target_location) = match event_meta {
+                EventMeta::Untargeted { idx } => (
+                    unsafe { self.systems.get_untargeted_list(idx).unwrap_debug_checked() },
+                    EntityLocation::NULL,
+                ),
                 EventMeta::Targeted { idx, target } => {
                     let Some(location) = self.entities.get(target) else {
                         continue;
@@ -811,7 +812,7 @@ impl World {
 
                     // Return an empty system list instead of continuing in case this event is
                     // special.
-                    arch.system_list_for(idx).unwrap_or(&EMPTY)
+                    (arch.system_list_for(idx).unwrap_or(&EMPTY), location)
                 }
             };
 
@@ -829,7 +830,7 @@ impl World {
 
                 let world_cell = self.unsafe_cell_mut();
 
-                unsafe { system.run(info, event_ptr, world_cell) };
+                unsafe { system.run(info, event_ptr, target_location, world_cell) };
 
                 unsafe { self.event_queue.reverse_from(events_before) };
 
