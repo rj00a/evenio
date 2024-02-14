@@ -1,10 +1,11 @@
 # Change Log
 
-## Unreleased
+## 0.3.0 - 2024-02-13
 
-- Fixed a bug in event propagation.
-- The behavior of the event queue has changed. The next event in the queue is handled only once the current event has finished broadcasting.
+- Fixed bug that occurs when changing event target archetype while broadcasting.
+- Changed behavior of event queue. The next event in the queue is handled only once the current event has finished broadcasting.
 - Changed `EventPtr` interface and relaxed `Send` and `Sync` bounds for `EventMut`.
+- Fixed buggy behavior when mutating the target of a broadcasting event.
 
 ## 0.2.2 - 2024-02-8
 
