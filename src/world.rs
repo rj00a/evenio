@@ -776,7 +776,6 @@ impl World {
             }
 
             impl Drop for EventDropper {
-                #[cold]
                 fn drop(&mut self) {
                     if !self.ownership_flag {
                         if let Some(drop) = self.drop {
@@ -799,6 +798,7 @@ impl World {
                 ),
                 EventMeta::Targeted { idx, target } => {
                     let Some(location) = self.entities.get(target) else {
+                        // Entity doesn't exist. Skip the event.
                         continue;
                     };
 
@@ -818,6 +818,8 @@ impl World {
 
             let systems: *const [_] = system_list.systems();
 
+            let events_before = self.event_queue.len();
+
             for info_ptr in unsafe { &*systems } {
                 let system = unsafe { &mut (*info_ptr.as_ptr()).system };
 
@@ -826,20 +828,24 @@ impl World {
                 let event_ptr =
                     EventPtr::new(event.event, NonNull::from(&mut event.ownership_flag));
 
-                let events_before = self.event_queue.len();
-
                 let world_cell = self.unsafe_cell_mut();
 
                 unsafe { system.run(info, event_ptr, target_location, world_cell) };
 
-                unsafe { self.event_queue.reverse_from(events_before) };
-
                 // Did the system take ownership of the event?
                 if event.ownership_flag {
+                    // Don't drop event since we don't own it anymore.
                     event.unpack();
+
+                    // Reverse pushed events so they're handled in FIFO order.
+                    unsafe { self.event_queue.reverse_from(events_before) };
+
                     continue 'next_event;
                 }
             }
+
+            // Reverse pushed events so they're handled in FIFO order.
+            unsafe { self.event_queue.reverse_from(events_before) };
 
             match event_kind {
                 EventKind::Normal => {
