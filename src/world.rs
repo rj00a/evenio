@@ -357,6 +357,8 @@ impl World {
         let info = SystemInfo::new(SystemInfoInner {
             name: system.name(),
             id: SystemId::NULL, // Filled in later.
+            type_id,
+            order: 0, // Filled in later.
             received_event,
             received_event_access: config.received_event_access,
             targeted_event_expr: config.targeted_event_expr,
@@ -366,7 +368,6 @@ impl World {
             component_access: config.component_access,
             referenced_components: config.referenced_components,
             priority: config.priority,
-            type_id,
             system,
         });
 
@@ -823,7 +824,7 @@ impl World {
             for info_ptr in unsafe { &*systems } {
                 let system = unsafe { &mut (*info_ptr.as_ptr()).system };
 
-                let info = unsafe { SystemInfo::ref_from_ptr(info_ptr) };
+                let info = unsafe { SystemInfo::from_ptr(info_ptr) };
 
                 let event_ptr =
                     EventPtr::new(event.event, NonNull::from(&mut event.ownership_flag));

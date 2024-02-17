@@ -2,6 +2,7 @@
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::TypeId;
@@ -49,6 +50,11 @@ pub struct Systems {
     /// the event.
     by_untargeted_event: Vec<SystemList>,
     by_type_id: TypeIdMap<SystemInfoPtr>,
+    /// Counts up as new systems are added.
+    insert_counter: u64,
+    /// Systems ordered by the order they were added to the world. This ensures
+    /// that iteration over all systems is done in insertion order.
+    by_insert_order: BTreeMap<u64, SystemInfoPtr>,
 }
 
 impl Systems {
@@ -57,11 +63,13 @@ impl Systems {
             infos: SlotMap::new(),
             by_untargeted_event: vec![],
             by_type_id: Default::default(),
+            insert_counter: 0,
+            by_insert_order: BTreeMap::new(),
         }
     }
 
     pub(crate) fn add(&mut self, info: SystemInfo) -> SystemId {
-        let ptr = info.ptr();
+        let mut ptr = info.ptr();
 
         if let Some(type_id) = info.type_id() {
             assert!(self.by_type_id.insert(type_id, ptr).is_none());
@@ -70,7 +78,10 @@ impl Systems {
         let Some(k) = self.infos.insert_with(|k| {
             let id = SystemId(k);
 
-            unsafe { (*ptr.as_ptr()).id = id };
+            let inner = unsafe { ptr.as_mut() };
+
+            inner.id = id;
+            inner.order = self.insert_counter;
 
             if let EventIdx::Untargeted(idx) = info.received_event().index() {
                 let idx = idx.0 as usize;
@@ -88,6 +99,11 @@ impl Systems {
             panic!("too many systems")
         };
 
+        self.by_insert_order.insert(self.insert_counter, ptr);
+        self.insert_counter += 1;
+
+        debug_assert_eq!(self.infos.len(), self.by_insert_order.len() as u32);
+
         SystemId(k)
     }
 
@@ -104,6 +120,10 @@ impl Systems {
         if let Some(type_id) = info.type_id() {
             self.by_type_id.remove(&type_id);
         }
+
+        self.by_insert_order.remove(&info.order());
+
+        debug_assert_eq!(self.infos.len(), self.by_insert_order.len() as u32);
 
         Some(info)
     }
@@ -142,7 +162,7 @@ impl Systems {
     pub fn get_by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
         self.by_type_id
             .get(&id)
-            .map(|p| unsafe { SystemInfo::ref_from_ptr(p) })
+            .map(|p| unsafe { SystemInfo::from_ptr(p) })
     }
 
     /// Does the given system exist in the world?
@@ -150,13 +170,18 @@ impl Systems {
         self.get(id).is_some()
     }
 
-    /// Returns an iterator over all system infos.
+    /// Returns an iterator over all system infos in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
-        self.infos.iter().map(|(_, v)| v)
+        self.by_insert_order
+            .values()
+            .map(|ptr| unsafe { SystemInfo::from_ptr(ptr) })
     }
 
+    /// Returns a mutable iterator over all system infos in insertion order.
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut SystemInfo> {
-        self.infos.iter_mut().map(|(_, v)| v)
+        self.by_insert_order
+            .values_mut()
+            .map(|ptr| unsafe { SystemInfo::from_ptr_mut(ptr) })
     }
 }
 
@@ -246,6 +271,8 @@ pub(crate) type SystemInfoPtr = NonNull<SystemInfoInner>;
 pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) name: Cow<'static, str>,
     pub(crate) id: SystemId,
+    pub(crate) type_id: Option<TypeId>,
+    pub(crate) order: u64,
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
     pub(crate) targeted_event_expr: BoolExpr<ComponentIdx>,
@@ -255,7 +282,6 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) component_access: ComponentAccessExpr,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
     pub(crate) priority: Priority,
-    pub(crate) type_id: Option<TypeId>,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
     // aliasing.
     pub(crate) system: S,
@@ -280,6 +306,15 @@ impl SystemInfo {
     /// Gets the ID of this system.
     pub fn id(&self) -> SystemId {
         unsafe { (*self.inner.as_ptr()).id }
+    }
+
+    /// Gets the [`TypeId`] of this system, if any.
+    pub fn type_id(&self) -> Option<TypeId> {
+        unsafe { (*self.inner.as_ptr()).type_id }
+    }
+
+    pub(crate) fn order(&self) -> u64 {
+        unsafe { (*self.inner.as_ptr()).order }
     }
 
     /// Gets the [`EventId`] of the event is system listens for.
@@ -333,21 +368,26 @@ impl SystemInfo {
         unsafe { (*self.inner.as_ptr()).priority }
     }
 
-    /// Gets the [`TypeId`] of this system, if any.
-    pub fn type_id(&self) -> Option<TypeId> {
-        unsafe { (*self.inner.as_ptr()).type_id }
-    }
-
     pub(crate) fn ptr(&self) -> SystemInfoPtr {
         self.inner
     }
 
     /// # Safety
     ///
-    /// Pointer must be valid.
-    pub(crate) unsafe fn ref_from_ptr(this: &SystemInfoPtr) -> &Self {
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn from_ptr(this: &SystemInfoPtr) -> &Self {
         // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
         &*(this as *const _ as *const Self)
+    }
+
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn from_ptr_mut(this: &mut SystemInfoPtr) -> &mut Self {
+        // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
+        &mut *(this as *mut _ as *mut Self)
     }
 
     pub(crate) fn system_mut(&mut self) -> &mut dyn System {
@@ -1307,6 +1347,8 @@ pub struct RemoveSystem(pub SystemId);
 
 #[cfg(test)]
 mod tests {
+    use evenio::prelude::*;
+
     use super::*;
     use crate::event::Events;
 
@@ -1343,5 +1385,39 @@ mod tests {
         assert_system_param::<ParamWithTypeParam<()>>();
 
         fn assert_system_param<P: SystemParam>() {}
+    }
+
+    #[test]
+    fn system_run_order() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E(#[event(target)] EntityId);
+
+        #[derive(Component)]
+        struct Tracker(String);
+
+        fn a(_: Receiver<E, &mut Tracker>) {
+            unreachable!()
+        }
+        fn b(r: Receiver<E, &mut Tracker>) {
+            assert_eq!(r.query.0, "");
+            r.query.0.push('b');
+        }
+        fn c(r: Receiver<E, &Tracker>) {
+            assert_eq!(r.query.0, "b");
+        }
+
+        let a_id = world.add_system(a);
+        world.add_system(b);
+
+        world.remove_system(a_id);
+
+        world.add_system(c);
+
+        let e = world.spawn();
+        world.insert(e, Tracker(String::new()));
+
+        world.send(E(e));
     }
 }

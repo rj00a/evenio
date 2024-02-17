@@ -176,6 +176,7 @@ impl<T> SlotMap<T> {
             })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Key, &mut T)> {
         self.slots.iter_mut().enumerate().filter_map(|(idx, slot)| {
             (!slot.is_vacant()).then(|| {
