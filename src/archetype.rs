@@ -6,8 +6,8 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::ptr;
 use core::ptr::NonNull;
+use core::{mem, ptr, slice};
 
 use ahash::RandomState;
 use slab::Slab;
@@ -148,7 +148,7 @@ impl Archetypes {
         // TODO: this iteration is non-deterministic.
         self.by_components.retain(|comps, &mut idx| {
             if comps.binary_search(&component_idx).is_ok() {
-                let arch = self.archetypes.remove(idx.0 as usize);
+                let mut arch = self.archetypes.remove(idx.0 as usize);
 
                 for sys in &arch.refresh_listeners {
                     unsafe { (*sys.as_ptr()).system.remove_archetype(&arch) };
@@ -158,14 +158,14 @@ impl Archetypes {
                     f(entity_id);
                 }
 
-                for (comp_idx, arch_idx) in arch.insert_components {
+                for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
                     let other_arch =
                         unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
 
                     other_arch.remove_components.remove(&comp_idx);
                 }
 
-                for (comp_idx, arch_idx) in arch.remove_components {
+                for (comp_idx, arch_idx) in mem::take(&mut arch.remove_components) {
                     let other_arch =
                         unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
 
@@ -202,16 +202,13 @@ impl Archetypes {
 
         match src_arch.insert_components.entry(component_idx) {
             BTreeEntry::Vacant(vacant_insert_components) => {
-                let Err(idx) = src_arch
-                    .columns
-                    .binary_search_by_key(&component_idx, |c| c.component_idx)
-                else {
+                let Err(idx) = src_arch.component_indices.binary_search(&component_idx) else {
                     // Archetype already has this component.
                     return src_arch_idx;
                 };
 
-                let mut new_components = Vec::with_capacity(src_arch.columns.len() + 1);
-                new_components.extend(src_arch.columns.iter().map(|c| c.component_idx));
+                let mut new_components = Vec::with_capacity(src_arch.component_indices.len() + 1);
+                new_components.extend(src_arch.component_indices.iter().copied());
                 new_components.insert(idx, component_idx);
 
                 match self.by_components.entry(new_components.into_boxed_slice()) {
@@ -220,11 +217,8 @@ impl Archetypes {
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
-                        let mut new_arch = Archetype::new(
-                            arch_id,
-                            vacant_by_components.key().iter().copied(),
-                            components,
-                        );
+                        let mut new_arch =
+                            Archetype::new(arch_id, vacant_by_components.key().clone(), components);
 
                         new_arch
                             .remove_components
@@ -271,34 +265,29 @@ impl Archetypes {
         match src_arch.remove_components.entry(component_idx) {
             BTreeEntry::Vacant(vacant_remove_components) => {
                 if src_arch
-                    .columns
-                    .binary_search_by_key(&component_idx, |c| c.component_idx)
+                    .component_indices
+                    .binary_search(&component_idx)
                     .is_err()
                 {
                     // Archetype already doesn't have the component.
                     return src_arch_idx;
                 }
 
-                let mut new_components = Vec::with_capacity(src_arch.columns.len() - 1);
-                new_components.extend(
-                    src_arch
-                        .columns
-                        .iter()
-                        .map(|c| c.component_idx)
-                        .filter(|&c| c != component_idx),
-                );
+                let new_components: Box<[ComponentIdx]> = src_arch
+                    .component_indices
+                    .iter()
+                    .copied()
+                    .filter(|&c| c != component_idx)
+                    .collect();
 
-                match self.by_components.entry(new_components.into_boxed_slice()) {
+                match self.by_components.entry(new_components) {
                     Entry::Vacant(vacant_by_components) => {
                         assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
-                        let mut new_arch = Archetype::new(
-                            arch_id,
-                            vacant_by_components.key().iter().copied(),
-                            components,
-                        );
+                        let mut new_arch =
+                            Archetype::new(arch_id, vacant_by_components.key().clone(), components);
 
                         new_arch
                             .insert_components
@@ -358,50 +347,44 @@ impl Archetypes {
 
         let dst_arch_reallocated = dst_arch.push_would_reallocate();
 
-        let mut src_it = src_arch.columns.iter_mut().peekable();
-        let mut dst_it = dst_arch.columns.iter_mut().peekable();
+        let mut src_idx = 0;
+        let mut dst_idx = 0;
 
-        // TODO: does this optimize better with raw pointers?
         loop {
-            match (src_it.peek_mut(), dst_it.peek_mut()) {
-                (None, None) => break,
-                (None, Some(dst_col)) => {
-                    let (component_id, component_ptr) =
-                        new_components.next().unwrap_debug_checked();
+            let src_in_bounds = src_idx < src_arch.component_indices.len();
+            let dst_in_bounds = dst_idx < dst_arch.component_indices.len();
 
-                    debug_assert_eq!(component_id, dst_col.component_index());
+            match (src_in_bounds, dst_in_bounds) {
+                (true, true) => {
+                    let src_comp_idx = *src_arch.component_indices.get_debug_checked(src_idx);
+                    let dst_comp_idx = *dst_arch.component_indices.get_debug_checked(dst_idx);
 
-                    ptr::copy_nonoverlapping(
-                        component_ptr,
-                        dst_col.data.push().as_ptr(),
-                        dst_col.data.elem_layout().size(),
-                    );
-
-                    dst_it.next();
-                }
-                (Some(src_col), None) => {
-                    src_col.data.swap_remove(src.row.0 as usize);
-                    src_it.next();
-                }
-                (Some(src_col), Some(dst_col)) => {
-                    match src_col.component_index().cmp(&dst_col.component_index()) {
+                    match src_comp_idx.cmp(&dst_comp_idx) {
                         Ordering::Less => {
+                            let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
                             src_col.data.swap_remove(src.row.0 as usize);
-                            src_it.next();
+                            src_idx += 1;
                         }
                         Ordering::Equal => {
+                            let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
+                            let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
+
                             src_col
                                 .data
                                 .transfer_elem(&mut dst_col.data, src.row.0 as usize);
 
-                            src_it.next();
-                            dst_it.next();
+                            src_idx += 1;
+                            dst_idx += 1;
                         }
                         Ordering::Greater => {
-                            let (component_id, component_ptr) =
+                            let (component_idx, component_ptr) =
                                 new_components.next().unwrap_debug_checked();
 
-                            debug_assert_eq!(component_id, dst_col.component_index());
+                            let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
+                            let dst_comp_idx =
+                                *dst_arch.component_indices.get_debug_checked(dst_idx);
+
+                            debug_assert_eq!(component_idx, dst_comp_idx);
 
                             ptr::copy_nonoverlapping(
                                 component_ptr,
@@ -409,10 +392,33 @@ impl Archetypes {
                                 dst_col.data.elem_layout().size(),
                             );
 
-                            dst_it.next();
+                            dst_idx += 1;
                         }
                     }
                 }
+                (true, false) => {
+                    let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
+                    src_col.data.swap_remove(src.row.0 as usize);
+                    src_idx += 1;
+                }
+                (false, true) => {
+                    let (component_idx, component_ptr) =
+                        new_components.next().unwrap_debug_checked();
+
+                    let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
+                    let dst_comp_idx = *dst_arch.component_indices.get_debug_checked(dst_idx);
+
+                    debug_assert_eq!(component_idx, dst_comp_idx);
+
+                    ptr::copy_nonoverlapping(
+                        component_ptr,
+                        dst_col.data.push().as_ptr(),
+                        dst_col.data.elem_layout().size(),
+                    );
+
+                    dst_idx += 1;
+                }
+                (false, false) => break,
             }
         }
 
@@ -457,7 +463,7 @@ impl Archetypes {
                 .get_debug_checked_mut(loc.archetype.0 as usize)
         };
 
-        for col in arch.columns.iter_mut() {
+        for col in arch.columns_mut() {
             unsafe { col.data.swap_remove(loc.row.0 as usize) };
         }
 
@@ -551,10 +557,16 @@ impl ArchetypeRow {
 pub struct Archetype {
     /// The index of this archetype. Provided here for convenience.
     index: ArchetypeIdx,
-    /// Entity IDs of the entities in this archetype.
-    entity_ids: Vec<EntityId>,
+    /// Component indices of this archetype, one per column in sorted order.
+    component_indices: Box<[ComponentIdx]>,
     /// Columns of component data in this archetype. Sorted by component index.
-    columns: Box<[Column]>,
+    ///
+    /// This is a `Box<[Column]>` with the length stripped out. The length field
+    /// would be redundant since it's always the same as `component_indices`.
+    columns: NonNull<Column>,
+    /// A special column containing the [`EntityId`] for all entities in the
+    /// archetype.
+    entity_ids: Vec<EntityId>,
     insert_components: BTreeMap<ComponentIdx, ArchetypeIdx>,
     remove_components: BTreeMap<ComponentIdx, ArchetypeIdx>,
     /// Systems that need to be notified about column changes.
@@ -567,8 +579,9 @@ impl Archetype {
     fn empty() -> Self {
         Self {
             index: ArchetypeIdx::EMPTY,
+            component_indices: Box::new([]),
+            columns: NonNull::dangling(),
             entity_ids: vec![],
-            columns: Box::new([]),
             insert_components: BTreeMap::new(),
             remove_components: BTreeMap::new(),
             refresh_listeners: BTreeSet::new(),
@@ -578,34 +591,40 @@ impl Archetype {
 
     /// # Safety
     ///
-    /// Iterator must be sorted in ascending order and all IDs must be valid.
+    /// - Component indices slice must be in sorted order.
+    /// - All component indices must be valid.
     unsafe fn new(
         index: ArchetypeIdx,
-        ids: impl IntoIterator<Item = ComponentIdx>,
-        comps: &Components,
+        component_indices: Box<[ComponentIdx]>,
+        components: &Components,
     ) -> Self {
-        Self {
-            entity_ids: vec![],
-            columns: ids
-                .into_iter()
-                .map(|idx| {
-                    let comp = unsafe {
-                        comps
-                            .get_by_index(idx)
-                            .expect_debug_checked("invalid component ID")
-                    };
+        let columns: Box<[Column]> = component_indices
+            .iter()
+            .map(|&idx| {
+                let info = unsafe {
+                    components
+                        .get_by_index(idx)
+                        .expect_debug_checked("invalid component index")
+                };
 
-                    Column {
-                        data: unsafe { BlobVec::new(comp.layout(), comp.drop()) },
-                        component_idx: idx,
-                    }
-                })
-                .collect(),
+                Column {
+                    data: unsafe { BlobVec::new(info.layout(), info.drop()) },
+                }
+            })
+            .collect();
+
+        // SAFETY: `Box::into_raw` guarantees non-null.
+        let columns_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(columns) as *mut Column) };
+
+        Self {
+            index,
+            component_indices,
+            columns: columns_ptr,
+            entity_ids: vec![],
             insert_components: BTreeMap::new(),
             remove_components: BTreeMap::new(),
             refresh_listeners: BTreeSet::new(),
             event_listeners: SparseMap::new(),
-            index,
         }
     }
 
@@ -659,31 +678,39 @@ impl Archetype {
         &self.entity_ids
     }
 
+    /// Returns a sorted slice of component types for every column in this
+    /// archetype.
+    ///
+    /// The returned slice has the same length as the slice returned by
+    /// [`columns`](Archetype::columns).
+    pub fn component_indices(&self) -> &[ComponentIdx] {
+        &self.component_indices
+    }
+
     /// Returns a slice of columns sorted by [`ComponentIdx`].
     pub fn columns(&self) -> &[Column] {
-        &self.columns
+        unsafe { slice::from_raw_parts(self.columns.as_ptr(), self.component_indices.len()) }
+    }
+
+    /// Returns a slice of columns sorted by [`ComponentIdx`].
+    fn columns_mut(&mut self) -> &mut [Column] {
+        unsafe { slice::from_raw_parts_mut(self.columns.as_ptr(), self.component_indices.len()) }
     }
 
     /// Finds the column with the given component. Returns `None` if it doesn't
     /// exist.
     pub fn column_of(&self, idx: ComponentIdx) -> Option<&Column> {
-        let idx = self
-            .columns
-            .binary_search_by_key(&idx, |c| c.component_idx)
-            .ok()?;
+        let idx = self.component_indices.binary_search(&idx).ok()?;
 
-        // SAFETY: `binary_search_by_key` ensures index is in bounds.
-        Some(unsafe { self.columns.get_debug_checked(idx) })
+        // SAFETY: `binary_search` ensures `idx` is in bounds.
+        Some(unsafe { &*self.columns.as_ptr().add(idx) })
     }
 
     fn column_of_mut(&mut self, idx: ComponentIdx) -> Option<&mut Column> {
-        let idx = self
-            .columns
-            .binary_search_by_key(&idx, |c| c.component_idx)
-            .ok()?;
+        let idx = self.component_indices.binary_search(&idx).ok()?;
 
-        // SAFETY: `binary_search_by_key` ensures index is in bounds.
-        Some(unsafe { self.columns.get_debug_checked_mut(idx) })
+        // SAFETY: `binary_search` ensures `idx` is in bounds.
+        Some(unsafe { &mut *self.columns.as_ptr().add(idx) })
     }
 
     /// Would the columns of this archetype reallocate if an entity were added
@@ -692,10 +719,26 @@ impl Archetype {
         // All columns should have the same capacity and length, so we only need to look
         // at one of them. The `Vec` holding the Entity IDs might have a different
         // reallocation strategy, so check that too.
-        self.columns
+        self.columns()
             .first()
             .map_or(false, |col| col.data.len() == col.data.capacity())
             || self.entity_ids.capacity() == self.entity_ids.len()
+    }
+}
+
+impl Drop for Archetype {
+    fn drop(&mut self) {
+        // Free the array of columns by constructing a `Box<[Column]>` and immediately
+        // dropping it.
+        //
+        // SAFETY: The columns pointer originated from a
+        // `Box<[Column]>` with the length of `component_indices`.
+        let _ = unsafe {
+            Box::from_raw(slice::from_raw_parts_mut(
+                self.columns.as_ptr(),
+                self.component_indices.len(),
+            ))
+        };
     }
 }
 
@@ -707,8 +750,6 @@ unsafe impl Sync for Archetype {}
 pub struct Column {
     /// Component data in this column.
     data: BlobVec,
-    /// Type of data in this column.
-    component_idx: ComponentIdx,
 }
 
 impl Column {
@@ -716,11 +757,6 @@ impl Column {
     /// data, or a dangling pointer if the the buffer is empty.
     pub fn data(&self) -> NonNull<u8> {
         self.data.as_ptr()
-    }
-
-    /// Returns the component type for this column.
-    pub fn component_index(&self) -> ComponentIdx {
-        self.component_idx
     }
 }
 

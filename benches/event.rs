@@ -7,7 +7,7 @@ fn main() {
     divan::main()
 }
 
-#[divan::bench]
+#[divan::bench(sample_count = 1000)]
 fn send_many_events(bencher: Bencher) {
     let mut world = World::new();
 

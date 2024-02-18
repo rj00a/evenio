@@ -1,5 +1,10 @@
 # Change Log
 
+## Unreleased
+
+- Removed `Column::component_index`. To obtain the component index of a column, use `Archetype::component_indices`.
+- Fixed bug related to system ordering. Systems with the same priority always run in the order they were added to the world.
+
 ## 0.3.0 - 2024-02-13
 
 - Fixed bug that occurs when changing event target archetype while broadcasting.
