@@ -70,7 +70,7 @@ fn random_access_bevy(bencher: Bencher) {
     #![allow(non_snake_case)] // Can't add attributes to the generated `ComponentQueryItem`.
 
     use bevy_ecs::prelude::*;
-    use bevy_ecs::query::WorldQuery;
+    use bevy_ecs::query::QueryData;
     use bevy_ecs::schedule::ScheduleLabel;
 
     let mut entities = vec![];
@@ -83,7 +83,7 @@ fn random_access_bevy(bencher: Bencher) {
                 struct $name(#[allow(dead_code)] u64);
             )*
 
-            #[derive(WorldQuery)]
+            #[derive(QueryData)]
             #[allow(dead_code)]
             struct ComponentQuery<'a> {
                 $(

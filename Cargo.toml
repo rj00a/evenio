@@ -17,15 +17,17 @@ rayon = ["dep:rayon"]
 ahash = { version = "0.8.7", default-features = false }
 bumpalo = "3.14.0"
 evenio_macros = { path = "evenio_macros", version = "0.3.0" }
-hashbrown = { version = "0.14.3", default-features = false, features = ["inline-more"] }
+hashbrown = { version = "0.14.3", default-features = false, features = [
+    "inline-more",
+] }
 memoffset = "0.9.0"
 rayon = { version = "1.8.1", optional = true }
 slab = "0.4.9"
 
 [dev-dependencies]
 ahash = "0.8.7"
-bevy_ecs = { version = "0.12.1", features = ["multi-threaded"] }
-bevy_tasks = "0.12.1"
+bevy_ecs = { version = "0.13.0", features = ["multi-threaded"] }
+bevy_tasks = "0.13.0"
 divan = "0.1.11"
 
 [package.metadata.docs.rs]
@@ -64,7 +66,7 @@ license = "MIT"
 repository = "https://github.com/rj00a/evenio"
 
 [workspace.lints.rust]
-elided_lifetimes_in_paths = "allow" # Warned by `future_incompatible`.
+elided_lifetimes_in_paths = "allow"    # Warned by `future_incompatible`.
 future_incompatible = "warn"
 missing_debug_implementations = "warn"
 missing_docs = "warn"
@@ -110,7 +112,7 @@ invalid_upcast_comparisons = "warn"
 iter_filter_is_ok = "warn"
 iter_filter_is_some = "warn"
 iter_not_returning_iterator = "warn"
-iter_over_hash_type = "warn" # Requires justification
+iter_over_hash_type = "warn"                       # Requires justification
 iter_without_into_iter = "warn"
 large_stack_arrays = "warn"
 large_types_passed_by_value = "warn"
