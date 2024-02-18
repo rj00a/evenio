@@ -6,6 +6,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::TypeId;
+use core::cmp::Ordering;
+use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut, Index};
 use core::panic::{RefUnwindSafe, UnwindSafe};
@@ -69,7 +71,7 @@ impl Systems {
     }
 
     pub(crate) fn add(&mut self, info: SystemInfo) -> SystemId {
-        let mut ptr = info.ptr();
+        let ptr = info.ptr();
 
         if let Some(type_id) = info.type_id() {
             assert!(self.by_type_id.insert(type_id, ptr).is_none());
@@ -78,7 +80,7 @@ impl Systems {
         let Some(k) = self.infos.insert_with(|k| {
             let id = SystemId(k);
 
-            let inner = unsafe { ptr.as_mut() };
+            let inner = unsafe { &mut *ptr.as_ptr() };
 
             inner.id = id;
             inner.order = self.insert_counter;
@@ -265,7 +267,44 @@ pub struct SystemInfo {
     inner: SystemInfoPtr,
 }
 
-pub(crate) type SystemInfoPtr = NonNull<SystemInfoInner>;
+/// Pointer to a system.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
+
+impl SystemInfoPtr {
+    pub(crate) const unsafe fn as_ptr(self) -> *mut SystemInfoInner {
+        self.0.as_ptr()
+    }
+}
+
+impl PartialEq for SystemInfoPtr {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for SystemInfoPtr {}
+
+impl PartialOrd for SystemInfoPtr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SystemInfoPtr {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Ignore ptr metadata by casting to thin pointer.
+        self.0.cast::<()>().cmp(&other.0.cast::<()>())
+    }
+}
+
+impl Hash for SystemInfoPtr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Ignore ptr metadata by casting to thin pointer.
+        self.0.cast::<()>().hash(state)
+    }
+}
 
 // This is generic over `S` so that we can do an unsizing coercion.
 pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
@@ -292,7 +331,9 @@ impl SystemInfo {
         // SAFETY: `Box::into_raw` guarantees the returned pointer is non-null.
         let ptr = unsafe { NonNull::new(Box::into_raw(Box::new(inner))).unwrap_debug_checked() };
 
-        Self { inner: ptr }
+        Self {
+            inner: SystemInfoPtr(ptr),
+        }
     }
 
     /// Gets the name of the system.
