@@ -12,6 +12,7 @@ use core::{mem, ptr, slice};
 use ahash::RandomState;
 use slab::Slab;
 
+use crate::aliased_box::AliasedBox;
 use crate::assert::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, Components};
@@ -43,13 +44,13 @@ use crate::world::UnsafeWorldCell;
 #[derive(Debug)]
 pub struct Archetypes {
     archetypes: Slab<Archetype>,
-    by_components: HashMap<Box<[ComponentIdx]>, ArchetypeIdx>,
+    by_components: HashMap<AliasedBox<[ComponentIdx]>, ArchetypeIdx>,
 }
 
 impl Archetypes {
     pub(crate) fn new() -> Self {
         let mut map = HashMap::with_hasher(RandomState::new());
-        map.insert(vec![].into_boxed_slice(), ArchetypeIdx::EMPTY);
+        map.insert(vec![].into_boxed_slice().into(), ArchetypeIdx::EMPTY);
 
         Self {
             archetypes: Slab::from_iter([(0, Archetype::empty())]),
@@ -202,23 +203,33 @@ impl Archetypes {
 
         match src_arch.insert_components.entry(component_idx) {
             BTreeEntry::Vacant(vacant_insert_components) => {
-                let Err(idx) = src_arch.component_indices.binary_search(&component_idx) else {
+                let Err(idx) = src_arch
+                    .component_indices
+                    .as_ref()
+                    .binary_search(&component_idx)
+                else {
                     // Archetype already has this component.
                     return src_arch_idx;
                 };
 
                 let mut new_components = Vec::with_capacity(src_arch.component_indices.len() + 1);
-                new_components.extend(src_arch.component_indices.iter().copied());
+                new_components.extend(src_arch.component_indices.as_ref().iter().copied());
                 new_components.insert(idx, component_idx);
 
-                match self.by_components.entry(new_components.into_boxed_slice()) {
+                match self
+                    .by_components
+                    .entry(new_components.into_boxed_slice().into())
+                {
                     Entry::Vacant(vacant_by_components) => {
                         assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
-                        let mut new_arch =
-                            Archetype::new(arch_id, vacant_by_components.key().clone(), components);
+                        let mut new_arch = Archetype::new(
+                            arch_id,
+                            vacant_by_components.key().as_ref().into(),
+                            components,
+                        );
 
                         new_arch
                             .remove_components
@@ -266,6 +277,7 @@ impl Archetypes {
             BTreeEntry::Vacant(vacant_remove_components) => {
                 if src_arch
                     .component_indices
+                    .as_ref()
                     .binary_search(&component_idx)
                     .is_err()
                 {
@@ -275,19 +287,23 @@ impl Archetypes {
 
                 let new_components: Box<[ComponentIdx]> = src_arch
                     .component_indices
+                    .as_ref()
                     .iter()
                     .copied()
                     .filter(|&c| c != component_idx)
                     .collect();
 
-                match self.by_components.entry(new_components) {
+                match self.by_components.entry(new_components.into()) {
                     Entry::Vacant(vacant_by_components) => {
                         assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
-                        let mut new_arch =
-                            Archetype::new(arch_id, vacant_by_components.key().clone(), components);
+                        let mut new_arch = Archetype::new(
+                            arch_id,
+                            vacant_by_components.key().as_ref().into(),
+                            components,
+                        );
 
                         new_arch
                             .insert_components
@@ -356,8 +372,15 @@ impl Archetypes {
 
             match (src_in_bounds, dst_in_bounds) {
                 (true, true) => {
-                    let src_comp_idx = *src_arch.component_indices.get_debug_checked(src_idx);
-                    let dst_comp_idx = *dst_arch.component_indices.get_debug_checked(dst_idx);
+                    let src_comp_idx = *src_arch
+                        .component_indices
+                        .as_ref()
+                        .get_debug_checked(src_idx);
+
+                    let dst_comp_idx = *dst_arch
+                        .component_indices
+                        .as_ref()
+                        .get_debug_checked(dst_idx);
 
                     match src_comp_idx.cmp(&dst_comp_idx) {
                         Ordering::Less => {
@@ -381,8 +404,11 @@ impl Archetypes {
                                 new_components.next().unwrap_debug_checked();
 
                             let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
-                            let dst_comp_idx =
-                                *dst_arch.component_indices.get_debug_checked(dst_idx);
+
+                            let dst_comp_idx = *dst_arch
+                                .component_indices
+                                .as_ref()
+                                .get_debug_checked(dst_idx);
 
                             debug_assert_eq!(component_idx, dst_comp_idx);
 
@@ -406,7 +432,11 @@ impl Archetypes {
                         new_components.next().unwrap_debug_checked();
 
                     let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
-                    let dst_comp_idx = *dst_arch.component_indices.get_debug_checked(dst_idx);
+
+                    let dst_comp_idx = *dst_arch
+                        .component_indices
+                        .as_ref()
+                        .get_debug_checked(dst_idx);
 
                     debug_assert_eq!(component_idx, dst_comp_idx);
 
@@ -558,7 +588,7 @@ pub struct Archetype {
     /// The index of this archetype. Provided here for convenience.
     index: ArchetypeIdx,
     /// Component indices of this archetype, one per column in sorted order.
-    component_indices: Box<[ComponentIdx]>,
+    component_indices: NonNull<[ComponentIdx]>,
     /// Columns of component data in this archetype. Sorted by component index.
     ///
     /// This is a `Box<[Column]>` with the length stripped out. The length field
@@ -579,7 +609,7 @@ impl Archetype {
     fn empty() -> Self {
         Self {
             index: ArchetypeIdx::EMPTY,
-            component_indices: Box::new([]),
+            component_indices: NonNull::from(<&[_]>::default()),
             columns: NonNull::dangling(),
             entity_ids: vec![],
             insert_components: BTreeMap::new(),
@@ -592,13 +622,15 @@ impl Archetype {
     /// # Safety
     ///
     /// - Component indices slice must be in sorted order.
+    /// - Component indices slice must outlive the archetype.
     /// - All component indices must be valid.
     unsafe fn new(
         index: ArchetypeIdx,
-        component_indices: Box<[ComponentIdx]>,
+        component_indices: NonNull<[ComponentIdx]>,
         components: &Components,
     ) -> Self {
         let columns: Box<[Column]> = component_indices
+            .as_ref()
             .iter()
             .map(|&idx| {
                 let info = unsafe {
@@ -684,7 +716,7 @@ impl Archetype {
     /// The returned slice has the same length as the slice returned by
     /// [`columns`](Archetype::columns).
     pub fn component_indices(&self) -> &[ComponentIdx] {
-        &self.component_indices
+        unsafe { self.component_indices.as_ref() }
     }
 
     /// Returns a slice of columns sorted by [`ComponentIdx`].
@@ -700,14 +732,14 @@ impl Archetype {
     /// Finds the column with the given component. Returns `None` if it doesn't
     /// exist.
     pub fn column_of(&self, idx: ComponentIdx) -> Option<&Column> {
-        let idx = self.component_indices.binary_search(&idx).ok()?;
+        let idx = self.component_indices().binary_search(&idx).ok()?;
 
         // SAFETY: `binary_search` ensures `idx` is in bounds.
         Some(unsafe { &*self.columns.as_ptr().add(idx) })
     }
 
     fn column_of_mut(&mut self, idx: ComponentIdx) -> Option<&mut Column> {
-        let idx = self.component_indices.binary_search(&idx).ok()?;
+        let idx = self.component_indices().binary_search(&idx).ok()?;
 
         // SAFETY: `binary_search` ensures `idx` is in bounds.
         Some(unsafe { &mut *self.columns.as_ptr().add(idx) })

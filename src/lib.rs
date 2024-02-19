@@ -11,6 +11,7 @@ extern crate alloc;
 extern crate self as evenio;
 
 pub mod access;
+mod aliased_box;
 pub mod archetype;
 mod assert;
 pub mod bit_set;
