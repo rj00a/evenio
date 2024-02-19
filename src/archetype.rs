@@ -101,11 +101,7 @@ impl Archetypes {
 
         if empty.entity_count() == 1 || rellocated {
             for mut ptr in empty.refresh_listeners.iter().copied() {
-                unsafe {
-                    SystemInfo::from_ptr_mut(&mut ptr)
-                        .system_mut()
-                        .refresh_archetype(empty)
-                };
+                unsafe { ptr.as_info_mut().system_mut().refresh_archetype(empty) };
             }
         }
 
@@ -159,11 +155,7 @@ impl Archetypes {
             let mut arch = self.archetypes.remove(arch_idx.0 as usize);
 
             for mut ptr in arch.refresh_listeners.iter().copied() {
-                unsafe {
-                    SystemInfo::from_ptr_mut(&mut ptr)
-                        .system_mut()
-                        .remove_archetype(&arch)
-                };
+                unsafe { ptr.as_info_mut().system_mut().remove_archetype(&arch) };
             }
 
             for &comp_idx in arch.component_indices() {
@@ -485,21 +477,13 @@ impl Archetypes {
 
         if src_arch.entity_ids.is_empty() {
             for mut ptr in src_arch.refresh_listeners.iter().copied() {
-                unsafe {
-                    SystemInfo::from_ptr_mut(&mut ptr)
-                        .system_mut()
-                        .remove_archetype(src_arch)
-                };
+                unsafe { ptr.as_info_mut().system_mut().remove_archetype(src_arch) };
             }
         }
 
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
             for mut ptr in dst_arch.refresh_listeners.iter().copied() {
-                unsafe {
-                    SystemInfo::from_ptr_mut(&mut ptr)
-                        .system_mut()
-                        .refresh_archetype(dst_arch)
-                };
+                unsafe { ptr.as_info_mut().system_mut().refresh_archetype(dst_arch) };
             }
         }
 
@@ -528,11 +512,7 @@ impl Archetypes {
 
         if arch.entity_count() == 0 {
             for mut ptr in arch.refresh_listeners.iter().copied() {
-                unsafe {
-                    SystemInfo::from_ptr_mut(&mut ptr)
-                        .system_mut()
-                        .remove_archetype(arch)
-                };
+                unsafe { ptr.as_info_mut().system_mut().remove_archetype(arch) };
             }
         }
     }

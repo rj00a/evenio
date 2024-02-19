@@ -163,9 +163,7 @@ impl Systems {
     /// Gets the [`SystemInfo`] for a system using its [`TypeId`]. Returns
     /// `None` if the `TypeId` does not map to a system.
     pub fn get_by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
-        self.by_type_id
-            .get(&id)
-            .map(|p| unsafe { SystemInfo::from_ptr(p) })
+        self.by_type_id.get(&id).map(|p| unsafe { p.as_info() })
     }
 
     /// Does the given system exist in the world?
@@ -177,14 +175,14 @@ impl Systems {
     pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
         self.by_insert_order
             .values()
-            .map(|ptr| unsafe { SystemInfo::from_ptr(ptr) })
+            .map(|ptr| unsafe { ptr.as_info() })
     }
 
     /// Returns a mutable iterator over all system infos in insertion order.
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut SystemInfo> {
         self.by_insert_order
             .values_mut()
-            .map(|ptr| unsafe { SystemInfo::from_ptr_mut(ptr) })
+            .map(|ptr| unsafe { ptr.as_info_mut() })
     }
 }
 
@@ -260,12 +258,25 @@ pub struct SystemInfo(AliasedBox<SystemInfoInner>);
 #[repr(transparent)]
 pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
 
-// impl SystemInfoPtr {
-//     /// Extract the inner (non-null) pointer.
-//     pub(crate) const fn as_ptr(self) -> *mut SystemInfoInner {
-//         self.0.as_ptr()
-//     }
-// }
+impl SystemInfoPtr {
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info(&self) -> &SystemInfo {
+        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
+        &*(self as *const Self as *const SystemInfo)
+    }
+
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut SystemInfo {
+        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
+        &mut *(self as *mut Self as *mut SystemInfo)
+    }
+}
 
 impl PartialEq for SystemInfoPtr {
     fn eq(&self, other: &Self) -> bool {
@@ -403,24 +414,6 @@ impl SystemInfo {
         SystemInfoPtr(AliasedBox::as_non_null(&self.0))
     }
 
-    /// # Safety
-    ///
-    /// - Pointer must be valid.
-    /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn from_ptr(this: &SystemInfoPtr) -> &Self {
-        // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
-        &*(this as *const _ as *const Self)
-    }
-
-    /// # Safety
-    ///
-    /// - Pointer must be valid.
-    /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn from_ptr_mut(this: &mut SystemInfoPtr) -> &mut Self {
-        // SAFETY: `SystemInfo` is `#[repr(transparent)]`.
-        &mut *(this as *mut _ as *mut Self)
-    }
-
     pub(crate) fn system_mut(&mut self) -> &mut dyn System {
         unsafe { &mut (*AliasedBox::as_mut_ptr(&mut self.0)).system }
     }
@@ -430,15 +423,18 @@ impl fmt::Debug for SystemInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemInfo")
             .field("name", &self.name())
+            .field("id", &self.id())
+            .field("type_id", &self.type_id())
+            .field("order", &self.order())
             .field("received_event", &self.received_event())
             .field("received_event_access", &self.received_event_access())
             .field("targeted_event_expr", &self.targeted_event_expr())
             .field("sent_untargeted_events", &self.sent_untargeted_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
+            .field("component_access", &self.component_access())
+            .field("referenced_components", &self.referenced_components())
             .field("priority", &self.priority())
-            .field("id", &self.id())
-            .field("type_id", &self.type_id())
             // Don't access the `system` field.
             .finish_non_exhaustive()
     }
@@ -1449,6 +1445,7 @@ mod tests {
             let _foo = info.name();
             let _bar = info.received_event();
             let _baz = info.referenced_components();
+            let _ = format!("{info:?}");
         });
 
         world.send(E);

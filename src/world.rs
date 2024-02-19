@@ -827,7 +827,7 @@ impl World {
             let events_before = self.event_queue.len();
 
             for mut info_ptr in unsafe { (*systems).iter().copied() } {
-                let info = unsafe { SystemInfo::from_ptr_mut(&mut info_ptr) };
+                let info = unsafe { info_ptr.as_info_mut() };
 
                 let system: *mut dyn System = info.system_mut();
 
