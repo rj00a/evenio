@@ -18,6 +18,7 @@ use evenio_macros::all_tuples;
 pub use evenio_macros::SystemParam;
 
 use crate::access::{Access, ComponentAccessExpr};
+use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
@@ -252,20 +253,7 @@ unsafe impl SystemParam for &'_ Systems {
 
 /// Metadata for a system.
 #[repr(transparent)]
-pub struct SystemInfo {
-    /// Pointer to heap allocated data that's shared between archetypes and the
-    /// system index. `SystemInfo` is responsible for dropping and freeing the
-    /// memory, like `Box`.
-    ///
-    /// This is a raw pointer to get around the current aliasing restrictions
-    /// of `Box`.
-    /// > The aliasing rules for `Box<T>` are the same as for `&mut T`. `Box<T>`
-    /// > asserts uniqueness over its content. Using raw pointers derived from a
-    /// > box after that box has been mutated through, moved or borrowed as
-    /// > `&mut T` is not allowed. For more guidance on working with box from
-    /// > unsafe code, see rust-lang/unsafe-code-guidelines#326.
-    inner: SystemInfoPtr,
-}
+pub struct SystemInfo(AliasedBox<SystemInfoInner>);
 
 /// Pointer to a system.
 #[derive(Clone, Copy, Debug)]
@@ -273,7 +261,8 @@ pub struct SystemInfo {
 pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
 
 impl SystemInfoPtr {
-    pub(crate) const unsafe fn as_ptr(self) -> *mut SystemInfoInner {
+    /// Extract the inner (non-null) pointer.
+    pub(crate) const fn as_ptr(self) -> *mut SystemInfoInner {
         self.0.as_ptr()
     }
 }
@@ -326,14 +315,15 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) system: S,
 }
 
+impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
+impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
+
 impl SystemInfo {
     pub(crate) fn new<S: System>(inner: SystemInfoInner<S>) -> Self {
-        // SAFETY: `Box::into_raw` guarantees the returned pointer is non-null.
-        let ptr = unsafe { NonNull::new(Box::into_raw(Box::new(inner))).unwrap_debug_checked() };
-
-        Self {
-            inner: SystemInfoPtr(ptr),
-        }
+        // Perform unsizing coercion using `Box`, then convert the box into an
+        // `AliasedBox`.
+        let b: Box<SystemInfoInner> = Box::new(inner);
+        Self(b.into())
     }
 
     /// Gets the name of the system.
@@ -341,31 +331,31 @@ impl SystemInfo {
     /// This name is intended for debugging purposes and should not be relied
     /// upon for correctness.
     pub fn name(&self) -> &str {
-        unsafe { &(*self.inner.as_ptr()).name }
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).name }
     }
 
     /// Gets the ID of this system.
     pub fn id(&self) -> SystemId {
-        unsafe { (*self.inner.as_ptr()).id }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).id }
     }
 
     /// Gets the [`TypeId`] of this system, if any.
     pub fn type_id(&self) -> Option<TypeId> {
-        unsafe { (*self.inner.as_ptr()).type_id }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).type_id }
     }
 
     pub(crate) fn order(&self) -> u64 {
-        unsafe { (*self.inner.as_ptr()).order }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).order }
     }
 
     /// Gets the [`EventId`] of the event is system listens for.
     pub fn received_event(&self) -> EventId {
-        unsafe { (*self.inner.as_ptr()).received_event }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).received_event }
     }
 
     /// Gets the system's [`Access`] to the event it listens for.
     pub fn received_event_access(&self) -> Access {
-        unsafe { (*self.inner.as_ptr()).received_event_access }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).received_event_access }
     }
 
     /// Gets the expression describing the system's targeted event query, or
@@ -373,27 +363,27 @@ impl SystemInfo {
     pub fn targeted_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
         self.received_event()
             .is_targeted()
-            .then(|| unsafe { &(*self.inner.as_ptr()).targeted_event_expr })
+            .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_expr })
     }
 
     /// Returns the set of untargeted events this system sends.
     pub fn sent_untargeted_events(&self) -> &BitSet<UntargetedEventIdx> {
-        unsafe { &(*self.inner.as_ptr()).sent_untargeted_events }
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
 
     /// Returns the set of targeted events this system sends.
     pub fn sent_targeted_events(&self) -> &BitSet<TargetedEventIdx> {
-        unsafe { &(*self.inner.as_ptr()).sent_targeted_events }
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
 
     /// Gets this system's [`Access`] to the event queue.
     pub fn event_queue_access(&self) -> Access {
-        unsafe { (*self.inner.as_ptr()).event_queue_access }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).event_queue_access }
     }
 
     /// Gets the expression describing this system's access
     pub fn component_access(&self) -> &ComponentAccessExpr {
-        unsafe { &(*self.inner.as_ptr()).component_access }
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
     }
 
     /// Gets the set of components referenced by this system.
@@ -401,16 +391,16 @@ impl SystemInfo {
     /// Referenced components are components used by the system in any way. Used
     /// for cleanup when removing components.
     pub fn referenced_components(&self) -> &BitSet<ComponentIdx> {
-        unsafe { &(*self.inner.as_ptr()).referenced_components }
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }
     }
 
     /// Gets the [`Priority`] of this system.
     pub fn priority(&self) -> Priority {
-        unsafe { (*self.inner.as_ptr()).priority }
+        unsafe { (*AliasedBox::as_ptr(&self.0)).priority }
     }
 
     pub(crate) fn ptr(&self) -> SystemInfoPtr {
-        self.inner
+        SystemInfoPtr(AliasedBox::as_non_null(&self.0))
     }
 
     /// # Safety
@@ -432,15 +422,9 @@ impl SystemInfo {
     }
 
     pub(crate) fn system_mut(&mut self) -> &mut dyn System {
-        unsafe { &mut (*self.inner.as_ptr()).system }
+        unsafe { &mut (*AliasedBox::as_mut_ptr(&mut self.0)).system }
     }
 }
-
-impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
-impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
-
-unsafe impl Send for SystemInfo {}
-unsafe impl Sync for SystemInfo {}
 
 impl fmt::Debug for SystemInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -457,14 +441,6 @@ impl fmt::Debug for SystemInfo {
             .field("type_id", &self.type_id())
             // Don't access the `system` field.
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for SystemInfo {
-    fn drop(&mut self) {
-        // SAFETY: The inner data was derived from a `Box` and is owned by this system
-        // info.
-        let _ = unsafe { Box::from_raw(self.inner.as_ptr()) };
     }
 }
 
@@ -1460,5 +1436,21 @@ mod tests {
         world.insert(e, Tracker(String::new()));
 
         world.send(E(e));
+    }
+
+    #[test]
+    fn system_info_aliasing() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E;
+
+        world.add_system(|_: Receiver<E>, info: &SystemInfo| {
+            let _foo = info.name();
+            let _bar = info.received_event();
+            let _baz = info.referenced_components();
+        });
+
+        world.send(E);
     }
 }

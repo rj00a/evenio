@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
@@ -23,7 +24,9 @@ use core::{fmt, mem};
 /// > asserts uniqueness over its content. Using raw pointers derived from a
 /// > box after that box has been mutated through, moved or borrowed as
 /// > `&mut T` is not allowed. For more guidance on working with box from
-/// > unsafe code, see rust-lang/unsafe-code-guidelines#326.
+/// > unsafe code, see [rust-lang/unsafe-code-guidelines#326][issue].
+///
+/// [issue]: https://github.com/rust-lang/unsafe-code-guidelines/issues/326
 #[repr(transparent)]
 pub(crate) struct AliasedBox<T: ?Sized>(NonNull<T>);
 
@@ -43,19 +46,23 @@ impl<T> AliasedBox<T> {
 }
 
 impl<T: ?Sized> AliasedBox<T> {
-    /// Returns a pointer to the inner value without forming an intermediate
-    /// reference.
+    /// Returns a (non-null) pointer to the inner value without forming an
+    /// intermediate reference.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn as_ptr(this: &Self) -> NonNull<T> {
-        this.0
+    pub(crate) fn as_ptr(this: &Self) -> *const T {
+        this.0.as_ptr().cast_const()
     }
 
-    /// Returns a pointer to the inner value without forming an intermediate
-    /// reference.
+    /// Returns a (non-null) mutable pointer to the inner value without forming
+    /// an intermediate reference.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn as_mut_ptr(this: &mut Self) -> NonNull<T> {
+    pub(crate) fn as_mut_ptr(this: &mut Self) -> *mut T {
+        this.0.as_ptr()
+    }
+
+    /// Returns a (non-null) pointer to the inner value without forming an
+    /// intermediate reference.
+    pub(crate) fn as_non_null(this: &Self) -> NonNull<T> {
         this.0
     }
 }
