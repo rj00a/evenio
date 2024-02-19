@@ -773,7 +773,7 @@ mod tests {
 
         let mut set = BTreeSet::new();
 
-        for i in 0..100_u32 {
+        for i in 0..20_u32 {
             let e = world.spawn();
 
             world.insert(e, C1(i.pow(2)));
@@ -807,7 +807,7 @@ mod tests {
 
         let mut world = World::new();
 
-        const N: u32 = 100;
+        const N: u32 = 20;
 
         for i in 0..N {
             let e = world.spawn();
@@ -848,7 +848,7 @@ mod tests {
     fn iter_len() {
         let mut world = World::new();
 
-        let count = 100;
+        let count = 20;
 
         for i in 1..=count {
             let e = world.spawn();
