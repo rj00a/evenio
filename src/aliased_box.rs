@@ -177,6 +177,6 @@ mod tests {
 
     #[test]
     fn aliased_box_into_inner() {
-        let _ = AliasedBox::into_inner(AliasedBox::new("abc123".to_string()));
+        let _ = AliasedBox::into_inner(AliasedBox::new("abc123".to_owned()));
     }
 }

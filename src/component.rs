@@ -6,14 +6,15 @@ use core::alloc::Layout;
 use core::any::TypeId;
 use core::ops::Index;
 
+use ahash::RandomState;
 pub use evenio_macros::Component;
 
-use crate::archetype::Archetype;
+use crate::archetype::{Archetype, ArchetypeIdx};
 use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventPtr};
-use crate::map::{Entry, TypeIdMap};
+use crate::map::{Entry, IndexSet, TypeIdMap};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -61,6 +62,7 @@ impl Components {
                         is_immutable: desc.is_immutable,
                         insert_events: BTreeSet::new(),
                         remove_events: BTreeSet::new(),
+                        member_of: IndexSet::with_hasher(RandomState::new()),
                     }) else {
                         panic!("too many components")
                     };
@@ -80,6 +82,7 @@ impl Components {
             is_immutable: desc.is_immutable,
             insert_events: BTreeSet::new(),
             remove_events: BTreeSet::new(),
+            member_of: IndexSet::with_hasher(RandomState::new()),
         }) else {
             panic!("too many components")
         };
@@ -202,6 +205,8 @@ pub struct ComponentInfo {
     is_immutable: bool,
     pub(crate) insert_events: BTreeSet<EventId>,
     pub(crate) remove_events: BTreeSet<EventId>,
+    /// The set of archetypes that have this component as one of its columns.
+    pub(crate) member_of: IndexSet<ArchetypeIdx>,
 }
 
 impl ComponentInfo {
@@ -447,5 +452,49 @@ mod tests {
         assert!(!world.systems().contains(s2));
         assert!(!world.entities().contains(e2));
         assert_eq!(world.archetypes().len(), 1);
+    }
+
+    #[test]
+    fn component_member_of() {
+        let mut world = World::new();
+
+        #[derive(Component)]
+        struct A;
+
+        #[derive(Component)]
+        struct B;
+
+        #[derive(Component)]
+        struct C;
+
+        let c1 = world.add_component::<A>();
+        let c2 = world.add_component::<B>();
+        let c3 = world.add_component::<C>();
+
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        let e3 = world.spawn();
+
+        world.insert(e1, A);
+
+        world.insert(e2, A);
+        world.insert(e2, B);
+
+        world.insert(e3, A);
+        world.insert(e3, B);
+        world.insert(e3, C);
+
+        assert_eq!(world.components()[c1].member_of.len(), 3);
+        assert_eq!(world.components()[c2].member_of.len(), 2);
+        assert_eq!(world.components()[c3].member_of.len(), 1);
+
+        world.remove_component(c3);
+
+        assert_eq!(world.components()[c1].member_of.len(), 2);
+        assert_eq!(world.components()[c2].member_of.len(), 1);
+
+        world.remove_component(c2);
+
+        assert_eq!(world.components()[c1].member_of.len(), 1);
     }
 }

@@ -554,14 +554,19 @@ impl World {
             self.remove_event(event);
         }
 
+        let mut info = self
+            .components
+            .remove(component)
+            .expect("component should still exist");
+
         // Remove all archetypes with this component. If there are still entities with
         // the component by this point, then they will be silently removed.
         self.archetypes
-            .remove_component(component.index(), |entity_id| {
-                self.entities.remove(entity_id);
+            .remove_component(&mut info, &mut self.components, |id| {
+                self.entities.remove(id);
             });
 
-        self.components.remove(component)
+        Some(info)
     }
 
     /// Adds the event `E` to the world, returns its [`EventId`], and sends the
@@ -821,17 +826,17 @@ impl World {
 
             let events_before = self.event_queue.len();
 
-            for info_ptr in unsafe { &*systems } {
-                let system = unsafe { &mut (*info_ptr.as_ptr()).system };
+            for mut info_ptr in unsafe { (*systems).iter().copied() } {
+                let info = unsafe { SystemInfo::from_ptr_mut(&mut info_ptr) };
 
-                let info = unsafe { SystemInfo::from_ptr(info_ptr) };
+                let system: *mut dyn System = info.system_mut();
 
                 let event_ptr =
                     EventPtr::new(event.event, NonNull::from(&mut event.ownership_flag));
 
                 let world_cell = self.unsafe_cell_mut();
 
-                unsafe { system.run(info, event_ptr, target_location, world_cell) };
+                unsafe { (*system).run(info, event_ptr, target_location, world_cell) };
 
                 // Did the system take ownership of the event?
                 if event.ownership_flag {

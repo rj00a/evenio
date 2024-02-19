@@ -15,6 +15,8 @@ pub(crate) type Entry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
 #[cfg(not(feature = "std"))]
 pub(crate) type Entry<'a, K, V, S = ahash::RandomState> = hashbrown::hash_map::Entry<'a, K, V, S>;
 
+pub(crate) type IndexSet<T, S = ahash::RandomState> = indexmap::IndexSet<T, S>;
+
 /// Map type optimized for [`TypeId`] keys.
 pub(crate) type TypeIdMap<V> = HashMap<TypeId, V, BuildHasherDefault<TypeIdHasher>>;
 

@@ -15,7 +15,7 @@ use slab::Slab;
 use crate::aliased_box::AliasedBox;
 use crate::assert::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
 use crate::blob_vec::BlobVec;
-use crate::component::{ComponentIdx, Components};
+use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::map::{Entry, HashMap};
@@ -100,9 +100,12 @@ impl Archetypes {
         empty.entity_ids.push(id);
 
         if empty.entity_count() == 1 || rellocated {
-            for &ptr in &empty.refresh_listeners {
-                let system = unsafe { &mut (*ptr.as_ptr()).system };
-                system.refresh_archetype(empty);
+            for mut ptr in empty.refresh_listeners.iter().copied() {
+                unsafe {
+                    SystemInfo::from_ptr_mut(&mut ptr)
+                        .system_mut()
+                        .refresh_archetype(empty)
+                };
             }
         }
 
@@ -142,42 +145,56 @@ impl Archetypes {
         }
     }
 
-    pub(crate) fn remove_component<F>(&mut self, component_idx: ComponentIdx, mut f: F)
-    where
+    pub(crate) fn remove_component<F>(
+        &mut self,
+        info: &mut ComponentInfo,
+        components: &mut Components,
+        mut f: F,
+    ) where
         F: FnMut(EntityId),
     {
-        // TODO: this iteration is non-deterministic.
-        self.by_components.retain(|comps, &mut idx| {
-            if comps.binary_search(&component_idx).is_ok() {
-                let mut arch = self.archetypes.remove(idx.0 as usize);
+        let removed_component_id = info.id();
 
-                for sys in &arch.refresh_listeners {
-                    unsafe { (*sys.as_ptr()).system.remove_archetype(&arch) };
-                }
+        for arch_idx in info.member_of.drain(..) {
+            let mut arch = self.archetypes.remove(arch_idx.0 as usize);
 
-                for &entity_id in arch.entity_ids() {
-                    f(entity_id);
-                }
-
-                for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
-                    let other_arch =
-                        unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
-
-                    other_arch.remove_components.remove(&comp_idx);
-                }
-
-                for (comp_idx, arch_idx) in mem::take(&mut arch.remove_components) {
-                    let other_arch =
-                        unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
-
-                    other_arch.insert_components.remove(&comp_idx);
-                }
-
-                false
-            } else {
-                true
+            for mut ptr in arch.refresh_listeners.iter().copied() {
+                unsafe {
+                    SystemInfo::from_ptr_mut(&mut ptr)
+                        .system_mut()
+                        .remove_archetype(&arch)
+                };
             }
-        });
+
+            for &comp_idx in arch.component_indices() {
+                if comp_idx != removed_component_id.index() {
+                    let info =
+                        unsafe { components.get_by_index_mut(comp_idx).unwrap_debug_checked() };
+                    info.member_of.swap_remove(&arch_idx);
+                }
+            }
+
+            // NOTE: Using plain `.remove()` here makes Miri sad.
+            self.by_components.remove_entry(arch.component_indices());
+
+            for &entity_id in arch.entity_ids() {
+                f(entity_id);
+            }
+
+            for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
+                let other_arch =
+                    unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+
+                other_arch.remove_components.remove(&comp_idx);
+            }
+
+            for (comp_idx, arch_idx) in mem::take(&mut arch.remove_components) {
+                let other_arch =
+                    unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+
+                other_arch.insert_components.remove(&comp_idx);
+            }
+        }
     }
 
     /// Traverses one edge of the archetype graph in the insertion direction.
@@ -467,16 +484,22 @@ impl Archetypes {
         }
 
         if src_arch.entity_ids.is_empty() {
-            for &ptr in &src_arch.refresh_listeners {
-                let system = unsafe { &mut (*ptr.as_ptr()).system };
-                system.remove_archetype(src_arch);
+            for mut ptr in src_arch.refresh_listeners.iter().copied() {
+                unsafe {
+                    SystemInfo::from_ptr_mut(&mut ptr)
+                        .system_mut()
+                        .remove_archetype(src_arch)
+                };
             }
         }
 
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
-            for &ptr in &dst_arch.refresh_listeners {
-                let system = unsafe { &mut (*ptr.as_ptr()).system };
-                system.refresh_archetype(dst_arch);
+            for mut ptr in dst_arch.refresh_listeners.iter().copied() {
+                unsafe {
+                    SystemInfo::from_ptr_mut(&mut ptr)
+                        .system_mut()
+                        .refresh_archetype(dst_arch)
+                };
             }
         }
 
@@ -504,9 +527,12 @@ impl Archetypes {
         arch.entity_ids.swap_remove(loc.row.0 as usize);
 
         if arch.entity_count() == 0 {
-            for &ptr in &arch.refresh_listeners {
-                let system = unsafe { &mut (*ptr.as_ptr()).system };
-                system.remove_archetype(arch);
+            for mut ptr in arch.refresh_listeners.iter().copied() {
+                unsafe {
+                    SystemInfo::from_ptr_mut(&mut ptr)
+                        .system_mut()
+                        .remove_archetype(arch)
+                };
             }
         }
     }
@@ -539,7 +565,7 @@ unsafe impl SystemParam for &'_ Archetypes {
 /// Unique identifier for an archetype.
 ///
 /// Old archetype indices may be reused by new archetypes.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ArchetypeIdx(pub u32);
 
 impl ArchetypeIdx {
@@ -625,9 +651,9 @@ impl Archetype {
     /// - Component indices slice must outlive the archetype.
     /// - All component indices must be valid.
     unsafe fn new(
-        index: ArchetypeIdx,
+        arch_idx: ArchetypeIdx,
         component_indices: NonNull<[ComponentIdx]>,
-        components: &Components,
+        components: &mut Components,
     ) -> Self {
         let columns: Box<[Column]> = component_indices
             .as_ref()
@@ -635,9 +661,11 @@ impl Archetype {
             .map(|&idx| {
                 let info = unsafe {
                     components
-                        .get_by_index(idx)
+                        .get_by_index_mut(idx)
                         .expect_debug_checked("invalid component index")
                 };
+
+                info.member_of.insert(arch_idx);
 
                 Column {
                     data: unsafe { BlobVec::new(info.layout(), info.drop()) },
@@ -649,7 +677,7 @@ impl Archetype {
         let columns_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(columns) as *mut Column) };
 
         Self {
-            index,
+            index: arch_idx,
             component_indices,
             columns: columns_ptr,
             entity_ids: vec![],

@@ -81,7 +81,7 @@ impl Systems {
         let Some(k) = self.infos.insert_with(|k| {
             let id = SystemId(k);
 
-            let inner = unsafe { &mut *ptr.as_ptr() };
+            let inner = unsafe { &mut *ptr.0.as_ptr() };
 
             inner.id = id;
             inner.order = self.insert_counter;
@@ -260,12 +260,12 @@ pub struct SystemInfo(AliasedBox<SystemInfoInner>);
 #[repr(transparent)]
 pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
 
-impl SystemInfoPtr {
-    /// Extract the inner (non-null) pointer.
-    pub(crate) const fn as_ptr(self) -> *mut SystemInfoInner {
-        self.0.as_ptr()
-    }
-}
+// impl SystemInfoPtr {
+//     /// Extract the inner (non-null) pointer.
+//     pub(crate) const fn as_ptr(self) -> *mut SystemInfoInner {
+//         self.0.as_ptr()
+//     }
+// }
 
 impl PartialEq for SystemInfoPtr {
     fn eq(&self, other: &Self) -> bool {
