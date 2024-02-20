@@ -1,10 +1,9 @@
 //! Event handlers
 
 use alloc::borrow::Cow;
-use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::any::TypeId;
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};

@@ -1,5 +1,5 @@
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::num::NonZeroU32;

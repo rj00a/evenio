@@ -1,7 +1,7 @@
 //! Defines the [`World`] and related APIs.
 
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::{self, TypeId};
 use core::cell::UnsafeCell;

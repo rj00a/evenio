@@ -1,7 +1,7 @@
 //! The [`BitSet`], a set backed by a vector of bits.
 
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;

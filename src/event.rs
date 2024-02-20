@@ -1,8 +1,8 @@
 //! Types for sending and receiving [`Event`]s.
 
 use alloc::borrow::Cow;
-use alloc::vec::Vec;
-use alloc::{format, vec};
+#[cfg(not(feature = "std"))]
+use alloc::{format, vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;

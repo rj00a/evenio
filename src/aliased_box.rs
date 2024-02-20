@@ -1,3 +1,4 @@
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use core::borrow::Borrow;
 use core::cmp::Ordering;

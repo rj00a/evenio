@@ -1,7 +1,7 @@
 //! Boolean expressions.
 
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::{fmt, mem};
 
 use crate::bit_set::BitSet;

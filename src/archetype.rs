@@ -1,10 +1,9 @@
 //! [`Archetype`] and related items.
 
-use alloc::boxed::Box;
 use alloc::collections::btree_map::Entry as BTreeEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::vec;
-use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::cmp::Ordering;
 use core::ptr::NonNull;
 use core::{mem, ptr, slice};
