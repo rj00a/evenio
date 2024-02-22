@@ -7,8 +7,8 @@ fn main() {
     divan::main()
 }
 
-const TOTAL_ENTITIES: usize = 10_000;
-const FETCHED_COUNT: usize = 1000;
+const TOTAL_ENTITIES: usize = 1_000_000;
+const FETCHED_COUNT: usize = 100_000;
 
 #[divan::bench]
 fn random_access_evenio(bencher: Bencher) {
@@ -47,7 +47,7 @@ fn random_access_evenio(bencher: Bencher) {
     }
 
     add_components!(world; entities;
-        C0 C1 C2 C3 C4 C5 C6 C7 /*C8 C9
+        C0 C1 C2 C3 C4 C5 /*C6 C7 C8 C9
         C10 C11 C12 C13 C14 C15 C16 C17 C18 C19
         C20 C21 C22 C23 C24 C25 C26 C27 C28 C29
         C30 C31 C32 C33 C34 C35 C36 C37 C38 C39*/
@@ -106,7 +106,7 @@ fn random_access_bevy(bencher: Bencher) {
     }
 
     add_components!(world; entities;
-        C0 C1 C2 C3 C4 C5 C6 C7 /*C8 C9
+        C0 C1 C2 C3 C4 C5 /*C6 C7 C8 C9
         C10 C11 C12 C13 C14 C15 C16 C17 C18 C19
         C20 C21 C22 C23 C24 C25 C26 C27 C28 C29
         C30 C31 C32 C33 C34 C35 C36 C37 C38 C39*/
@@ -122,6 +122,8 @@ fn random_access_bevy(bencher: Bencher) {
             let _ = black_box(q.get(e));
         }
     });
+
+    sched.run(&mut world);
 
     bencher.bench_local(|| sched.run(&mut world));
 }
