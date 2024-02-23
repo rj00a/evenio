@@ -1,8 +1,12 @@
 //! Entity related items.
 
-use core::ops::Index;
+use alloc::borrow::Cow;
+use core::borrow::Borrow;
+use core::{any, fmt};
+use core::ops::{Deref, DerefMut, Index};
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
+use crate::component::Component;
 use crate::event::EventPtr;
 use crate::prelude::World;
 use crate::slot_map::{Key, NextKeyIter, SlotMap};
@@ -229,6 +233,59 @@ impl ReservedEntities {
     pub(crate) fn refresh(&mut self, entities: &Entities) {
         debug_assert_eq!(self.count, 0);
         self.iter = entities.locs.next_key_iter();
+    }
+}
+
+#[derive(Component, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Name(pub Cow<'static, str>);
+
+impl Name {
+    pub fn new<T: 'static>() -> Self {
+        Self(Cow::Borrowed(any::type_name::<T>()))
+    }
+}
+
+impl Deref for Name {
+    type Target = Cow<'static, str>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Name {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl AsRef<Cow<'static, str>> for Name {
+    fn as_ref(&self) -> &Cow<'static, str> {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<Cow<'static, str>> for Name {
+    fn borrow(&self) -> &Cow<'static, str> {
+        &self.0
+    }
+}
+
+impl Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

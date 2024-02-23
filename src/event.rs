@@ -3,6 +3,7 @@
 use alloc::borrow::Cow;
 #[cfg(not(feature = "std"))]
 use alloc::{format, vec, vec::Vec};
+use slab::Slab;
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -18,12 +19,13 @@ pub use evenio_macros::Event;
 use memoffset::offset_of;
 
 use crate::access::Access;
+use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
 use crate::assert::{
     AssertMutable, AssertTargetedEvent, AssertUntargetedEvent, GetDebugChecked, UnwrapDebugChecked,
 };
 use crate::component::ComponentIdx;
-use crate::drop::DropFn;
+use crate::drop::{drop_fn_of, DropFn};
 use crate::entity::{EntityId, EntityLocation};
 use crate::fetch::FetcherState;
 use crate::map::{Entry, TypeIdMap};
@@ -49,9 +51,9 @@ use crate::world::{UnsafeWorldCell, World};
 /// world.add_system(|_: Receiver<E>, events: &Events| {});
 #[derive(Debug)]
 pub struct Events {
-    untargeted_events: SlotMap<EventInfo>,
-    targeted_events: SlotMap<EventInfo>,
-    by_type_id: TypeIdMap<EventId>,
+    by_untargeted_index: Slab<EventInfoPtr>,
+    by_targeted_index: Slab<EventInfoPtr>,
+    by_type_id: TypeIdMap<EventInfoPtr>,
 }
 
 impl Events {
@@ -63,12 +65,11 @@ impl Events {
         };
 
         this.add(EventDescriptor {
-            name: any::type_name::<SpawnQueued>().into(),
             type_id: None,
             is_targeted: false,
             kind: EventKind::SpawnQueued,
             layout: Layout::new::<SpawnQueued>(),
-            drop: None,
+            drop_fn: None,
             is_immutable: true,
         });
 
@@ -82,7 +83,7 @@ impl Events {
             kind: desc.kind,
             type_id: desc.type_id,
             layout: desc.layout,
-            drop: desc.drop,
+            drop: desc.drop_fn,
             is_immutable: desc.is_immutable,
         };
 
@@ -357,106 +358,6 @@ pub enum EventKind {
     Despawn,
 }
 
-/// Lightweight identifier for an event type.
-///
-/// Event identifiers are implemented using an [index] and a generation count.
-/// The generation count ensures that IDs from removed events are not reused
-/// by new events.
-///
-/// An event identifier is only meaningful in the [`World`] it was created
-/// from. Attempting to use an event ID in a different world will have
-/// unexpected results.
-///
-/// [index]: EventIdx
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EventId {
-    index: u32,
-    generation: u32,
-}
-
-impl EventId {
-    /// The event ID which never identifies a live event. This is the default
-    /// value for `EventId`.
-    pub const NULL: Self = Self {
-        index: u32::MAX,
-        generation: u32::MAX,
-    };
-
-    // ID of the [`SpawnQueued`] event.
-    pub(crate) const SPAWN_QUEUED: EventId = Self {
-        index: 0,
-        generation: 1,
-    };
-
-    /// Creates a new event ID from an index and generation count. Returns
-    /// `None` if the ID is malformed.
-    pub const fn new(index: EventIdx, generation: u32) -> Option<Self> {
-        match Key::new(index.as_u32(), generation) {
-            Some(k) => Some(Self::from_key(k, index.is_targeted())),
-            None => None,
-        }
-    }
-
-    const fn from_key(k: Key, is_targeted: bool) -> Self {
-        Self {
-            index: k.index(),
-            generation: if is_targeted {
-                k.generation().get() & !1
-            } else {
-                k.generation().get()
-            },
-        }
-    }
-
-    fn as_key(self) -> Key {
-        Key::new(self.index, self.generation().get()).unwrap()
-    }
-
-    /// Returns whether this ID refers to a [targeted] event.
-    ///
-    /// [targeted]: Event::IS_TARGETED
-    pub const fn is_targeted(&self) -> bool {
-        self.generation & 1 == 0
-    }
-
-    /// Returns whether this ID refers to an [untargeted] event.
-    ///
-    /// [untargeted]: Event::IS_TARGETED
-    pub const fn is_untargeted(&self) -> bool {
-        self.generation & 1 == 1
-    }
-
-    /// Returns the index of this ID.
-    #[inline]
-    pub const fn index(self) -> EventIdx {
-        if self.is_targeted() {
-            EventIdx::Targeted(TargetedEventIdx(self.index))
-        } else {
-            EventIdx::Untargeted(UntargetedEventIdx(self.index))
-        }
-    }
-
-    /// Returns the generation count of this ID.
-    pub const fn generation(self) -> NonZeroU32 {
-        unsafe { NonZeroU32::new_unchecked(self.generation | 1) }
-    }
-}
-
-impl Default for EventId {
-    fn default() -> Self {
-        Self::NULL
-    }
-}
-
-impl fmt::Debug for EventId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EventId")
-            .field("index", &self.index())
-            .field("generation", &self.generation())
-            .finish()
-    }
-}
-
 /// An [`EventId`] with the generation count stripped out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum EventIdx {
@@ -526,10 +427,10 @@ impl Event for SpawnQueued {
     }
 }
 
-/// Metadata for an event.
-#[derive(Debug)]
+/*
+#[derive(Component, Debug)]
+#[component(immutable)] // Required for soundness.
 pub struct EventInfo {
-    name: Cow<'static, str>,
     id: EventId,
     kind: EventKind,
     type_id: Option<TypeId>,
@@ -539,14 +440,6 @@ pub struct EventInfo {
 }
 
 impl EventInfo {
-    /// Gets the name of the event.
-    ///
-    /// This name is intended for debugging purposes and should not be relied
-    /// upon for correctness.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Gets the ID of the event.
     pub fn id(&self) -> EventId {
         self.id
@@ -579,15 +472,85 @@ impl EventInfo {
         self.is_immutable
     }
 }
+*/
+
+#[derive(Component, Debug)]
+#[component(immutable)] // Required for soundness.
+#[repr(transparent)]
+pub struct EventInfo(AliasedBox<EventInfoInner>);
+
+impl EventInfo {
+    pub fn new<E: Event>() -> Self {
+        unsafe {
+            Self::from_descriptor(EventDescriptor {
+                type_id: Some(TypeId::of::<E>()),
+                is_targeted: E::IS_TARGETED,
+                kind: EventKind::Normal,
+                layout: Layout::new::<E>(),
+                drop_fn: drop_fn_of::<E>(),
+                is_immutable: E::IS_IMMUTABLE,
+            })
+        }
+    }
+
+    pub unsafe fn from_descriptor(
+        EventDescriptor {
+            type_id,
+            is_targeted,
+            kind,
+            layout,
+            drop_fn: drop,
+            is_immutable,
+        }: EventDescriptor,
+    ) -> Self {
+        Self(AliasedBox::new(EventInfoInner {
+            entity_id: EntityId::NULL,
+            type_id,
+            kind,
+            layout,
+            drop_fn: drop,
+            is_immutable,
+        }))
+    }
+
+    pub fn entity_id(&self) -> EntityId {
+        self.0.entity_id
+    }
+
+    pub fn type_id(&self) -> Option<TypeId> {
+        self.0.type_id
+    }
+
+    pub fn kind(&self) -> EventKind {
+        self.0.kind
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.0.layout
+    }
+
+    pub fn drop_fn(&self) -> DropFn {
+        self.0.drop_fn
+    }
+
+    pub fn is_immutable(&self) -> bool {
+        self.0.is_immutable
+    }
+}
+
+#[derive(Debug)]
+struct EventInfoInner {
+    entity_id: EntityId,
+    type_id: Option<TypeId>,
+    kind: EventKind,
+    layout: Layout,
+    drop_fn: DropFn,
+    is_immutable: bool,
+}
 
 /// Data needed to create a new event.
 #[derive(Clone, Debug)]
 pub struct EventDescriptor {
-    /// The name of this event.
-    ///
-    /// This name is intended for debugging purposes and should not be relied
-    /// upon for correctness.
-    pub name: Cow<'static, str>,
     /// The [`TypeId`] of this event, if any.
     pub type_id: Option<TypeId>,
     /// If this event is [targeted](Event::IS_TARGETED).
@@ -598,9 +561,33 @@ pub struct EventDescriptor {
     pub layout: Layout,
     /// The [`DropFn`] of the event. This is passed a pointer to the
     /// event in order to drop it.
-    pub drop: DropFn,
+    pub drop_fn: DropFn,
     /// If this event is [immutable](Event::IS_IMMUTABLE).
     pub is_immutable: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct EventInfoPtr(NonNull<EventInfoInner>);
+
+impl EventInfoPtr {
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info(&self) -> &EventInfo {
+        // SAFETY: Both `EventInfo` and `EventPtr` have non-null pointer layout.
+        &*(self as *const Self as *const EventInfo)
+    }
+
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut EventInfo {
+        // SAFETY: Both `EventInfo` and `EventPtr` have non-null pointer layout.
+        &mut *(self as *mut Self as *mut EventInfo)
+    }
 }
 
 #[derive(Debug)]
@@ -1539,18 +1526,6 @@ impl Event for Despawn {
     }
 }
 
-/// An [`Event`] sent immediately after a new event is added to the world.
-///
-/// Contains the [`EventId`] of the added event.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct AddEvent(pub EventId);
-
-/// An [`Event`] sent immediately before an event is removed from the world.
-///
-/// Contains the [`EventId`] of the event to be removed.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RemoveEvent(pub EventId);
-
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
@@ -1626,7 +1601,7 @@ mod tests {
         world.send(A);
 
         assert_eq!(
-            world.get_component::<Result>(res).unwrap().0.as_slice(),
+            world.get::<Result>(res).unwrap().0.as_slice(),
             &[0, 1, 2, 3, 4, 5]
         );
     }
@@ -1654,7 +1629,7 @@ mod tests {
             s.send(E(3));
         });
 
-        let Result(values) = world.get_component_mut::<Result>(e).unwrap();
+        let Result(values) = world.get_mut::<Result>(e).unwrap();
         assert_eq!(values, &[1, 2, 3]);
     }
 
