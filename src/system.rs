@@ -22,8 +22,8 @@ use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
 use crate::bool_expr::BoolExpr;
-use crate::component::ComponentIdx;
-use crate::entity::EntityLocation;
+use crate::component::{Component, ComponentIdx};
+use crate::entity::{EntityId, EntityLocation};
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
 use crate::exclusive::Exclusive;
 use crate::map::TypeIdMap;
@@ -248,105 +248,40 @@ unsafe impl SystemParam for &'_ Systems {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-/// Metadata for a system.
+#[derive(Component)]
+#[component(immutable)] // Required for soundness.
 #[repr(transparent)]
 pub struct SystemInfo(AliasedBox<SystemInfoInner>);
 
-/// Pointer to a system.
-#[derive(Clone, Copy, Debug)]
-#[repr(transparent)]
-pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
-
-impl SystemInfoPtr {
-    /// # Safety
-    ///
-    /// - Pointer must be valid.
-    /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn as_info(&self) -> &SystemInfo {
-        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
-        &*(self as *const Self as *const SystemInfo)
-    }
-
-    /// # Safety
-    ///
-    /// - Pointer must be valid.
-    /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut SystemInfo {
-        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
-        &mut *(self as *mut Self as *mut SystemInfo)
-    }
-}
-
-impl PartialEq for SystemInfoPtr {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
-    }
-}
-
-impl Eq for SystemInfoPtr {}
-
-impl PartialOrd for SystemInfoPtr {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SystemInfoPtr {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Ignore ptr metadata by casting to thin pointer.
-        self.0.cast::<()>().cmp(&other.0.cast::<()>())
-    }
-}
-
-impl Hash for SystemInfoPtr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // Ignore ptr metadata by casting to thin pointer.
-        self.0.cast::<()>().hash(state)
-    }
-}
-
-// This is generic over `S` so that we can do an unsizing coercion.
-pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
-    pub(crate) name: Cow<'static, str>,
-    pub(crate) id: SystemId,
-    pub(crate) type_id: Option<TypeId>,
-    pub(crate) order: u64,
-    pub(crate) received_event: EventId,
-    pub(crate) received_event_access: Access,
-    pub(crate) targeted_event_expr: BoolExpr<ComponentIdx>,
-    pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
-    pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
-    pub(crate) event_queue_access: Access,
-    pub(crate) component_access: ComponentAccessExpr,
-    pub(crate) referenced_components: BitSet<ComponentIdx>,
-    pub(crate) priority: Priority,
-    // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
-    // aliasing.
-    pub(crate) system: S,
-}
-
-impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
-impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
-
 impl SystemInfo {
-    pub(crate) fn new<S: System>(inner: SystemInfoInner<S>) -> Self {
-        // Perform unsizing coercion using `Box`, then convert the box into an
-        // `AliasedBox`.
+    pub fn new<S: IntoSystem<M>, M>(system: S) -> Self {
+        let system = system.into_system();
+        let type_id = system.type_id();
+
+        let inner = SystemInfoInner {
+            entity_id: EntityId::NULL,
+            type_id,
+            order: 0,
+            received_event: EventIdx::Targeted(TargetedEventIdx::MAX),
+            received_event_access: Default::default(),
+            targeted_event_expr: BoolExpr::new(false),
+            sent_untargeted_events: Default::default(),
+            sent_targeted_events: Default::default(),
+            event_queue_access: Default::default(),
+            component_access: ComponentAccessExpr::new(false),
+            referenced_components: Default::default(),
+            priority: Default::default(),
+            system,
+        };
+
+        // Perform unsizing coercion using `Box`, then convert the box into an `AliasedBox`.
         let b: Box<SystemInfoInner> = Box::new(inner);
         Self(b.into())
     }
 
-    /// Gets the name of the system.
-    ///
-    /// This name is intended for debugging purposes and should not be relied
-    /// upon for correctness.
-    pub fn name(&self) -> &str {
-        unsafe { &(*AliasedBox::as_ptr(&self.0)).name }
-    }
-
     /// Gets the ID of this system.
-    pub fn id(&self) -> SystemId {
-        unsafe { (*AliasedBox::as_ptr(&self.0)).id }
+    pub fn entity_id(&self) -> EntityId {
+        unsafe { (*AliasedBox::as_ptr(&self.0)).entity_id }
     }
 
     /// Gets the [`TypeId`] of this system, if any.
@@ -359,7 +294,7 @@ impl SystemInfo {
     }
 
     /// Gets the [`EventId`] of the event is system listens for.
-    pub fn received_event(&self) -> EventId {
+    pub fn received_event(&self) -> EventIdx {
         unsafe { (*AliasedBox::as_ptr(&self.0)).received_event }
     }
 
@@ -418,11 +353,85 @@ impl SystemInfo {
     }
 }
 
+// This is generic over `S` so that we can do an unsizing coercion.
+pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
+    entity_id: EntityId,
+    type_id: Option<TypeId>,
+    order: u64,
+    received_event: EventIdx,
+    received_event_access: Access,
+    targeted_event_expr: BoolExpr<ComponentIdx>,
+    sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    sent_targeted_events: BitSet<TargetedEventIdx>,
+    event_queue_access: Access,
+    component_access: ComponentAccessExpr,
+    referenced_components: BitSet<ComponentIdx>,
+    priority: Priority,
+    // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
+    // aliasing.
+    system: S,
+}
+
+impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
+impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
+
+/// Pointer to system info.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
+
+impl SystemInfoPtr {
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info(&self) -> &SystemInfo {
+        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
+        &*(self as *const Self as *const SystemInfo)
+    }
+
+    /// # Safety
+    ///
+    /// - Pointer must be valid.
+    /// - Aliasing rules must be followed.
+    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut SystemInfo {
+        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
+        &mut *(self as *mut Self as *mut SystemInfo)
+    }
+}
+
+impl PartialEq for SystemInfoPtr {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for SystemInfoPtr {}
+
+impl PartialOrd for SystemInfoPtr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SystemInfoPtr {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Ignore ptr metadata by casting to thin pointer.
+        self.0.cast::<()>().cmp(&other.0.cast::<()>())
+    }
+}
+
+impl Hash for SystemInfoPtr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Ignore ptr metadata by casting to thin pointer.
+        self.0.cast::<()>().hash(state)
+    }
+}
+
 impl fmt::Debug for SystemInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemInfo")
-            .field("name", &self.name())
-            .field("id", &self.id())
+            .field("id", &self.entity_id())
             .field("type_id", &self.type_id())
             .field("order", &self.order())
             .field("received_event", &self.received_event())
@@ -498,36 +507,6 @@ impl SystemList {
 
     pub(crate) fn systems(&self) -> &[SystemInfoPtr] {
         &self.entries
-    }
-}
-
-/// Lightweight identifier for a system.
-///
-/// System identifiers are implemented using an [index] and a generation count.
-/// The generation count ensures that IDs from removed systems are not reused
-/// by new systems.
-///
-/// A system identifier is only meaningful in the [`World`] it was created
-/// from. Attempting to use a system ID in a different world will have
-/// unexpected results.
-///
-/// [index]: SystemIdx
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct SystemId(Key);
-
-impl SystemId {
-    /// The system ID which never identifies a live system. This is the default
-    /// value for `SystemId`.
-    pub const NULL: Self = Self(Key::NULL);
-
-    /// Returns the index of this ID.
-    pub const fn index(self) -> SystemIdx {
-        SystemIdx(self.0.index())
-    }
-
-    /// Returns the generation count of this ID.
-    pub const fn generation(self) -> u32 {
-        self.0.generation().get()
     }
 }
 
@@ -1346,16 +1325,6 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
         P::remove_archetype(state, arch)
     }
 }
-
-/// An event sent immediately after a new system is added to the world.
-/// Contains the ID of the added system.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct AddSystem(pub SystemId);
-
-/// An event sent immediately before a system is removed from the world.
-/// Contains the ID of the system to be removed.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RemoveSystem(pub SystemId);
 
 #[cfg(test)]
 mod tests {

@@ -647,7 +647,7 @@ impl Archetype {
                 info.member_of.insert(arch_idx);
 
                 Column {
-                    data: unsafe { BlobVec::new(info.layout(), info.drop()) },
+                    data: unsafe { BlobVec::new(info.layout(), info.drop_fn()) },
                 }
             })
             .collect();
@@ -824,10 +824,10 @@ mod tests {
 
         world.insert(e, C("hello".into()));
 
-        assert_eq!(world.get_component::<C>(e).unwrap().0, "hello");
+        assert_eq!(world.get::<C>(e).unwrap().0, "hello");
 
         world.insert(e, C("goodbye".into()));
 
-        assert_eq!(world.get_component::<C>(e).unwrap().0, "goodbye");
+        assert_eq!(world.get::<C>(e).unwrap().0, "goodbye");
     }
 }

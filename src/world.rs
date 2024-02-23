@@ -11,20 +11,14 @@ use core::ptr::NonNull;
 
 use crate::archetype::Archetypes;
 use crate::assert::{AssertMutable, UnwrapDebugChecked};
-use crate::component::{
-    AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
-    RemoveComponent,
-};
+use crate::component::{Component, ComponentDescriptor, ComponentInfo, Components};
 use crate::drop::{drop_fn_of, DropFn};
-use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
+use crate::entity::{Entities, EntityId, EntityLocation, Name, ReservedEntities};
 use crate::event::{
-    AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
-    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
+    Despawn, Event, EventDescriptor, EventIdx, EventInfo, EventKind, EventMeta, EventPtr,
+    EventQueue, Events, Insert, Remove, Spawn, SpawnQueued,
 };
-use crate::system::{
-    AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
-    SystemList, Systems,
-};
+use crate::system::{Config, IntoSystem, System, SystemInfo, SystemInfoInner, SystemList, Systems};
 
 /// A container for all data in the ECS. This includes entities, components,
 /// systems, and events.
@@ -232,7 +226,7 @@ impl World {
     ///     Some(&MyComponent(123))
     /// );
     /// ```
-    pub fn get_component<C: Component>(&self, entity: EntityId) -> Option<&C> {
+    pub fn get<C: Component>(&self, entity: EntityId) -> Option<&C> {
         let loc = self.entities.get(entity)?;
 
         let component_idx = self
@@ -276,7 +270,7 @@ impl World {
     ///     Some(&mut MyComponent(123))
     /// );
     /// ```
-    pub fn get_component_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
+    pub fn get_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
         let () = AssertMutable::<C>::COMPONENT;
 
         let loc = self.entities.get(entity)?;
@@ -294,6 +288,7 @@ impl World {
         Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
+    /*
     /// Adds a new system to the world, returns its [`SystemId`], and sends the
     /// [`AddSystem`] event to signal its creation.
     ///
@@ -330,7 +325,7 @@ impl World {
     ///
     /// [`System::type_id`]: crate::system::System::type_id
     #[track_caller]
-    pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> SystemId {
+    pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> EntityId {
         let mut system = system.into_system();
         let mut config = Config::default();
 
@@ -338,7 +333,7 @@ impl World {
 
         if let Some(type_id) = type_id {
             if let Some(info) = self.systems.get_by_type_id(type_id) {
-                return info.id();
+                return info.entity_id();
             }
         }
 
@@ -355,7 +350,6 @@ impl World {
         };
 
         let info = SystemInfo::new(SystemInfoInner {
-            name: system.name(),
             id: SystemId::NULL, // Filled in later.
             type_id,
             order: 0, // Filled in later.
@@ -380,7 +374,26 @@ impl World {
 
         id
     }
+    */
 
+    pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> EntityId {
+        let system = system.into_system();
+
+        if let Some(type_id) = system.type_id() {
+            if let Some(info) = self.systems().get_by_type_id(type_id) {
+                return info.entity_id();
+            }
+        }
+
+        let name = system.name();
+
+        let e = self.spawn();
+        self.insert(e, SystemInfo::new(system));
+        self.insert(e, Name(name));
+        e
+    }
+
+    /*
     /// Removes a system from the world, returns its [`SystemInfo`], and sends
     /// the [`RemoveSystem`] event. If the `system` ID is invalid, then `None`
     /// is returned and no event is sent.
@@ -414,6 +427,7 @@ impl World {
 
         Some(info)
     }
+    */
 
     /// Adds the component `C` to the world, returns its [`ComponentId`], and
     /// sends the [`AddComponent`] event to signal its creation.
@@ -434,47 +448,18 @@ impl World {
     ///
     /// assert_eq!(id, world.add_component::<MyComponent>());
     /// ```
-    pub fn add_component<C: Component>(&mut self) -> ComponentId {
-        let desc = ComponentDescriptor {
-            name: any::type_name::<C>().into(),
-            type_id: Some(TypeId::of::<C>()),
-            layout: Layout::new::<C>(),
-            drop: drop_fn_of::<C>(),
-            is_immutable: C::IS_IMMUTABLE,
-        };
-
-        unsafe { self.add_component_with_descriptor(desc) }
-    }
-
-    /// Adds a component described by a given [`ComponentDescriptor`].
-    ///
-    /// Like [`add_component`], an [`AddComponent`] event is sent if the
-    /// component is newly added. If the [`TypeId`] of the component matches an
-    /// existing component, then the existing component's [`ComponentId`] is
-    /// returned and no event is sent.
-    ///
-    /// # Safety
-    ///
-    /// - If the component is given a [`TypeId`], then the `layout` and `drop`
-    ///   function must be compatible with the Rust type identified by the type
-    ///   ID.
-    /// - Drop function must be safe to call with a pointer to the component as
-    ///   described by [`DropFn`]'s documentation.
-    ///
-    /// [`add_component`]: World::add_component
-    pub unsafe fn add_component_with_descriptor(
-        &mut self,
-        desc: ComponentDescriptor,
-    ) -> ComponentId {
-        let (id, is_new) = self.components.add(desc);
-
-        if is_new {
-            self.send(AddComponent(id));
+    pub fn add_component<C: Component>(&mut self) -> EntityId {
+        if let Some(info) = self.components().get_by_type_id(TypeId::of::<C>()) {
+            return info.entity_id();
         }
 
-        id
+        let e = self.spawn();
+        self.insert(e, ComponentInfo::new::<C>());
+        self.insert(e, Name::new::<C>());
+        e
     }
 
+    /*
     /// Removes a component from the world and returns its [`ComponentInfo`]. If
     /// the `component` ID is invalid, then `None` is returned and the function
     /// has no effect.
@@ -568,6 +553,7 @@ impl World {
 
         Some(info)
     }
+    */
 
     /// Adds the event `E` to the world, returns its [`EventId`], and sends the
     /// [`AddEvent`] event to signal its creation.
@@ -588,20 +574,14 @@ impl World {
     ///
     /// assert_eq!(id, world.add_event::<MyEvent>());
     /// ```
-    pub fn add_event<E: Event>(&mut self) -> EventId {
-        let desc = EventDescriptor {
-            name: any::type_name::<E>().into(),
-            type_id: Some(TypeId::of::<E>()),
-            is_targeted: E::IS_TARGETED,
-            kind: unsafe { E::init(self) },
-            layout: Layout::new::<E>(),
-            drop: drop_fn_of::<E>(),
-            is_immutable: E::IS_IMMUTABLE,
-        };
-
-        unsafe { self.add_event_with_descriptor(desc) }
+    pub fn add_event<E: Event>(&mut self) -> EntityId {
+        let e = self.spawn();
+        self.insert(e, EventInfo::new::<E>());
+        self.insert(e, Name::new::<E>());
+        e
     }
 
+    /*
     /// Adds an event described by a given [`EventDescriptor`].
     ///
     /// Like [`add_event`], an [`AddEvent`] event is sent if the
@@ -620,7 +600,7 @@ impl World {
     ///   [`EventKind`]'s documentation for more information.
     ///
     /// [`add_event`]: World::add_event
-    pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
+    pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EntityId {
         let kind = desc.kind;
 
         let (id, is_new) = self.events.add(desc);
@@ -649,7 +629,9 @@ impl World {
 
         id
     }
+    */
 
+    /*
     /// Removes an event from the world and returns its [`EventInfo`]. If
     /// the `event` ID is invalid, then `None` is returned and the function
     /// has no effect.
@@ -721,6 +703,7 @@ impl World {
 
         Some(info)
     }
+    */
 
     /// Returns the [`Entities`] for this world.
     pub fn entities(&self) -> &Entities {
@@ -793,7 +776,7 @@ impl World {
 
             let mut event = EventDropper {
                 event: item.event,
-                drop: event_info.drop(),
+                drop: event_info.drop_fn(),
                 ownership_flag: false,
             };
 
@@ -979,7 +962,7 @@ impl Drop for World {
                     .unwrap_debug_checked()
             };
 
-            if let Some(drop) = info.drop() {
+            if let Some(drop) = info.drop_fn() {
                 unsafe { drop(item.event) };
             }
         }
