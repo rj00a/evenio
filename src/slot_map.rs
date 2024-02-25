@@ -2,9 +2,11 @@
 use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
-use core::num::NonZeroU32;
+use core::num::{NonZeroU32, NonZeroU64};
 use core::ops::{Index, IndexMut};
 use core::{fmt, mem};
+
+use crate::assert::UnwrapDebugChecked;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SlotMap<T> {
@@ -35,11 +37,8 @@ impl<T> SlotMap<T> {
         if let Some(slot) = self.slots.get_mut(self.next_free as usize) {
             debug_assert!(slot.is_vacant());
 
-            key = Key {
-                index: self.next_free,
-                // SAFETY: Generation didn't overflow because it's even.
-                generation: unsafe { NonZeroU32::new_unchecked(slot.generation + 1) },
-            };
+            // SAFETY: Generation doesn't overflow because it's even.
+            key = unsafe { Key::new(self.next_free, slot.generation + 1).unwrap_debug_checked() };
 
             // Get value before modifying the slot in case `f` unwinds.
             let value = f(key);
@@ -56,10 +55,7 @@ impl<T> SlotMap<T> {
                 return None;
             }
 
-            key = Key {
-                index,
-                generation: ONE,
-            };
+            key = Key::new(index, 1).unwrap();
 
             let value = f(key);
 
@@ -77,9 +73,9 @@ impl<T> SlotMap<T> {
     }
 
     pub(crate) fn remove(&mut self, key: Key) -> Option<T> {
-        let slot = self.slots.get_mut(key.index as usize)?;
+        let slot = self.slots.get_mut(key.index() as usize)?;
 
-        if slot.generation != key.generation.get() {
+        if slot.generation != key.generation().get() {
             return None;
         }
 
@@ -91,7 +87,7 @@ impl<T> SlotMap<T> {
         // to use it again.
         if slot.generation != 0 {
             slot.union.next_free = self.next_free;
-            self.next_free = key.index;
+            self.next_free = key.index();
         }
 
         self.len -= 1;
@@ -100,9 +96,9 @@ impl<T> SlotMap<T> {
     }
 
     pub(crate) fn get(&self, key: Key) -> Option<&T> {
-        let slot = self.slots.get(key.index as usize)?;
+        let slot = self.slots.get(key.index() as usize)?;
 
-        if slot.generation != key.generation.get() {
+        if slot.generation != key.generation().get() {
             return None;
         }
 
@@ -110,9 +106,9 @@ impl<T> SlotMap<T> {
     }
 
     pub(crate) fn get_mut(&mut self, key: Key) -> Option<&mut T> {
-        let slot = self.slots.get_mut(key.index as usize)?;
+        let slot = self.slots.get_mut(key.index() as usize)?;
 
-        if slot.generation != key.generation.get() {
+        if slot.generation != key.generation().get() {
             return None;
         }
 
@@ -276,39 +272,43 @@ union SlotUnion<T> {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Key {
-    index: u32,
-    generation: NonZeroU32,
+    /// Least significant half is index, most significant half is generation.
+    n: NonZeroU64,
 }
 
 impl Key {
-    pub(crate) const NULL: Self = Self {
-        index: u32::MAX,
-        generation: NonZeroU32::MAX,
-    };
+    pub(crate) const NULL: Self = Self { n: NonZeroU64::MAX };
 
+    #[inline]
     pub(crate) const fn new(index: u32, generation: u32) -> Option<Self> {
         // LSB of generation must be 1 for safety.
-        if generation % 2 == 0 {
-            None
+        if generation % 2 == 1 {
+            Some(unsafe { Self::new_unchecked(index, generation) })
         } else {
-            let generation = unsafe { NonZeroU32::new_unchecked(generation) };
-            Some(Self { index, generation })
+            None
         }
     }
 
+    /// SAFETY: Generation must be odd.
+    #[inline]
     const unsafe fn new_unchecked(index: u32, generation: u32) -> Self {
+        let n = (generation as u64) << 32 | index as u64;
         Self {
-            index,
-            generation: NonZeroU32::new_unchecked(generation),
+            n: unsafe { NonZeroU64::new_unchecked(n) },
         }
     }
 
+    #[inline]
     pub(crate) const fn index(self) -> u32 {
-        self.index
+        // Truncate away MSBs.
+        self.n.get() as u32
     }
 
+    #[inline]
     pub(crate) const fn generation(self) -> NonZeroU32 {
-        self.generation
+        // SAFETY: Generation is always non-zero, so resulting `NonZeroU32` must be
+        // non-zero.
+        unsafe { NonZeroU32::new_unchecked((self.n.get() >> 32) as u32) }
     }
 }
 
@@ -320,14 +320,9 @@ impl Default for Key {
 
 impl fmt::Debug for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}v{}", self.index, self.generation)
+        write!(f, "{}v{}", self.index(), self.generation())
     }
 }
-
-const ONE: NonZeroU32 = match NonZeroU32::new(1) {
-    Some(n) => n,
-    None => unreachable!(),
-};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NextKeyIter<T> {
@@ -364,10 +359,7 @@ impl<T> NextKeyIter<T> {
                 panic!("incorrect state for next key iter");
             }
         } else if self.index < u32::MAX {
-            key = Some(Key {
-                index: self.index,
-                generation: ONE,
-            });
+            key = Some(Key::new(self.index, 1).unwrap());
 
             self.index += 1;
         } else {
@@ -430,10 +422,7 @@ mod tests {
         sm.insert(123);
         sm.slots[0].generation = u32::MAX;
 
-        let k = Key {
-            index: 0,
-            generation: NonZeroU32::MAX,
-        };
+        let k = Key::new(0, u32::MAX).unwrap();
 
         assert_eq!(sm.remove(k), Some(123));
         let k2 = sm.insert(456).unwrap();
