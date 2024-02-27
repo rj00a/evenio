@@ -41,7 +41,7 @@ fn iter_evenio(bencher: Bencher, len: usize) {
         }
     }
 
-    world.add_system(move |_: Receiver<E>, f: Fetcher<&mut C1>| {
+    world.add_handler(move |_: Receiver<E>, f: Fetcher<&mut C1>| {
         for c in f {
             c.0 = c.0.sqrt();
         }
@@ -104,7 +104,7 @@ fn par_iter_evenio(bencher: Bencher, len: usize) {
         }
     }
 
-    world.add_system(move |_: Receiver<E>, f: Fetcher<&mut C1>| {
+    world.add_handler(move |_: Receiver<E>, f: Fetcher<&mut C1>| {
         f.into_par_iter().for_each(|c| {
             c.0 = c.0.sqrt();
         });

@@ -4,7 +4,7 @@ use syn::{parse2, parse_quote, Data, DeriveInput, Error, GenericParam, LitInt, R
 
 use crate::util::{make_tuple, replace_lifetime};
 
-pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
+pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
     let mut input = parse2::<DeriveInput>(input)?;
     let name = &input.ident;
 
@@ -39,7 +39,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 }
 
                 where_clause.predicates.push(
-                    parse_quote!(#ty: for<'__a> ::evenio::system::SystemParam<Item<'__a> = #replaced_ty>),
+                    parse_quote!(#ty: for<'__a> ::evenio::handler::HandlerParam<Item<'__a> = #replaced_ty>),
                 );
             }
 
@@ -57,7 +57,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                         .collect();
 
                     quote! {
-                        let (#(#underscored_idents,)*) = <#tuple_ty as ::evenio::system::SystemParam>::get(
+                        let (#(#underscored_idents,)*) = <#tuple_ty as ::evenio::handler::HandlerParam>::get(
                             state,
                             info,
                             event_ptr,
@@ -78,7 +78,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                         .map(|(i, _)| LitInt::new(&format!("{i}"), Span::call_site()));
 
                     quote! {
-                        let __tuple = <#tuple_ty as ::evenio::system::SystemParam>::get(
+                        let __tuple = <#tuple_ty as ::evenio::handler::HandlerParam>::get(
                             state,
                             info,
                             event_ptr,
@@ -95,13 +95,13 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
         Data::Enum(_) => {
             return Err(Error::new(
                 Span::call_site(),
-                "cannot derive `SystemParam` on enums",
+                "cannot derive `HandlerParam` on enums",
             ))
         }
         Data::Union(_) => {
             return Err(Error::new(
                 Span::call_site(),
-                "cannot derive `SystemParam` on unions",
+                "cannot derive `HandlerParam` on unions",
             ))
         }
     }
@@ -115,22 +115,22 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
 
     Ok(quote! {
         #[automatically_derived]
-        unsafe impl #impl_generics ::evenio::system::SystemParam for #name #ty_generics #where_clause {
-            type State = <#tuple_ty as ::evenio::system::SystemParam>::State;
+        unsafe impl #impl_generics ::evenio::handler::HandlerParam for #name #ty_generics #where_clause {
+            type State = <#tuple_ty as ::evenio::handler::HandlerParam>::State;
 
             type Item<'__a> = #item;
 
             fn init(
                 world: &mut ::evenio::world::World,
-                config: &mut ::evenio::system::Config,
-            ) -> ::core::result::Result<Self::State, ::evenio::system::InitError>
+                config: &mut ::evenio::handler::Config,
+            ) -> ::core::result::Result<Self::State, ::evenio::handler::InitError>
             {
-                <#tuple_ty as ::evenio::system::SystemParam>::init(world, config)
+                <#tuple_ty as ::evenio::handler::HandlerParam>::init(world, config)
             }
 
             unsafe fn get<'__a>(
                 state: &'__a mut Self::State,
-                info: &'__a ::evenio::system::SystemInfo,
+                info: &'__a ::evenio::handler::HandlerInfo,
                 event_ptr: ::evenio::event::EventPtr<'__a>,
                 target_location: ::evenio::entity::EntityLocation,
                 world: ::evenio::world::UnsafeWorldCell<'__a>,
@@ -142,7 +142,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 state: &mut Self::State,
                 arch: &::evenio::archetype::Archetype
             ) {
-                <#tuple_ty as ::evenio::system::SystemParam>::refresh_archetype(
+                <#tuple_ty as ::evenio::handler::HandlerParam>::refresh_archetype(
                     state,
                     arch
                 )
@@ -152,7 +152,7 @@ pub(crate) fn derive_system_param(input: TokenStream) -> Result<TokenStream> {
                 state: &mut Self::State,
                 arch: &::evenio::archetype::Archetype
             ) {
-                <#tuple_ty as ::evenio::system::SystemParam>::remove_archetype(
+                <#tuple_ty as ::evenio::handler::HandlerParam>::remove_archetype(
                     state,
                     arch
                 )

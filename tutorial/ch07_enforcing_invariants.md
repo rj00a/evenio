@@ -45,7 +45,7 @@ The UUID could still be changed using the `Insert` event, so let's raise an erro
 # #[derive(Component)]
 # #[component(immutable)]
 # struct Uuid(u128);
-world.add_system(detect_uuid_overwrite);
+world.add_handler(detect_uuid_overwrite);
 
 let e = world.spawn();
 world.insert(e, Uuid(123)); // Doesn't panic
@@ -64,7 +64,7 @@ To make this completely airtight, we'll also need to protect against removing th
 # #[derive(Component)]
 # #[component(immutable)]
 # struct Uuid(u128);
-world.add_system(detect_uuid_remove);
+world.add_handler(detect_uuid_remove);
 
 let e = world.spawn();
 world.remove::<Uuid>(e); // Doesn't panic
@@ -92,5 +92,5 @@ Doing so will prevent users from mutating or consuming the event.
 struct MyEvent;
 
 // Compile error.
-world.add_system(|_: ReceiverMut<MyEvent>| {});
+world.add_handler(|_: ReceiverMut<MyEvent>| {});
 ```

@@ -1,7 +1,7 @@
-# Sending Events From Systems
+# Sending Events From Handlers
 
 Previously, we've seen how to send events using the [`World::send`] method.
-But to send events from _within_ a system, we'll need to use the [`Sender`] system parameter:
+But to send events from _within_ a handler, we'll need to use the [`Sender`] handler parameter:
 
 ```rust
 # use evenio::prelude::*;
@@ -13,14 +13,14 @@ struct B;
 #[derive(Event)]
 struct C;
 
-world.add_system(|_: Receiver<A>, mut sender: Sender<(B, C)>| {
+world.add_handler(|_: Receiver<A>, mut sender: Sender<(B, C)>| {
     sender.send(B);
     sender.send(C);
     println!("sent B and C!");
 });
 
-world.add_system(|_: Receiver<B>| println!("got B!"));
-world.add_system(|_: Receiver<C>| println!("got C!"));
+world.add_handler(|_: Receiver<B>| println!("got B!"));
+world.add_handler(|_: Receiver<C>| println!("got C!"));
 
 world.send(A);
 ```
@@ -67,9 +67,9 @@ fn get_c(r: Receiver<C>) {
 
 let mut world = World::new();
 
-world.add_system(get_a_send_b);
-world.add_system(get_b_send_c);
-world.add_system(get_c);
+world.add_handler(get_a_send_b);
+world.add_handler(get_b_send_c);
+world.add_handler(get_c);
 
 println!("sending A!");
 world.send(A);

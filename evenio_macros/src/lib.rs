@@ -5,8 +5,8 @@ use proc_macro::TokenStream;
 mod all_tuples;
 mod component;
 mod event;
+mod handler_param;
 mod query;
-mod system_param;
 mod util;
 
 /// Helper macro which repeatedly invokes a given macro with an increasing list
@@ -68,11 +68,11 @@ pub fn derive_query(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Derive macro for `SystemParam`. See `SystemParam`'s documentation for more
+/// Derive macro for `HandlerParam`. See `HandlerParam`'s documentation for more
 /// information.
-#[proc_macro_derive(SystemParam)]
-pub fn derive_system_param(input: TokenStream) -> TokenStream {
-    system_param::derive_system_param(input.into())
+#[proc_macro_derive(HandlerParam)]
+pub fn derive_handler_param(input: TokenStream) -> TokenStream {
+    handler_param::derive_handler_param(input.into())
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }

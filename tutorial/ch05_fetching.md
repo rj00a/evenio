@@ -1,9 +1,9 @@
 # Fetching
 
 In the previous chapter, we've seen how to create entities and add components to them.
-But components aren't very useful unless we have some way to access them from within systems.
+But components aren't very useful unless we have some way to access them from within handlers.
 
-This is where the [`Fetcher`] system parameter comes in.
+This is where the [`Fetcher`] handler parameter comes in.
 `Fetcher<Q>` allows for both random access entity lookups using an `EntityId` and iteration over all entities matching some [`Query`] `Q`.
 
 ```rust
@@ -28,7 +28,7 @@ world.insert(e2, A("bar"));
 let e3 = world.spawn();
 world.insert(e3, B(456));
 
-world.add_system(move |_: Receiver<E>, fetcher: Fetcher<&A>| {
+world.add_handler(move |_: Receiver<E>, fetcher: Fetcher<&A>| {
     // Get a reference to the `A` component on entity `e2`.
     // Returns `None` if the query doesn't match.
     let a = fetcher.get(e1).unwrap();
@@ -106,7 +106,7 @@ impl MyQuery<'_> {
     }
 }
 
-world.add_system(|_: Receiver<E>, fetcher: Fetcher<MyQuery>| {
+world.add_handler(|_: Receiver<E>, fetcher: Fetcher<MyQuery>| {
     for my_query in fetcher {
         my_query.print();
     }
@@ -124,11 +124,11 @@ Consider:
 # #[derive(Component)] struct A;
 # let mut world = World::new();
 // Panics!
-world.add_system(|_: Receiver<E>, _: Fetcher<&mut A>, _: Fetcher<&A>| {});
+world.add_handler(|_: Receiver<E>, _: Fetcher<&mut A>, _: Fetcher<&A>| {});
 ```
 
 Because both fetchers are capable of accessing the same entity, it is possible to create `&mut A` and `&A` references to the same component, thus triggering Undefined Behavior.
-`add_system` guards against this by panicking if the system parameters have any possibility of causing unsoundness.
+`add_handler` guards against this by panicking if the handler parameters have any possibility of causing unsoundness.
 
 There are a number of ways to resolve this situation, but let's look at one way using `With` and `Not`:
 
@@ -139,17 +139,17 @@ There are a number of ways to resolve this situation, but let's look at one way 
 # #[derive(Component)] struct B;
 # let mut world = World::new();
 // Doesn't panic.
-world.add_system(|_: Receiver<E>, _: Fetcher<(&mut A, With<&B>)>, _: Fetcher<(&A, Not<&B>)>| {});
+world.add_handler(|_: Receiver<E>, _: Fetcher<(&mut A, With<&B>)>, _: Fetcher<(&A, Not<&B>)>| {});
 ```
 
 The set of entities matched by both queries are now disjoint.
-Therefore, there is no possibility of overlapping access to `A`, and the system can be added to the world without panicking.
+Therefore, there is no possibility of overlapping access to `A`, and the handler can be added to the world without panicking.
 
 ## Singleton Entities
 
-Through the course of development, we may find ourselves wanting to store global data in a location that is easily accessed by systems.
+Through the course of development, we may find ourselves wanting to store global data in a location that is easily accessed by handlers.
 
-To facilitate this, `evenio` has the [`Single`] system parameter.
+To facilitate this, `evenio` has the [`Single`] handler parameter.
 `Single` is parameterized by a query that must match a single entity in the world.
 If the query does not match exactly one entity, then a runtime panic occurs.
 
@@ -171,7 +171,7 @@ struct MyGlobalData {
 let e = world.spawn();
 world.insert(e, MyGlobalData { foo: 123, bar: "data" });
 
-world.add_system(|_: Receiver<E>, Single(g): Single<&MyGlobalData>| {
+world.add_handler(|_: Receiver<E>, Single(g): Single<&MyGlobalData>| {
     println!("foo: {}, bar: {}", g.foo, g.bar);
 });
 
@@ -180,8 +180,8 @@ world.send(E);
 
 For handling the situation where `Single` fails, see [`TrySingle`].
 
-For global data scoped to a single system, see [`Local`].
+For global data scoped to a single handler, see [`Local`].
 
 [`Single`]: crate::fetch::Single
 [`TrySingle`]: crate::fetch::TrySingle
-[`Local`]: crate::system::Local
+[`Local`]: crate::handler::Local

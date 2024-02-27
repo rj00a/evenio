@@ -13,7 +13,7 @@ use crate::archetype::{Archetype, ArchetypeRow};
 use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{Component, ComponentIdx};
 use crate::entity::EntityId;
-use crate::system::{Config, InitError};
+use crate::handler::{Config, InitError};
 use crate::world::World;
 
 /// Types that can be fetched from an entity.
@@ -46,7 +46,7 @@ use crate::world::World;
 ///
 /// let mut world = World::new();
 ///
-/// world.add_system(|_: Receiver<MyEvent>, q: Fetcher<CustomQuery>| {
+/// world.add_handler(|_: Receiver<MyEvent>, q: Fetcher<CustomQuery>| {
 ///     for item in q {
 ///         println!("{item:?}");
 ///     }
@@ -778,7 +778,7 @@ mod tests {
         let r = std::panic::catch_unwind(|| {
             let mut world = World::new();
 
-            (world.add_system(|_: Receiver<E>, _: Fetcher<Q>| {}), world)
+            (world.add_handler(|_: Receiver<E>, _: Fetcher<Q>| {}), world)
         });
 
         if let Ok((_, mut world)) = r {

@@ -17,18 +17,18 @@ use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
+use crate::handler::{
+    Config, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
+};
 use crate::map::{Entry, HashMap};
 use crate::prelude::World;
 use crate::sparse::SparseIndex;
 use crate::sparse_map::SparseMap;
-use crate::system::{
-    Config, InitError, SystemInfo, SystemInfoPtr, SystemList, SystemParam, Systems,
-};
 use crate::world::UnsafeWorldCell;
 
 /// Contains all the [`Archetype`]s and their metadata for a world.
 ///
-/// This can be obtained in a system by using the `&Archetypes` system
+/// This can be obtained in a handler by using the `&Archetypes` handler
 /// parameter.
 ///
 /// ```
@@ -38,7 +38,7 @@ use crate::world::UnsafeWorldCell;
 /// # #[derive(Event)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_system(|_: Receiver<E>, archetypes: &Archetypes| {});
+/// world.add_handler(|_: Receiver<E>, archetypes: &Archetypes| {});
 /// ```
 #[derive(Debug)]
 pub struct Archetypes {
@@ -100,7 +100,7 @@ impl Archetypes {
 
         if empty.entity_count() == 1 || rellocated {
             for mut ptr in empty.refresh_listeners.iter().copied() {
-                unsafe { ptr.as_info_mut().system_mut().refresh_archetype(empty) };
+                unsafe { ptr.as_info_mut().handler_mut().refresh_archetype(empty) };
             }
         }
 
@@ -120,14 +120,14 @@ impl Archetypes {
         self.archetypes.len()
     }
 
-    pub(crate) fn register_system(&mut self, info: &mut SystemInfo) {
+    pub(crate) fn register_handler(&mut self, info: &mut HandlerInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
         for (_, arch) in &mut self.archetypes {
-            arch.register_system(info);
+            arch.register_handler(info);
         }
     }
 
-    pub(crate) fn remove_system(&mut self, info: &SystemInfo) {
+    pub(crate) fn remove_handler(&mut self, info: &HandlerInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
         for (_, arch) in &mut self.archetypes {
             arch.refresh_listeners.remove(&info.ptr());
@@ -154,7 +154,7 @@ impl Archetypes {
             let mut arch = self.archetypes.remove(arch_idx.0 as usize);
 
             for mut ptr in arch.refresh_listeners.iter().copied() {
-                unsafe { ptr.as_info_mut().system_mut().remove_archetype(&arch) };
+                unsafe { ptr.as_info_mut().handler_mut().remove_archetype(&arch) };
             }
 
             for &comp_idx in arch.component_indices() {
@@ -198,7 +198,7 @@ impl Archetypes {
         src_arch_idx: ArchetypeIdx,
         component_idx: ComponentIdx,
         components: &mut Components,
-        systems: &mut Systems,
+        handlers: &mut Handlers,
     ) -> ArchetypeIdx {
         debug_assert!(components.get_by_index(component_idx).is_some());
 
@@ -243,8 +243,8 @@ impl Archetypes {
                             .remove_components
                             .insert(component_idx, src_arch_idx);
 
-                        for info in systems.iter_mut() {
-                            new_arch.register_system(info);
+                        for info in handlers.iter_mut() {
+                            new_arch.register_handler(info);
                         }
 
                         vacant_by_components.insert(arch_id);
@@ -272,7 +272,7 @@ impl Archetypes {
         src_arch_idx: ArchetypeIdx,
         component_idx: ComponentIdx,
         components: &mut Components,
-        systems: &mut Systems,
+        handlers: &mut Handlers,
     ) -> ArchetypeIdx {
         let next_arch_idx = self.archetypes.vacant_key();
 
@@ -317,8 +317,8 @@ impl Archetypes {
                             .insert_components
                             .insert(component_idx, src_arch_idx);
 
-                        for info in systems.iter_mut() {
-                            new_arch.register_system(info);
+                        for info in handlers.iter_mut() {
+                            new_arch.register_handler(info);
                         }
 
                         vacant_by_components.insert(arch_id);
@@ -476,13 +476,13 @@ impl Archetypes {
 
         if src_arch.entity_ids.is_empty() {
             for mut ptr in src_arch.refresh_listeners.iter().copied() {
-                unsafe { ptr.as_info_mut().system_mut().remove_archetype(src_arch) };
+                unsafe { ptr.as_info_mut().handler_mut().remove_archetype(src_arch) };
             }
         }
 
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
             for mut ptr in dst_arch.refresh_listeners.iter().copied() {
-                unsafe { ptr.as_info_mut().system_mut().refresh_archetype(dst_arch) };
+                unsafe { ptr.as_info_mut().handler_mut().refresh_archetype(dst_arch) };
             }
         }
 
@@ -511,13 +511,13 @@ impl Archetypes {
 
         if arch.entity_count() == 0 {
             for mut ptr in arch.refresh_listeners.iter().copied() {
-                unsafe { ptr.as_info_mut().system_mut().remove_archetype(arch) };
+                unsafe { ptr.as_info_mut().handler_mut().remove_archetype(arch) };
             }
         }
     }
 }
 
-unsafe impl SystemParam for &'_ Archetypes {
+unsafe impl HandlerParam for &'_ Archetypes {
     type State = ();
 
     type Item<'a> = &'a Archetypes;
@@ -528,7 +528,7 @@ unsafe impl SystemParam for &'_ Archetypes {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -604,10 +604,10 @@ pub struct Archetype {
     entity_ids: Vec<EntityId>,
     insert_components: BTreeMap<ComponentIdx, ArchetypeIdx>,
     remove_components: BTreeMap<ComponentIdx, ArchetypeIdx>,
-    /// Systems that need to be notified about column changes.
-    refresh_listeners: BTreeSet<SystemInfoPtr>,
+    /// Handlers that need to be notified about column changes.
+    refresh_listeners: BTreeSet<HandlerInfoPtr>,
     /// Targeted event listeners for this archetype.
-    event_listeners: SparseMap<TargetedEventIdx, SystemList>,
+    event_listeners: SparseMap<TargetedEventIdx, HandlerList>,
 }
 
 impl Archetype {
@@ -667,14 +667,14 @@ impl Archetype {
         }
     }
 
-    fn register_system(&mut self, info: &mut SystemInfo) {
+    fn register_handler(&mut self, info: &mut HandlerInfo) {
         if info
             .component_access()
             .expr
             .eval(|idx| self.column_of(idx).is_some())
         {
             if self.entity_count() > 0 {
-                info.system_mut().refresh_archetype(self);
+                info.handler_mut().refresh_archetype(self);
             }
 
             self.refresh_listeners.insert(info.ptr());
@@ -687,7 +687,7 @@ impl Archetype {
                 if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
                     list.insert(info.ptr(), info.priority());
                 } else {
-                    let mut list = SystemList::new();
+                    let mut list = HandlerList::new();
                     list.insert(info.ptr(), info.priority());
 
                     self.event_listeners.insert(targeted_event_idx, list);
@@ -696,7 +696,7 @@ impl Archetype {
         }
     }
 
-    pub(crate) fn system_list_for(&self, idx: TargetedEventIdx) -> Option<&SystemList> {
+    pub(crate) fn handler_list_for(&self, idx: TargetedEventIdx) -> Option<&HandlerList> {
         self.event_listeners.get(idx)
     }
 

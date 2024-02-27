@@ -5,7 +5,7 @@ Events in `evenio` come in two flavors: _targeted_ and _untargeted_.
   For instance, the standard [`Insert`], [`Remove`], and [`Despawn`] events are targeted.
 - Untargeted events are everything else.
 
-Targeted events enable systems to efficiently ignore events whose targets do not match a given [`Query`].
+Targeted events enable handlers to efficiently ignore events whose targets do not match a given [`Query`].
 
 To create a targeted event using the `Event` derive macro, we mark an `EntityId` field with the `#[event(target)]` attribute.
 Events without the `#[event(target)]` attribute are untargeted.
@@ -22,7 +22,7 @@ struct MyTargetedEvent {
 
 To listen for a targeted event, we must use the second type parameter of `Receiver` or `ReceiverMut`.
 If the target matches the query, the query data is accessible in the `query` field of the receiver.
-Otherwise, the system is not run.
+Otherwise, the handler is not run.
 
 ```rust
 # use evenio::prelude::*;
@@ -39,7 +39,7 @@ struct Health(i32);
 #[derive(Component)]
 struct Stamina(i32);
 
-world.add_system(|mut receiver: Receiver<MyTargetedEvent, (&mut Health, &Stamina)>| {
+world.add_handler(|mut receiver: Receiver<MyTargetedEvent, (&mut Health, &Stamina)>| {
     let (health, stamina) = receiver.query;
 
     if stamina.0 == 100 {

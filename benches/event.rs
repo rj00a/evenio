@@ -23,9 +23,9 @@ fn send_many_events(bencher: Bencher) {
     #[derive(Event)]
     struct D(#[allow(dead_code)] u64);
 
-    world.add_system(get_a_send_b);
-    world.add_system(get_b_send_c);
-    world.add_system(get_c_send_d);
+    world.add_handler(get_a_send_b);
+    world.add_handler(get_b_send_c);
+    world.add_handler(get_c_send_d);
 
     fn get_a_send_b(r: Receiver<A>, mut s: Sender<B>) {
         s.send(B(r.event.0));

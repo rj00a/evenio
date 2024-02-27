@@ -9,15 +9,15 @@ It aims to have a small but maximally expressive set of features that are easy a
 
 - In addition to the usual Entities, Components, and Systems, `evenio` introduces events as a first-class citizen.
 Rather than restricting systems to run once every frame/update in a fixed order, systems are generalized as event handlers.
-The control flow of the entire program is then defined by the flow of events between systems.
-- Structural changes to the world (such as entity despawning, component additions/removals, etc.) are mediated by events, allowing systems to hook into their occurrence.
-- Targeted events enable systems to efficiently filter events based on queries.
-- Component types, event types, and systems are identified with generational indices, allowing them to be added and removed dynamically.
-- Execute systems in parallel with [Rayon].
+The control flow of the entire program is then defined by the flow of events between handlers.
+- Structural changes to the world (such as entity despawning, component additions/removals, etc.) are mediated by events, allowing handlers to hook into their occurrence.
+- Targeted events enable handlers to efficiently filter events based on queries.
+- Component types, event types, and handlers are identified with generational indices, allowing them to be added and removed dynamically.
+- Execute queries in parallel with [Rayon].
 - Core of the library does not depend on Rust's type system.
 - `no_std` support.
 
-Features such as inter-system parallelism and event batching are planned but not yet implemented.
+Features such as inter-handler parallelism and event batching are planned but not yet implemented.
 
 > **For a full step-by-step introduction, please read the [tutorial book 📚](https://docs.rs/evenio/latest/evenio/tutorial/).**
 
@@ -55,8 +55,8 @@ pub fn main() {
     world.insert(e, Position { x: 0.0, y: 0.0 });
     world.insert(e, Velocity { x: 1.0, y: 0.4 });
 
-    // Add our system to the world.
-    world.add_system(update_positions_system);
+    // Add our event handler to the world.
+    world.add_handler(update_positions);
 
     // Run our fake "game loop" by sending the `Tick` event every update.
     for _ in 0..50 {
@@ -69,8 +69,8 @@ pub fn main() {
     println!("Final position of the entity: ({}, {})", pos.x, pos.y);
 }
 
-// The `Receiver<Tick>` parameter tells our system to listen for the `Tick` event.
-fn update_positions_system(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Velocity)>) {
+// The `Receiver<Tick>` parameter tells our handler to listen for the `Tick` event.
+fn update_positions(_: Receiver<Tick>, entities: Fetcher<(&mut Position, &Velocity)>) {
     // Loop over all entities with both the `Position` and `Velocity` components, and update their positions.
     for (pos, vel) in entities {
         pos.x += vel.x;

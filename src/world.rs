@@ -21,19 +21,19 @@ use crate::event::{
     AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
     EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
 };
-use crate::system::{
-    AddSystem, Config, IntoSystem, RemoveSystem, System, SystemId, SystemInfo, SystemInfoInner,
-    SystemList, Systems,
+use crate::handler::{
+    AddHandler, Config, Handler, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList, Handlers,
+    IntoHandler, RemoveHandler,
 };
 
 /// A container for all data in the ECS. This includes entities, components,
-/// systems, and events.
+/// handlers, and events.
 #[derive(Debug)]
 pub struct World {
     entities: Entities,
     reserved_entities: ReservedEntities,
     components: Components,
-    systems: Systems,
+    handlers: Handlers,
     archetypes: Archetypes,
     events: Events,
     event_queue: EventQueue,
@@ -54,16 +54,16 @@ impl World {
             entities: Entities::new(),
             reserved_entities: ReservedEntities::new(),
             components: Components::new(),
-            systems: Systems::new(),
+            handlers: Handlers::new(),
             archetypes: Archetypes::new(),
             events: Events::new(),
             event_queue: EventQueue::new(),
         }
     }
 
-    /// Broadcast an event to all systems in this world.
+    /// Broadcast an event to all handlers in this world.
     ///
-    /// Any events sent by systems will also broadcast. This process continues
+    /// Any events sent by handlers will also broadcast. This process continues
     /// recursively until all events have finished broadcasting.
     ///
     /// # Examples
@@ -74,13 +74,13 @@ impl World {
     /// #[derive(Event)]
     /// struct MyEvent(i32);
     ///
-    /// fn my_system(r: Receiver<MyEvent>) {
+    /// fn my_handler(r: Receiver<MyEvent>) {
     ///     println!("got event: {}", r.event.0);
     /// }
     ///
     /// let mut world = World::new();
     ///
-    /// world.add_system(my_system);
+    /// world.add_handler(my_handler);
     /// world.send(MyEvent(123));
     /// ```
     ///
@@ -294,23 +294,24 @@ impl World {
         Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
-    /// Adds a new system to the world, returns its [`SystemId`], and sends the
-    /// [`AddSystem`] event to signal its creation.
+    /// Adds a new handler to the world, returns its [`HandlerId`], and sends
+    /// the [`AddHandler`] event to signal its creation.
     ///
-    /// If the system already exists (as determined by [`System::type_id`]) then
-    /// the `SystemId` of the existing system is returned and no event is sent.
+    /// If the handler already exists (as determined by [`Handler::type_id`])
+    /// then the `HandlerId` of the existing handler is returned and no
+    /// event is sent.
     ///
     /// # Panics
     ///
-    /// Panics if the configuration of the system is invalid. This can occur
-    /// when, for instance, the system does not specify an event to receive.
+    /// Panics if the configuration of the handler is invalid. This can occur
+    /// when, for instance, the handler does not specify an event to receive.
     ///
     /// ```should_panic
     /// # use evenio::prelude::*;
     /// #
     /// # let mut world = World::new();
     /// #
-    /// world.add_system(|| {}); // Panics
+    /// world.add_handler(|| {}); // Panics
     /// ```
     ///
     /// # Examples
@@ -320,43 +321,43 @@ impl World {
     /// # #[derive(Event)]
     /// # struct MyEvent;
     ///
-    /// fn my_system(_: Receiver<MyEvent>) {};
+    /// fn my_handler(_: Receiver<MyEvent>) {};
     ///
     /// let mut world = World::new();
-    /// let id = world.add_system(my_system);
+    /// let id = world.add_handler(my_handler);
     ///
-    /// assert!(world.systems().contains(id));
+    /// assert!(world.handlers().contains(id));
     /// ```
     ///
-    /// [`System::type_id`]: crate::system::System::type_id
+    /// [`Handler::type_id`]: crate::handler::Handler::type_id
     #[track_caller]
-    pub fn add_system<S: IntoSystem<M>, M>(&mut self, system: S) -> SystemId {
-        let mut system = system.into_system();
+    pub fn add_handler<H: IntoHandler<M>, M>(&mut self, handler: H) -> HandlerId {
+        let mut handler = handler.into_handler();
         let mut config = Config::default();
 
-        let type_id = system.type_id();
+        let type_id = handler.type_id();
 
         if let Some(type_id) = type_id {
-            if let Some(info) = self.systems.get_by_type_id(type_id) {
+            if let Some(info) = self.handlers.get_by_type_id(type_id) {
                 return info.id();
             }
         }
 
-        if let Err(e) = system.init(self, &mut config) {
+        if let Err(e) = handler.init(self, &mut config) {
             panic!("{e}");
         }
 
         let Some(received_event) = config.received_event else {
             panic!(
-                "system `{}` did not specify an event to receive. All systems must listen for \
+                "handler `{}` did not specify an event to receive. All handlers must listen for \
                  exactly one event type (see `Receiver`)",
-                any::type_name::<S>()
+                any::type_name::<H>()
             )
         };
 
-        let info = SystemInfo::new(SystemInfoInner {
-            name: system.name(),
-            id: SystemId::NULL, // Filled in later.
+        let info = HandlerInfo::new(HandlerInfoInner {
+            name: handler.name(),
+            id: HandlerId::NULL, // Filled in later.
             type_id,
             order: 0, // Filled in later.
             received_event,
@@ -368,21 +369,21 @@ impl World {
             component_access: config.component_access,
             referenced_components: config.referenced_components,
             priority: config.priority,
-            system,
+            handler,
         });
 
-        let id = self.systems.add(info);
-        let info = self.systems.get_mut(id).unwrap();
+        let id = self.handlers.add(info);
+        let info = self.handlers.get_mut(id).unwrap();
 
-        self.archetypes.register_system(info);
+        self.archetypes.register_handler(info);
 
-        self.send(AddSystem(id));
+        self.send(AddHandler(id));
 
         id
     }
 
-    /// Removes a system from the world, returns its [`SystemInfo`], and sends
-    /// the [`RemoveSystem`] event. If the `system` ID is invalid, then `None`
+    /// Removes a handler from the world, returns its [`HandlerInfo`], and sends
+    /// the [`RemoveHandler`] event. If the `handler` ID is invalid, then `None`
     /// is returned and no event is sent.
     ///
     /// # Example
@@ -394,23 +395,23 @@ impl World {
     ///
     /// # #[derive(Event)]
     /// # struct MyEvent;
-    /// let system_id = world.add_system(|_: Receiver<MyEvent>| {});
+    /// let handler_id = world.add_handler(|_: Receiver<MyEvent>| {});
     ///
-    /// let info = world.remove_system(system_id).unwrap();
+    /// let info = world.remove_handler(handler_id).unwrap();
     ///
-    /// assert_eq!(info.id(), system_id);
-    /// assert!(!world.systems().contains(system_id));
+    /// assert_eq!(info.id(), handler_id);
+    /// assert!(!world.handlers().contains(handler_id));
     /// ```
-    pub fn remove_system(&mut self, system: SystemId) -> Option<SystemInfo> {
-        if !self.systems.contains(system) {
+    pub fn remove_handler(&mut self, handler: HandlerId) -> Option<HandlerInfo> {
+        if !self.handlers.contains(handler) {
             return None;
         }
 
-        self.send(RemoveSystem(system));
+        self.send(RemoveHandler(handler));
 
-        let info = self.systems.remove(system).unwrap();
+        let info = self.handlers.remove(handler).unwrap();
 
-        self.archetypes.remove_system(&info);
+        self.archetypes.remove_handler(&info);
 
         Some(info)
     }
@@ -482,7 +483,7 @@ impl World {
     /// Removing a component has the following effects in the order listed:
     /// 1. The [`RemoveComponent`] event is sent.
     /// 2. All entities with the component are despawned.
-    /// 3. All systems that reference the component are removed.
+    /// 3. All handlers that reference the component are removed.
     /// 4. The corresponding [`Insert`] events for the component are removed.
     /// 5. The corresponding [`Remove`] events for the component are removed.
     ///
@@ -495,16 +496,16 @@ impl World {
     /// # #[derive(Event)] struct E;
     /// #
     /// let component = world.add_component::<C>();
-    /// let system = world.add_system(|_: Receiver<E>, _: Fetcher<&C>| {});
+    /// let handler = world.add_handler(|_: Receiver<E>, _: Fetcher<&C>| {});
     ///
     /// assert!(world.components().contains(component));
-    /// assert!(world.systems().contains(system));
+    /// assert!(world.handlers().contains(handler));
     ///
     /// world.remove_component(component);
     ///
     /// assert!(!world.components().contains(component));
-    /// // System was also removed because it references `C` in its `Fetcher`.
-    /// assert!(!world.systems().contains(system));
+    /// // Handler was also removed because it references `C` in its `Fetcher`.
+    /// assert!(!world.handlers().contains(handler));
     /// ```
     pub fn remove_component(&mut self, component: ComponentId) -> Option<ComponentInfo> {
         if !self.components.contains(component) {
@@ -527,17 +528,17 @@ impl World {
 
         self.flush_event_queue();
 
-        // Remove all systems that reference this component.
-        let mut systems_to_remove = vec![];
+        // Remove all handlers that reference this component.
+        let mut handlers_to_remove = vec![];
 
-        for sys in self.systems.iter() {
-            if sys.referenced_components().contains(component.index()) {
-                systems_to_remove.push(sys.id());
+        for handler in self.handlers.iter() {
+            if handler.referenced_components().contains(component.index()) {
+                handlers_to_remove.push(handler.id());
             }
         }
 
-        for sys_id in systems_to_remove {
-            self.remove_system(sys_id);
+        for handler_id in handlers_to_remove {
+            self.remove_handler(handler_id);
         }
 
         let info = &self.components[component];
@@ -626,7 +627,7 @@ impl World {
         let (id, is_new) = self.events.add(desc);
 
         if is_new {
-            self.systems.register_event(id.index());
+            self.handlers.register_event(id.index());
 
             match kind {
                 EventKind::Normal => {}
@@ -656,7 +657,7 @@ impl World {
     ///
     /// Removing an event has the following effects in the order listed:
     /// 1. The [`RemoveEvent`] event is sent.
-    /// 2. All systems that send or receive the event are removed.
+    /// 2. All handlers that send or receive the event are removed.
     ///
     /// # Examples
     ///
@@ -683,22 +684,22 @@ impl World {
         // Send event before removing anything.
         self.send(RemoveEvent(event));
 
-        // Remove all systems that send or receive this event.
+        // Remove all handlers that send or receive this event.
         let mut to_remove = vec![];
 
-        for sys in self.systems.iter() {
-            if sys.received_event() == event
+        for handler in self.handlers.iter() {
+            if handler.received_event() == event
                 || match event.index() {
-                    EventIdx::Targeted(idx) => sys.sent_targeted_events().contains(idx),
-                    EventIdx::Untargeted(idx) => sys.sent_untargeted_events().contains(idx),
+                    EventIdx::Targeted(idx) => handler.sent_targeted_events().contains(idx),
+                    EventIdx::Untargeted(idx) => handler.sent_untargeted_events().contains(idx),
                 }
             {
-                to_remove.push(sys.id());
+                to_remove.push(handler.id());
             }
         }
 
         for id in to_remove {
-            self.remove_system(id);
+            self.remove_handler(id);
         }
 
         let info = self.events.remove(event).unwrap();
@@ -732,9 +733,9 @@ impl World {
         &self.components
     }
 
-    /// Returns the [`Systems`] for this world.
-    pub fn systems(&self) -> &Systems {
-        &self.systems
+    /// Returns the [`Handlers`] for this world.
+    pub fn handlers(&self) -> &Handlers {
+        &self.handlers
     }
 
     /// Returns the [`Archetypes`] for this world.
@@ -747,7 +748,7 @@ impl World {
         &self.events
     }
 
-    /// Send all queued events to systems. The event queue will be empty after
+    /// Send all queued events to handlers. The event queue will be empty after
     /// this call.
     fn flush_event_queue(&mut self) {
         'next_event: while let Some(item) = self.event_queue.pop_front() {
@@ -759,8 +760,8 @@ impl World {
             };
             let event_kind = event_info.kind();
 
-            // In case `System::run` unwinds, we need to drop the event we're holding on the
-            // stack. The other events in the event queue will be handled by
+            // In case `Handler::run` unwinds, we need to drop the event we're holding on
+            // the stack. The other events in the event queue will be handled by
             // `World`'s destructor.
             struct EventDropper {
                 event: NonNull<u8>,
@@ -797,9 +798,13 @@ impl World {
                 ownership_flag: false,
             };
 
-            let (system_list, target_location) = match event_meta {
+            let (handler_list, target_location) = match event_meta {
                 EventMeta::Untargeted { idx } => (
-                    unsafe { self.systems.get_untargeted_list(idx).unwrap_debug_checked() },
+                    unsafe {
+                        self.handlers
+                            .get_untargeted_list(idx)
+                            .unwrap_debug_checked()
+                    },
                     EntityLocation::NULL,
                 ),
                 EventMeta::Targeted { idx, target } => {
@@ -814,31 +819,31 @@ impl World {
                             .unwrap_debug_checked()
                     };
 
-                    static EMPTY: SystemList = SystemList::new();
+                    static EMPTY: HandlerList = HandlerList::new();
 
-                    // Return an empty system list instead of continuing in case this event is
+                    // Return an empty handler list instead of continuing in case this event is
                     // special.
-                    (arch.system_list_for(idx).unwrap_or(&EMPTY), location)
+                    (arch.handler_list_for(idx).unwrap_or(&EMPTY), location)
                 }
             };
 
-            let systems: *const [_] = system_list.systems();
+            let handlers: *const [_] = handler_list.handlers();
 
             let events_before = self.event_queue.len();
 
-            for mut info_ptr in unsafe { (*systems).iter().copied() } {
+            for mut info_ptr in unsafe { (*handlers).iter().copied() } {
                 let info = unsafe { info_ptr.as_info_mut() };
 
-                let system: *mut dyn System = info.system_mut();
+                let handler: *mut dyn Handler = info.handler_mut();
 
                 let event_ptr =
                     EventPtr::new(event.event, NonNull::from(&mut event.ownership_flag));
 
                 let world_cell = self.unsafe_cell_mut();
 
-                unsafe { (*system).run(info, event_ptr, target_location, world_cell) };
+                unsafe { (*handler).run(info, event_ptr, target_location, world_cell) };
 
-                // Did the system take ownership of the event?
+                // Did the handler take ownership of the event?
                 if event.ownership_flag {
                     // Don't drop event since we don't own it anymore.
                     event.unpack();
@@ -872,7 +877,7 @@ impl World {
                                 loc.archetype,
                                 component_idx,
                                 &mut self.components,
-                                &mut self.systems,
+                                &mut self.handlers,
                             )
                         };
 
@@ -908,7 +913,7 @@ impl World {
                                 loc.archetype,
                                 component_idx,
                                 &mut self.components,
-                                &mut self.systems,
+                                &mut self.handlers,
                             )
                         };
 
@@ -1042,7 +1047,7 @@ pub struct UnsafeWorldCell<'a> {
 impl<'a> UnsafeWorldCell<'a> {
     /// # Safety
     ///
-    /// - Must be called from within a system.
+    /// - Must be called from within a handler.
     /// - Must have permission to access the event queue mutably.
     /// - Event index must be correct for the given event.
     pub unsafe fn send_with_index<E: Event>(self, event: E, idx: u32) {
@@ -1051,7 +1056,7 @@ impl<'a> UnsafeWorldCell<'a> {
 
     /// # Safety
     ///
-    /// - Must be called from within a system.
+    /// - Must be called from within a handler.
     /// - Must have permission to access the event queue mutably.
     pub unsafe fn queue_spawn(self) -> EntityId {
         let entity_id = (*self.world.as_ptr())
@@ -1071,9 +1076,9 @@ impl<'a> UnsafeWorldCell<'a> {
         unsafe { &(*self.world.as_ptr()).components }
     }
 
-    /// Returns the [`Systems`] for this world.
-    pub fn systems(self) -> &'a Systems {
-        unsafe { &(*self.world.as_ptr()).systems }
+    /// Returns the [`Handlers`] for this world.
+    pub fn handlers(self) -> &'a Handlers {
+        unsafe { &(*self.world.as_ptr()).handlers }
     }
 
     /// Returns the [`Archetypes`] for this world.
@@ -1144,17 +1149,17 @@ mod tests {
 
         let mut world = World::new();
 
-        world.add_system(|r: Receiver<A>, mut s: Sender<B>| {
+        world.add_handler(|r: Receiver<A>, mut s: Sender<B>| {
             s.send(B(r.event.0.clone()));
             s.send(B(r.event.0.clone()));
         });
 
-        world.add_system(|r: Receiver<B>, mut s: Sender<C>| {
+        world.add_handler(|r: Receiver<B>, mut s: Sender<C>| {
             s.send(C(r.event.0.clone()));
             s.send(C(r.event.0.clone()));
         });
 
-        world.add_system(|r: Receiver<C>| println!("got C {:?}", Arc::as_ptr(&r.event.0)));
+        world.add_handler(|r: Receiver<C>| println!("got C {:?}", Arc::as_ptr(&r.event.0)));
 
         let arc = Arc::new(());
 
@@ -1197,17 +1202,17 @@ mod tests {
 
         let mut world = World::new();
 
-        world.add_system(|r: Receiver<A>, mut s: Sender<B>| {
+        world.add_handler(|r: Receiver<A>, mut s: Sender<B>| {
             s.send(B(r.event.0.clone()));
             s.send(B(r.event.0.clone()));
         });
 
-        world.add_system(|r: Receiver<B>, mut sender: Sender<C>| {
+        world.add_handler(|r: Receiver<B>, mut sender: Sender<C>| {
             sender.send(C(r.event.0.clone()));
             sender.send(C(r.event.0.clone()));
         });
 
-        world.add_system(|_: Receiver<C>| panic!("oops!"));
+        world.add_handler(|_: Receiver<C>| panic!("oops!"));
 
         let arc = Arc::new(());
         let arc_cloned = arc.clone();

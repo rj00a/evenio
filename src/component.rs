@@ -14,16 +14,16 @@ use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventPtr};
+use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, IndexSet, TypeIdMap};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
-use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::UnsafeWorldCell;
 
 /// Contains metadata for all the components in a world.
 ///
-/// This can be obtained in a system by using the `&Components` system
+/// This can be obtained in a handler by using the `&Components` handler
 /// parameter.
 ///
 /// ```
@@ -33,7 +33,7 @@ use crate::world::UnsafeWorldCell;
 /// # #[derive(Event)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_system(|_: Receiver<E>, components: &Components| {});
+/// world.add_handler(|_: Receiver<E>, components: &Components| {});
 /// ```
 #[derive(Debug)]
 pub struct Components {
@@ -170,7 +170,7 @@ impl Index<TypeId> for Components {
     }
 }
 
-unsafe impl SystemParam for &'_ Components {
+unsafe impl HandlerParam for &'_ Components {
     type State = ();
 
     type Item<'a> = &'a Components;
@@ -181,7 +181,7 @@ unsafe impl SystemParam for &'_ Components {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -268,7 +268,7 @@ impl ComponentInfo {
 /// component of the same type.
 ///
 /// To add a component to an entity, use the [`Insert`] event. To access
-/// components from systems, use the [`Fetcher`] system parameter.
+/// components from handlers, use the [`Fetcher`] handler parameter.
 ///
 /// [entities]: crate::entity
 /// [`Insert`]: crate::event::Insert
@@ -424,13 +424,13 @@ mod tests {
         let c1 = world.add_component::<A>();
         let e1 = world.spawn();
         world.insert(e1, A("hello".into()));
-        let s1 = world.add_system(|_: Receiver<E>, Single(A(a)): Single<&mut A>| {
+        let s1 = world.add_handler(|_: Receiver<E>, Single(A(a)): Single<&mut A>| {
             a.push_str("hello");
         });
         world.send(E);
 
         assert!(world.remove_component(c1).is_some());
-        assert!(!world.systems().contains(s1));
+        assert!(!world.handlers().contains(s1));
         assert!(!world.entities().contains(e1));
         assert_eq!(
             world.archetypes().len(),
@@ -442,14 +442,14 @@ mod tests {
         let e2 = world.spawn();
         assert!(world.entities().contains(e2));
         world.insert(e2, B(vec![]));
-        let s2 = world.add_system(|_: Receiver<E>, Single(B(b)): Single<&mut B>| {
+        let s2 = world.add_handler(|_: Receiver<E>, Single(B(b)): Single<&mut B>| {
             b.push("hello".into());
         });
         world.send(E);
         assert_eq!(world.get_component::<B>(e2), Some(&B(vec!["hello".into()])));
 
         assert!(world.remove_component(c2).is_some());
-        assert!(!world.systems().contains(s2));
+        assert!(!world.handlers().contains(s2));
         assert!(!world.entities().contains(e2));
         assert_eq!(world.archetypes().len(), 1);
     }

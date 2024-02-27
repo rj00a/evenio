@@ -4,7 +4,7 @@ Entities and components are the bread and butter of any ECS framework.
 
 Entities make up the _things_ in your application, such as monsters, players, cameras, GUI elements, or items.
 By itself, an entity is just a unique identifier ([`EntityId`]). It is the entity's set of _components_ that differentiate a player from a monster, or a camera from an item.
-Components hold the data while systems operate on entities with certain sets of components.
+Components hold the data while handlers operate on entities with certain sets of components.
 
 Let's see how we might model player and monster entities in a game with `evenio`.
 
@@ -59,12 +59,12 @@ We can visualize our data using a table where the rows are entities and columns 
 
 [`EntityId`]: crate::entity::EntityId
 
-In the next chapter, we'll see how to operate on component data from within systems.
+In the next chapter, we'll see how to operate on component data from within handlers.
 
 ## Bundling Components
 
 If our game has lots of monsters with lots of components, we might grow tired of inserting the components individually.
-To fix this, we can create a new event and system to do the inserting for us.
+To fix this, we can create a new event and handler to do the inserting for us.
 
 ```rust
 # use evenio::prelude::*;
@@ -83,7 +83,7 @@ struct InitMonster {
     pos: [f32; 2],
 }
 
-fn init_monster_system(
+fn init_monster_handler(
     r: Receiver<InitMonster>,
     mut s: Sender<(Insert<Health>, Insert<Position>, Insert<Monster>)>
 ) {
@@ -97,9 +97,9 @@ fn init_monster_system(
     s.insert(entity, Monster);
 }
 
-world.add_system(init_monster_system);
+world.add_handler(init_monster_handler);
 
-// Test our new system:
+// Test our new handler:
 let entity = world.spawn();
 world.send(InitMonster {
     entity,
@@ -110,7 +110,7 @@ assert!(world.get_component::<Monster>(entity).is_some());
 ```
 
 Whenever we insert a component on an entity, what we're actually doing is sending the special [`Insert`] event for that component.
-Because of this, we have to specify the correct `Insert` events in the system's `Sender` above.
+Because of this, we have to specify the correct `Insert` events in the handler's `Sender` above.
 
 [`Insert`]: crate::event::Insert
 

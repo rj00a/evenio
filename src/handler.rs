@@ -14,7 +14,7 @@ use core::ptr::NonNull;
 use core::{any, fmt};
 
 use evenio_macros::all_tuples;
-pub use evenio_macros::SystemParam;
+pub use evenio_macros::HandlerParam;
 
 use crate::access::{Access, ComponentAccessExpr};
 use crate::aliased_box::AliasedBox;
@@ -31,35 +31,35 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
 
-/// Contains metadata for all the systems in a world.
+/// Contains metadata for all the handlers in a world.
 ///
-/// This can be obtained in a system by using the `&Systems` system
+/// This can be obtained in a handler by using the `&Handlers` handler
 /// parameter.
 ///
 /// ```
 /// # use evenio::prelude::*;
-/// # use evenio::system::Systems;
+/// # use evenio::handler::Handlers;
 /// #
 /// # #[derive(Event)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_system(|_: Receiver<E>, systems: &Systems| {});
+/// world.add_handler(|_: Receiver<E>, handlers: &Handlers| {});
 /// ```
 #[derive(Debug)]
-pub struct Systems {
-    infos: SlotMap<SystemInfo>,
-    /// Maps untargeted event indices to the ordered list of systems that handle
-    /// the event.
-    by_untargeted_event: Vec<SystemList>,
-    by_type_id: TypeIdMap<SystemInfoPtr>,
-    /// Counts up as new systems are added.
+pub struct Handlers {
+    infos: SlotMap<HandlerInfo>,
+    /// Maps untargeted event indices to the ordered list of handlers that
+    /// handle the event.
+    by_untargeted_event: Vec<HandlerList>,
+    by_type_id: TypeIdMap<HandlerInfoPtr>,
+    /// Counts up as new handlers are added.
     insert_counter: u64,
-    /// Systems ordered by the order they were added to the world. This ensures
-    /// that iteration over all systems is done in insertion order.
-    by_insert_order: BTreeMap<u64, SystemInfoPtr>,
+    /// Handlers ordered by the order they were added to the world. This ensures
+    /// that iteration over all handlers is done in insertion order.
+    by_insert_order: BTreeMap<u64, HandlerInfoPtr>,
 }
 
-impl Systems {
+impl Handlers {
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
@@ -70,7 +70,7 @@ impl Systems {
         }
     }
 
-    pub(crate) fn add(&mut self, info: SystemInfo) -> SystemId {
+    pub(crate) fn add(&mut self, info: HandlerInfo) -> HandlerId {
         let ptr = info.ptr();
 
         if let Some(type_id) = info.type_id() {
@@ -78,7 +78,7 @@ impl Systems {
         }
 
         let Some(k) = self.infos.insert_with(|k| {
-            let id = SystemId(k);
+            let id = HandlerId(k);
 
             let inner = unsafe { &mut *ptr.0.as_ptr() };
 
@@ -90,7 +90,7 @@ impl Systems {
 
                 if idx >= self.by_untargeted_event.len() {
                     self.by_untargeted_event
-                        .resize_with(idx + 1, SystemList::default);
+                        .resize_with(idx + 1, HandlerList::default);
                 }
 
                 self.by_untargeted_event[idx].insert(ptr, info.priority())
@@ -98,7 +98,7 @@ impl Systems {
 
             info
         }) else {
-            panic!("too many systems")
+            panic!("too many handlers")
         };
 
         self.by_insert_order.insert(self.insert_counter, ptr);
@@ -106,10 +106,10 @@ impl Systems {
 
         debug_assert_eq!(self.infos.len(), self.by_insert_order.len() as u32);
 
-        SystemId(k)
+        HandlerId(k)
     }
 
-    pub(crate) fn remove(&mut self, id: SystemId) -> Option<SystemInfo> {
+    pub(crate) fn remove(&mut self, id: HandlerId) -> Option<HandlerInfo> {
         let info = self.infos.remove(id.0)?;
 
         let received_event = info.received_event();
@@ -134,100 +134,100 @@ impl Systems {
         if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
             if idx as usize >= self.by_untargeted_event.len() {
                 self.by_untargeted_event
-                    .resize_with(idx as usize + 1, SystemList::default);
+                    .resize_with(idx as usize + 1, HandlerList::default);
             }
         }
     }
 
-    pub(crate) fn get_untargeted_list(&self, idx: UntargetedEventIdx) -> Option<&SystemList> {
+    pub(crate) fn get_untargeted_list(&self, idx: UntargetedEventIdx) -> Option<&HandlerList> {
         self.by_untargeted_event.get(idx.0 as usize)
     }
 
-    /// Gets the [`SystemInfo`] of the given system. Returns `None` if the ID is
-    /// invalid.
-    pub fn get(&self, id: SystemId) -> Option<&SystemInfo> {
+    /// Gets the [`HandlerInfo`] of the given handler. Returns `None` if the ID
+    /// is invalid.
+    pub fn get(&self, id: HandlerId) -> Option<&HandlerInfo> {
         self.infos.get(id.0)
     }
 
-    pub(crate) fn get_mut(&mut self, id: SystemId) -> Option<&mut SystemInfo> {
+    pub(crate) fn get_mut(&mut self, id: HandlerId) -> Option<&mut HandlerInfo> {
         self.infos.get_mut(id.0)
     }
 
-    /// Gets the [`SystemInfo`] for a system using its [`SystemIdx`].
+    /// Gets the [`HandlerInfo`] for a handler using its [`HandlerIdx`].
     /// Returns `None` if the index is invalid.
-    pub fn get_by_index(&self, idx: SystemIdx) -> Option<&SystemInfo> {
+    pub fn get_by_index(&self, idx: HandlerIdx) -> Option<&HandlerInfo> {
         self.infos.get_by_index(idx.0).map(|(_, v)| v)
     }
 
-    /// Gets the [`SystemInfo`] for a system using its [`TypeId`]. Returns
-    /// `None` if the `TypeId` does not map to a system.
-    pub fn get_by_type_id(&self, id: TypeId) -> Option<&SystemInfo> {
+    /// Gets the [`HandlerInfo`] for a handler using its [`TypeId`]. Returns
+    /// `None` if the `TypeId` does not map to a handler.
+    pub fn get_by_type_id(&self, id: TypeId) -> Option<&HandlerInfo> {
         self.by_type_id.get(&id).map(|p| unsafe { p.as_info() })
     }
 
-    /// Does the given system exist in the world?
-    pub fn contains(&self, id: SystemId) -> bool {
+    /// Does the given handler exist in the world?
+    pub fn contains(&self, id: HandlerId) -> bool {
         self.get(id).is_some()
     }
 
-    /// Returns an iterator over all system infos in insertion order.
-    pub fn iter(&self) -> impl Iterator<Item = &SystemInfo> {
+    /// Returns an iterator over all handler infos in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &HandlerInfo> {
         self.by_insert_order
             .values()
             .map(|ptr| unsafe { ptr.as_info() })
     }
 
-    /// Returns a mutable iterator over all system infos in insertion order.
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut SystemInfo> {
+    /// Returns a mutable iterator over all handler infos in insertion order.
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut HandlerInfo> {
         self.by_insert_order
             .values_mut()
             .map(|ptr| unsafe { ptr.as_info_mut() })
     }
 }
 
-unsafe impl Send for Systems {}
-unsafe impl Sync for Systems {}
+unsafe impl Send for Handlers {}
+unsafe impl Sync for Handlers {}
 
-impl Index<SystemId> for Systems {
-    type Output = SystemInfo;
+impl Index<HandlerId> for Handlers {
+    type Output = HandlerInfo;
 
-    fn index(&self, index: SystemId) -> &Self::Output {
+    fn index(&self, index: HandlerId) -> &Self::Output {
         if let Some(info) = self.get(index) {
             info
         } else {
-            panic!("no such system with ID of {index:?} exists")
+            panic!("no such handler with ID of {index:?} exists")
         }
     }
 }
 
-impl Index<SystemIdx> for Systems {
-    type Output = SystemInfo;
+impl Index<HandlerIdx> for Handlers {
+    type Output = HandlerInfo;
 
-    fn index(&self, index: SystemIdx) -> &Self::Output {
+    fn index(&self, index: HandlerIdx) -> &Self::Output {
         if let Some(info) = self.get_by_index(index) {
             info
         } else {
-            panic!("no such system with index of {index:?} exists")
+            panic!("no such handler with index of {index:?} exists")
         }
     }
 }
 
-impl Index<TypeId> for Systems {
-    type Output = SystemInfo;
+impl Index<TypeId> for Handlers {
+    type Output = HandlerInfo;
 
     fn index(&self, index: TypeId) -> &Self::Output {
         if let Some(info) = self.get_by_type_id(index) {
             info
         } else {
-            panic!("no such system with type ID of {index:?} exists")
+            panic!("no such handler with type ID of {index:?} exists")
         }
     }
 }
 
-unsafe impl SystemParam for &'_ Systems {
+unsafe impl HandlerParam for &'_ Handlers {
     type State = ();
 
-    type Item<'a> = &'a Systems;
+    type Item<'a> = &'a Handlers;
 
     fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
         Ok(())
@@ -235,12 +235,12 @@ unsafe impl SystemParam for &'_ Systems {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a> {
-        world.systems()
+        world.handlers()
     }
 
     fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
@@ -248,57 +248,57 @@ unsafe impl SystemParam for &'_ Systems {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-/// Metadata for a system.
+/// Metadata for a handler.
 #[repr(transparent)]
-pub struct SystemInfo(AliasedBox<SystemInfoInner>);
+pub struct HandlerInfo(AliasedBox<HandlerInfoInner>);
 
-/// Pointer to a system.
+/// Pointer to a handler.
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
-pub(crate) struct SystemInfoPtr(NonNull<SystemInfoInner>);
+pub(crate) struct HandlerInfoPtr(NonNull<HandlerInfoInner>);
 
-impl SystemInfoPtr {
+impl HandlerInfoPtr {
     /// # Safety
     ///
     /// - Pointer must be valid.
     /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn as_info(&self) -> &SystemInfo {
-        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
-        &*(self as *const Self as *const SystemInfo)
+    pub(crate) unsafe fn as_info(&self) -> &HandlerInfo {
+        // SAFETY: Both `` and `Ptr` have non-null pointer layout.
+        &*(self as *const Self as *const HandlerInfo)
     }
 
     /// # Safety
     ///
     /// - Pointer must be valid.
     /// - Aliasing rules must be followed.
-    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut SystemInfo {
-        // SAFETY: Both `SystemInfo` and `SystemInfoPtr` have non-null pointer layout.
-        &mut *(self as *mut Self as *mut SystemInfo)
+    pub(crate) unsafe fn as_info_mut(&mut self) -> &mut HandlerInfo {
+        // SAFETY: Both `` and `Ptr` have non-null pointer layout.
+        &mut *(self as *mut Self as *mut HandlerInfo)
     }
 }
 
-impl PartialEq for SystemInfoPtr {
+impl PartialEq for HandlerInfoPtr {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl Eq for SystemInfoPtr {}
+impl Eq for HandlerInfoPtr {}
 
-impl PartialOrd for SystemInfoPtr {
+impl PartialOrd for HandlerInfoPtr {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for SystemInfoPtr {
+impl Ord for HandlerInfoPtr {
     fn cmp(&self, other: &Self) -> Ordering {
         // Ignore ptr metadata by casting to thin pointer.
         self.0.cast::<()>().cmp(&other.0.cast::<()>())
     }
 }
 
-impl Hash for SystemInfoPtr {
+impl Hash for HandlerInfoPtr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Ignore ptr metadata by casting to thin pointer.
         self.0.cast::<()>().hash(state)
@@ -306,9 +306,9 @@ impl Hash for SystemInfoPtr {
 }
 
 // This is generic over `S` so that we can do an unsizing coercion.
-pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
+pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) name: Cow<'static, str>,
-    pub(crate) id: SystemId,
+    pub(crate) id: HandlerId,
     pub(crate) type_id: Option<TypeId>,
     pub(crate) order: u64,
     pub(crate) received_event: EventId,
@@ -322,21 +322,21 @@ pub(crate) struct SystemInfoInner<S: ?Sized = dyn System> {
     pub(crate) priority: Priority,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
     // aliasing.
-    pub(crate) system: S,
+    pub(crate) handler: H,
 }
 
-impl<S: ?Sized> UnwindSafe for SystemInfoInner<S> {}
-impl<S: ?Sized> RefUnwindSafe for SystemInfoInner<S> {}
+impl<H: ?Sized> UnwindSafe for HandlerInfoInner<H> {}
+impl<H: ?Sized> RefUnwindSafe for HandlerInfoInner<H> {}
 
-impl SystemInfo {
-    pub(crate) fn new<S: System>(inner: SystemInfoInner<S>) -> Self {
+impl HandlerInfo {
+    pub(crate) fn new<H: Handler>(inner: HandlerInfoInner<H>) -> Self {
         // Perform unsizing coercion using `Box`, then convert the box into an
         // `AliasedBox`.
-        let b: Box<SystemInfoInner> = Box::new(inner);
+        let b: Box<HandlerInfoInner> = Box::new(inner);
         Self(b.into())
     }
 
-    /// Gets the name of the system.
+    /// Gets the name of the handler.
     ///
     /// This name is intended for debugging purposes and should not be relied
     /// upon for correctness.
@@ -344,12 +344,12 @@ impl SystemInfo {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).name }
     }
 
-    /// Gets the ID of this system.
-    pub fn id(&self) -> SystemId {
+    /// Gets the ID of this handler.
+    pub fn id(&self) -> HandlerId {
         unsafe { (*AliasedBox::as_ptr(&self.0)).id }
     }
 
-    /// Gets the [`TypeId`] of this system, if any.
+    /// Gets the [`TypeId`] of this handler, if any.
     pub fn type_id(&self) -> Option<TypeId> {
         unsafe { (*AliasedBox::as_ptr(&self.0)).type_id }
     }
@@ -358,69 +358,69 @@ impl SystemInfo {
         unsafe { (*AliasedBox::as_ptr(&self.0)).order }
     }
 
-    /// Gets the [`EventId`] of the event is system listens for.
+    /// Gets the [`EventId`] of the event is handler listens for.
     pub fn received_event(&self) -> EventId {
         unsafe { (*AliasedBox::as_ptr(&self.0)).received_event }
     }
 
-    /// Gets the system's [`Access`] to the event it listens for.
+    /// Gets the handler's [`Access`] to the event it listens for.
     pub fn received_event_access(&self) -> Access {
         unsafe { (*AliasedBox::as_ptr(&self.0)).received_event_access }
     }
 
-    /// Gets the expression describing the system's targeted event query, or
-    /// `None` if this system is not targeted.
+    /// Gets the expression describing the handler's targeted event query, or
+    /// `None` if this handler is not targeted.
     pub fn targeted_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
         self.received_event()
             .is_targeted()
             .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_expr })
     }
 
-    /// Returns the set of untargeted events this system sends.
+    /// Returns the set of untargeted events this handler sends.
     pub fn sent_untargeted_events(&self) -> &BitSet<UntargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
 
-    /// Returns the set of targeted events this system sends.
+    /// Returns the set of targeted events this handler sends.
     pub fn sent_targeted_events(&self) -> &BitSet<TargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
 
-    /// Gets this system's [`Access`] to the event queue.
+    /// Gets this handler's [`Access`] to the event queue.
     pub fn event_queue_access(&self) -> Access {
         unsafe { (*AliasedBox::as_ptr(&self.0)).event_queue_access }
     }
 
-    /// Gets the expression describing this system's access
+    /// Gets the expression describing this handler's access
     pub fn component_access(&self) -> &ComponentAccessExpr {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
     }
 
-    /// Gets the set of components referenced by this system.
+    /// Gets the set of components referenced by this handler.
     ///
-    /// Referenced components are components used by the system in any way. Used
-    /// for cleanup when removing components.
+    /// Referenced components are components used by the handler in any way.
+    /// Used for cleanup when removing components.
     pub fn referenced_components(&self) -> &BitSet<ComponentIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }
     }
 
-    /// Gets the [`Priority`] of this system.
+    /// Gets the [`Priority`] of this handler.
     pub fn priority(&self) -> Priority {
         unsafe { (*AliasedBox::as_ptr(&self.0)).priority }
     }
 
-    pub(crate) fn ptr(&self) -> SystemInfoPtr {
-        SystemInfoPtr(AliasedBox::as_non_null(&self.0))
+    pub(crate) fn ptr(&self) -> HandlerInfoPtr {
+        HandlerInfoPtr(AliasedBox::as_non_null(&self.0))
     }
 
-    pub(crate) fn system_mut(&mut self) -> &mut dyn System {
-        unsafe { &mut (*AliasedBox::as_mut_ptr(&mut self.0)).system }
+    pub(crate) fn handler_mut(&mut self) -> &mut dyn Handler {
+        unsafe { &mut (*AliasedBox::as_mut_ptr(&mut self.0)).handler }
     }
 }
 
-impl fmt::Debug for SystemInfo {
+impl fmt::Debug for HandlerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SystemInfo")
+        f.debug_struct("")
             .field("name", &self.name())
             .field("id", &self.id())
             .field("type_id", &self.type_id())
@@ -434,22 +434,22 @@ impl fmt::Debug for SystemInfo {
             .field("component_access", &self.component_access())
             .field("referenced_components", &self.referenced_components())
             .field("priority", &self.priority())
-            // Don't access the `system` field.
+            // Don't access the `handler` field.
             .finish_non_exhaustive()
     }
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct SystemList {
+pub(crate) struct HandlerList {
     before: u32,
     after: u32,
-    entries: Vec<SystemInfoPtr>,
+    entries: Vec<HandlerInfoPtr>,
 }
 
-unsafe impl Sync for SystemList {}
+unsafe impl Sync for HandlerList {}
 
-impl SystemList {
-    pub(crate) const fn new() -> SystemList {
+impl HandlerList {
+    pub(crate) const fn new() -> HandlerList {
         Self {
             before: 0,
             after: 0,
@@ -457,26 +457,26 @@ impl SystemList {
         }
     }
 
-    pub(crate) fn insert(&mut self, ptr: SystemInfoPtr, priority: Priority) {
+    pub(crate) fn insert(&mut self, ptr: HandlerInfoPtr, priority: Priority) {
         assert!(self.entries.len() < u32::MAX as usize);
 
         match priority {
-            Priority::Before => {
+            Priority::High => {
                 self.entries.insert(self.before as usize, ptr);
                 self.before += 1;
                 self.after += 1;
             }
-            Priority::Normal => {
+            Priority::Medium => {
                 self.entries.insert(self.after as usize, ptr);
                 self.after += 1;
             }
-            Priority::After => {
+            Priority::Low => {
                 self.entries.push(ptr);
             }
         }
     }
 
-    pub(crate) fn remove(&mut self, ptr: SystemInfoPtr) -> bool {
+    pub(crate) fn remove(&mut self, ptr: HandlerInfoPtr) -> bool {
         if let Some(idx) = self.entries.iter().position(|&p| p == ptr) {
             self.entries.remove(idx);
 
@@ -496,33 +496,33 @@ impl SystemList {
         }
     }
 
-    pub(crate) fn systems(&self) -> &[SystemInfoPtr] {
+    pub(crate) fn handlers(&self) -> &[HandlerInfoPtr] {
         &self.entries
     }
 }
 
-/// Lightweight identifier for a system.
+/// Lightweight identifier for a handler.
 ///
-/// System identifiers are implemented using an [index] and a generation count.
-/// The generation count ensures that IDs from removed systems are not reused
-/// by new systems.
+/// Handler identifiers are implemented using an [index] and a generation count.
+/// The generation count ensures that IDs from removed handlers are not reused
+/// by new handlers.
 ///
-/// A system identifier is only meaningful in the [`World`] it was created
-/// from. Attempting to use a system ID in a different world will have
+/// A handler identifier is only meaningful in the [`World`] it was created
+/// from. Attempting to use a handler ID in a different world will have
 /// unexpected results.
 ///
-/// [index]: SystemIdx
+/// [index]: HandlerIdx
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct SystemId(Key);
+pub struct HandlerId(Key);
 
-impl SystemId {
-    /// The system ID which never identifies a live system. This is the default
-    /// value for `SystemId`.
+impl HandlerId {
+    /// The handler ID which never identifies a live handler. This is the
+    /// default value for `HandlerId`.
     pub const NULL: Self = Self(Key::NULL);
 
     /// Returns the index of this ID.
-    pub const fn index(self) -> SystemIdx {
-        SystemIdx(self.0.index())
+    pub const fn index(self) -> HandlerIdx {
+        HandlerIdx(self.0.index())
     }
 
     /// Returns the generation count of this ID.
@@ -531,11 +531,11 @@ impl SystemId {
     }
 }
 
-/// A [`SystemId`] with the generation count stripped out.
+/// A [`HandlerId`] with the generation count stripped out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct SystemIdx(pub u32);
+pub struct HandlerIdx(pub u32);
 
-unsafe impl SparseIndex for SystemIdx {
+unsafe impl SparseIndex for HandlerIdx {
     const MAX: Self = Self(u32::MAX);
 
     fn index(self) -> usize {
@@ -547,19 +547,19 @@ unsafe impl SparseIndex for SystemIdx {
     }
 }
 
-/// Types which can be converted into [`System`]s.
+/// Types which can be converted into [`Handler`]s.
 ///
 /// This trait is implemented for all functions that return `()` and whose
-/// arguments are all [`SystemParam`]s.
-pub trait IntoSystem<Marker>: Sized {
-    /// The system type to convert to.
-    type System: System;
+/// arguments are all [`HandlerParam`]s.
+pub trait IntoHandler<Marker>: Sized {
+    /// The handler type to convert to.
+    type Handler: Handler;
 
-    /// Performs the conversion into a [`System`].
-    fn into_system(self) -> Self::System;
+    /// Performs the conversion into a [`Handler`].
+    fn into_handler(self) -> Self::Handler;
 
-    /// Ignore this system's reported [`TypeId`]. This can be used to add a
-    /// specific system to the world more than once.
+    /// Ignore this handler's reported [`TypeId`]. This can be used to add a
+    /// specific handler to the world more than once.
     ///
     /// # Examples
     ///
@@ -568,64 +568,64 @@ pub trait IntoSystem<Marker>: Sized {
     ///
     /// let mut world = World::new();
     ///
-    /// let id_1 = world.add_system(my_system);
-    /// let id_2 = world.add_system(my_system.no_type_id());
-    /// let id_3 = world.add_system(my_system);
+    /// let id_1 = world.add_handler(my_handler);
+    /// let id_2 = world.add_handler(my_handler.no_type_id());
+    /// let id_3 = world.add_handler(my_handler);
     ///
     /// assert_ne!(id_1, id_2);
     /// assert_eq!(id_1, id_3);
     /// #
-    /// # fn my_system(_: Receiver<E>) {}
+    /// # fn my_handler(_: Receiver<E>) {}
     /// #
     /// # #[derive(Event)]
     /// # struct E;
     /// ```
-    fn no_type_id(self) -> NoTypeId<Self::System> {
-        NoTypeId(self.into_system())
+    fn no_type_id(self) -> NoTypeId<Self::Handler> {
+        NoTypeId(self.into_handler())
     }
 
-    /// Returns a wrapper which sets the priority of this system to
-    /// [`Priority::Before`].
-    fn before(self) -> Before<Self::System> {
-        Before(self.into_system())
+    /// Returns a wrapper which sets the priority of this handler to
+    /// [`Priority::High`].
+    fn high(self) -> High<Self::Handler> {
+        High(self.into_handler())
     }
 
-    /// Returns a wrapper which sets the priority of this system to
-    /// [`Priority::After`].
-    fn after(self) -> After<Self::System> {
-        After(self.into_system())
+    /// Returns a wrapper which sets the priority of this handler to
+    /// [`Priority::Low`].
+    fn low(self) -> Low<Self::Handler> {
+        Low(self.into_handler())
     }
 }
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct FunctionSystemMarker;
+pub struct FunctionHandlerMarker;
 
-impl<Marker, F> IntoSystem<(FunctionSystemMarker, Marker)> for F
+impl<Marker, F> IntoHandler<(FunctionHandlerMarker, Marker)> for F
 where
     Marker: 'static,
-    F: SystemParamFunction<Marker>,
+    F: HandlerParamFunction<Marker>,
 {
-    type System = FunctionSystem<Marker, F>;
+    type Handler = FunctionHandler<Marker, F>;
 
-    fn into_system(self) -> Self::System {
-        FunctionSystem::new(self)
+    fn into_handler(self) -> Self::Handler {
+        FunctionHandler::new(self)
     }
 }
 
-impl<S: System> IntoSystem<()> for S {
-    type System = Self;
+impl<H: Handler> IntoHandler<()> for H {
+    type Handler = Self;
 
-    fn into_system(self) -> Self::System {
+    fn into_handler(self) -> Self::Handler {
         self
     }
 }
 
-/// The wrapper system returned by [`IntoSystem::no_type_id`].
+/// The wrapper handler returned by [`IntoHandler::no_type_id`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub struct NoTypeId<S>(pub S);
 
-impl<S: System> System for NoTypeId<S> {
+impl<H: Handler> Handler for NoTypeId<H> {
     fn type_id(&self) -> Option<TypeId> {
         None
     }
@@ -640,7 +640,7 @@ impl<S: System> System for NoTypeId<S> {
 
     unsafe fn run(
         &mut self,
-        info: &SystemInfo,
+        info: &HandlerInfo,
         event_ptr: EventPtr,
         target_location: EntityLocation,
         world: UnsafeWorldCell,
@@ -657,11 +657,11 @@ impl<S: System> System for NoTypeId<S> {
     }
 }
 
-/// The wrapper system returned by [`IntoSystem::before`].
+/// The wrapper handler returned by [`IntoHandler::high`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Before<S>(pub S);
+pub struct High<S>(pub S);
 
-impl<S: System> System for Before<S> {
+impl<H: Handler> Handler for High<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -672,13 +672,13 @@ impl<S: System> System for Before<S> {
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::Before;
+        config.priority = Priority::High;
         res
     }
 
     unsafe fn run(
         &mut self,
-        info: &SystemInfo,
+        info: &HandlerInfo,
         event_ptr: EventPtr,
         target_location: EntityLocation,
         world: UnsafeWorldCell,
@@ -695,11 +695,11 @@ impl<S: System> System for Before<S> {
     }
 }
 
-/// The wrapper system returned by [`IntoSystem::after`].
+/// The wrapper handler returned by [`IntoHandler::low`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct After<S>(pub S);
+pub struct Low<S>(pub S);
 
-impl<S: System> System for After<S> {
+impl<H: Handler> Handler for Low<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -710,13 +710,13 @@ impl<S: System> System for After<S> {
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::After;
+        config.priority = Priority::Low;
         res
     }
 
     unsafe fn run(
         &mut self,
-        info: &SystemInfo,
+        info: &HandlerInfo,
         event_ptr: EventPtr,
         target_location: EntityLocation,
         world: UnsafeWorldCell,
@@ -735,49 +735,49 @@ impl<S: System> System for After<S> {
 
 /// An [`Event`] handler function that can be added to a [`World`].
 ///
-/// Systems are added to a world using the [`World::add_system`] method.
+/// handlers are added to a world using the [`World::add_handler`] method.
 ///
-/// For more information about systems, see the [tutorial](crate::tutorial).
-pub trait System: Send + Sync + 'static {
-    /// Returns the [`TypeId`] which uniquely identifies this system, or `None`
+/// For more information about handlers, see the [tutorial](crate::tutorial).
+pub trait Handler: Send + Sync + 'static {
+    /// Returns the [`TypeId`] which uniquely identifies this handler, or `None`
     /// if there is none.
     ///
-    /// No two systems with the same [`TypeId`] will exist in the [`World`] at
+    /// No two handlers with the same [`TypeId`] will exist in the [`World`] at
     /// the same time.
     fn type_id(&self) -> Option<TypeId>;
 
-    /// Returns the name of this system for debugging purposes.
+    /// Returns the name of this handler for debugging purposes.
     fn name(&self) -> Cow<'static, str>;
 
-    /// Initializes the system. Returns [`InitError`] on failure.
+    /// Initializes the handler. Returns [`InitError`] on failure.
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError>;
 
-    /// Execute the system by passing in the system's metadata, a pointer to the
-    /// received event of the configured type, the entity location of the
-    /// event's target, and an [`UnsafeWorldCell`] with permission to access
-    /// the data described in the configuration.
+    /// Execute the handler by passing in the handler's metadata, a pointer to
+    /// the received event of the configured type, the entity location of
+    /// the event's target, and an [`UnsafeWorldCell`] with permission to
+    /// access the data described in the configuration.
     ///
     /// # Safety
     ///
-    /// - System must be initialized via [`init`].
-    /// - `info` must be the correct information for this system.
+    /// - handler must be initialized via [`init`].
+    /// - `info` must be the correct information for this handler.
     /// - `event_ptr` must point to the correct type of event configured by this
-    ///   system in [`init`].
+    ///   handler in [`init`].
     /// - `target_location` must be a valid location to an entity matching
     ///   [`Config::targeted_event_expr`], unless the event is not targeted.
     /// - `world` must have permission to access all data configured by this
-    ///   system in [`init`].
+    ///   handler in [`init`].
     ///
     /// [`init`]: Self::init
     unsafe fn run(
         &mut self,
-        info: &SystemInfo,
+        info: &HandlerInfo,
         event_ptr: EventPtr,
         target_location: EntityLocation,
         world: UnsafeWorldCell,
     );
 
-    /// Notifies the system that an archetype it might care about had its
+    /// Notifies the handler that an archetype it might care about had its
     /// internal state updated.
     ///
     /// This is invoked in the following scenarios:
@@ -789,20 +789,20 @@ pub trait System: Send + Sync + 'static {
     /// This method must not be called with empty archetypes.
     fn refresh_archetype(&mut self, arch: &Archetype);
 
-    /// Notifies the system that an archetype it might care about is no longer
+    /// Notifies the handler that an archetype it might care about is no longer
     /// available.
     ///
     /// This is invoked in the following scenarios:
     /// - The archetype was removed from the world.
     /// - The archetype previously had entities in it, but is now empty.
     ///
-    /// In either case, the system must assume that the archetype is no longer
+    /// In either case, the handler must assume that the archetype is no longer
     /// available. Attempting to read the component data from a removed
     /// archetype is illegal.
     fn remove_archetype(&mut self, arch: &Archetype);
 }
 
-/// An error returned when system initialization fails. Contains an error
+/// An error returned when handler initialization fails. Contains an error
 /// message.
 ///
 /// The error message is not stable.
@@ -819,29 +819,29 @@ impl fmt::Display for InitError {
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for InitError {}
 
-/// The priority of a system relative to other systems that handle the same
+/// The priority of a handler relative to other handlers that handle the same
 /// event.
 ///
-/// If multiple systems have the same priority, then the order they were added
+/// If multiple handlers have the same priority, then the order they were added
 /// to the [`World`] is used as a fallback.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 pub enum Priority {
-    /// The system runs before other systems.
-    Before,
-    /// The default system priority.
+    /// The handler runs before other handlers.
+    High,
+    /// The default handler priority.
     #[default]
-    Normal,
-    /// The system runs after other systems.
-    After,
+    Medium,
+    /// The handler runs after other handlers.
+    Low,
 }
 
-/// The Configuration of a system. Accessible during system initialization.
+/// The Configuration of a handler. Accessible during handler initialization.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Config {
-    /// The priority of this system.
+    /// The priority of this handler.
     pub priority: Priority,
-    /// The event type to be received by the system.
+    /// The event type to be received by the handler.
     ///
     /// Defaults to `None`, but must be assigned to `Some` before configuration
     /// is finished.
@@ -851,20 +851,20 @@ pub struct Config {
     /// The targeted event filter. This should be a subset of
     /// [`Self::component_access`].
     pub targeted_event_expr: BoolExpr<ComponentIdx>,
-    /// The set of untargeted events sent by the system.
+    /// The set of untargeted events sent by the handler.
     pub sent_untargeted_events: BitSet<UntargetedEventIdx>,
-    /// The set of targeted events sent by the system.
+    /// The set of targeted events sent by the handler.
     pub sent_targeted_events: BitSet<TargetedEventIdx>,
     /// Access to the queue of events.
     pub event_queue_access: Access,
-    /// Expression describing the components accessed by the system.
+    /// Expression describing the components accessed by the handler.
     pub component_access: ComponentAccessExpr,
-    /// The set of components referenced by this system. Used for system cleanup
-    /// when a component is removed.
+    /// The set of components referenced by this handler. Used for handler
+    /// cleanup when a component is removed.
     ///
-    /// This is a superset of the components accessed by this system. Consider
+    /// This is a superset of the components accessed by this handler. Consider
     /// the query `Has<&C>`: `Has` does not access `C`, but it still makes use
-    /// of `C`'s component index, so the whole system must be removed when
+    /// of `C`'s component index, so the whole handler must be removed when
     /// component `C` is removed.
     pub referenced_components: BitSet<ComponentIdx>,
 }
@@ -892,12 +892,12 @@ impl Default for Config {
     }
 }
 
-/// A parameter in a [`System`].
+/// A parameter in a [`Handler`].
 ///
 /// # Deriving
 ///
 /// This trait can be implemented automatically by using the associated derive
-/// macro. The macro works if every field of the struct is also a system param.
+/// macro. The macro works if every field of the struct is also a handler param.
 ///
 /// ```
 /// use std::marker::PhantomData;
@@ -910,66 +910,66 @@ impl Default for Config {
 /// #[derive(Event)]
 /// struct E;
 ///
-/// #[derive(SystemParam)]
-/// struct MySystemParam<'a> {
+/// #[derive(HandlerParam)]
+/// struct MyHandlerParam<'a> {
 ///     foo: Fetcher<'a, &'static C>,
 ///     bar: Sender<'a, E>,
 /// }
 ///
 /// let mut world = World::new();
 ///
-/// // Add system which uses our custom system param.
-/// world.add_system(|_: Receiver<E>, my_param: MySystemParam| {
+/// // Add handler which uses our custom handler param.
+/// world.add_handler(|_: Receiver<E>, my_param: MyHandlerParam| {
 ///     // ...
 /// });
 /// ```
 ///
 /// # Safety
 ///
-/// Implementors must ensure that [`SystemParam::init`] correctly registers the
-/// data accessed by [`SystemParam::get`].
-pub unsafe trait SystemParam {
-    /// Persistent data stored in the system.
+/// Implementors must ensure that [`HandlerParam::init`] correctly registers the
+/// data accessed by [`HandlerParam::get`].
+pub unsafe trait HandlerParam {
+    /// Persistent data stored in the handler.
     type State: Send + Sync + 'static;
 
-    /// The type produced by this system param. This is expected to be the type
+    /// The type produced by this handler param. This is expected to be the type
     /// of `Self` but with the lifetime of `'a`.
     type Item<'a>;
 
-    /// Initializes the system using the input [`World`] and [`Config`].
+    /// Initializes the handler using the input [`World`] and [`Config`].
     ///
-    /// If initialization fails, [`InitError`] is returned and the system is not
-    /// considered initialized.
+    /// If initialization fails, [`InitError`] is returned and the handler is
+    /// not considered initialized.
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError>;
 
-    /// Obtains a new instance of the system parameter.
+    /// Obtains a new instance of the handler parameter.
     ///
     /// # Safety
     ///
-    /// - `state` must be up to date and originate from [`SystemParam::init`].
-    /// - `info` must be correct for the system which this is invoked from.
-    /// - `event_ptr`: See [`System::run`].
-    /// - `target_location`: See [`System::run`].
+    /// - `state` must be up to date and originate from [`HandlerParam::init`].
+    /// - `info` must be correct for the handler which this is invoked from.
+    /// - `event_ptr`: See [`Handler::run`].
+    /// - `target_location`: See [`Handler::run`].
     /// - `world` must have permission to access the data configured in
-    ///   [`SystemParam::init`].
+    ///   [`HandlerParam::init`].
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        info: &'a SystemInfo,
+        info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
     ) -> Self::Item<'a>;
 
-    /// Refresh an archetype for this system param. Called whenever
-    /// [`System::refresh_archetype`] is called.
+    /// Refresh an archetype for this handler param. Called whenever
+    /// [`Handler::refresh_archetype`] is called.
     fn refresh_archetype(state: &mut Self::State, arch: &Archetype);
 
-    /// Remove the given archetype for this system param. Called whenever
-    /// [`System::remove_archetype`] is called.
+    /// Remove the given archetype for this handler param. Called whenever
+    /// [`Handler::remove_archetype`] is called.
     fn remove_archetype(state: &mut Self::State, arch: &Archetype);
 }
 
-unsafe impl<T> SystemParam for PhantomData<T> {
+unsafe impl<T> HandlerParam for PhantomData<T> {
     type State = ();
 
     type Item<'a> = Self;
@@ -980,7 +980,7 @@ unsafe impl<T> SystemParam for PhantomData<T> {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -993,10 +993,10 @@ unsafe impl<T> SystemParam for PhantomData<T> {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-macro_rules! impl_system_param_tuple {
+macro_rules! impl_handler_param_tuple {
     ($(($P:ident, $s:ident)),*) => {
         #[allow(unused_variables, clippy::unused_unit)]
-        unsafe impl<$($P: SystemParam),*> SystemParam for ($($P,)*) {
+        unsafe impl<$($P: HandlerParam),*> HandlerParam for ($($P,)*) {
             type State = ($($P::State,)*);
 
             type Item<'a> = ($($P::Item<'a>,)*);
@@ -1013,7 +1013,7 @@ macro_rules! impl_system_param_tuple {
             #[inline]
             unsafe fn get<'a>(
                 ($($s,)*): &'a mut Self::State,
-                info: &'a SystemInfo,
+                info: &'a HandlerInfo,
                 event_ptr: EventPtr<'a>,
                 target_location: EntityLocation,
                 world: UnsafeWorldCell<'a>,
@@ -1048,43 +1048,43 @@ macro_rules! impl_system_param_tuple {
     }
 }
 
-all_tuples!(impl_system_param_tuple, 0, 15, P, s);
+all_tuples!(impl_handler_param_tuple, 0, 15, P, s);
 
-/// The [`System`] implementation for ordinary functions.
+/// The [`Handler`] implementation for ordinary functions.
 ///
-/// This is obtained by using the [`IntoSystem`] impl on functions which accept
-/// only [`SystemParam`]s.
-pub struct FunctionSystem<Marker, F: SystemParamFunction<Marker>> {
+/// This is obtained by using the [`IntoHandler`] impl on functions which accept
+/// only [`HandlerParam`]s.
+pub struct FunctionHandler<Marker, F: HandlerParamFunction<Marker>> {
     func: F,
-    state: Option<<F::Param as SystemParam>::State>,
+    state: Option<<F::Param as HandlerParam>::State>,
 }
 
-impl<Marker, F> FunctionSystem<Marker, F>
+impl<Marker, F> FunctionHandler<Marker, F>
 where
-    F: SystemParamFunction<Marker>,
+    F: HandlerParamFunction<Marker>,
 {
-    /// Create a new uninitialized function system.
+    /// Create a new uninitialized function handler.
     pub fn new(func: F) -> Self {
         Self { func, state: None }
     }
 }
 
-impl<Marker, F> fmt::Debug for FunctionSystem<Marker, F>
+impl<Marker, F> fmt::Debug for FunctionHandler<Marker, F>
 where
-    F: SystemParamFunction<Marker> + fmt::Debug,
-    <F::Param as SystemParam>::State: fmt::Debug,
+    F: HandlerParamFunction<Marker> + fmt::Debug,
+    <F::Param as HandlerParam>::State: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FunctionSystem")
+        f.debug_struct("FunctionHandler")
             .field("func", &self.func)
             .field("state", &self.state)
             .finish()
     }
 }
 
-impl<Marker, F> System for FunctionSystem<Marker, F>
+impl<Marker, F> Handler for FunctionHandler<Marker, F>
 where
-    F: SystemParamFunction<Marker>,
+    F: HandlerParamFunction<Marker>,
     Marker: 'static,
 {
     fn type_id(&self) -> Option<TypeId> {
@@ -1096,13 +1096,13 @@ where
     }
 
     fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
-        self.state = Some(<F::Param as SystemParam>::init(world, config)?);
+        self.state = Some(<F::Param as HandlerParam>::init(world, config)?);
         Ok(())
     }
 
     unsafe fn run(
         &mut self,
-        system_info: &SystemInfo,
+        handler_info: &HandlerInfo,
         event_ptr: EventPtr,
         target_location: EntityLocation,
         world: UnsafeWorldCell,
@@ -1110,11 +1110,11 @@ where
         let state = unsafe {
             self.state
                 .as_mut()
-                .expect_debug_checked("system must be initialized")
+                .expect_debug_checked("handler must be initialized")
         };
 
         let param =
-            <F::Param as SystemParam>::get(state, system_info, event_ptr, target_location, world);
+            <F::Param as HandlerParam>::get(state, handler_info, event_ptr, target_location, world);
         self.func.run(param);
     }
 
@@ -1122,7 +1122,7 @@ where
         let state = unsafe {
             self.state
                 .as_mut()
-                .expect_debug_checked("system must be initialized")
+                .expect_debug_checked("handler must be initialized")
         };
 
         F::Param::refresh_archetype(state, arch)
@@ -1132,25 +1132,25 @@ where
         let state = unsafe {
             self.state
                 .as_mut()
-                .expect_debug_checked("system must be initialized")
+                .expect_debug_checked("handler must be initialized")
         };
 
         F::Param::remove_archetype(state, arch)
     }
 }
 
-/// Trait for functions whose parameters are [`SystemParam`]s.
-pub trait SystemParamFunction<Marker>: Send + Sync + 'static {
-    /// The system params used by this function, combined into a single type.
-    type Param: SystemParam;
+/// Trait for functions whose parameters are [`HandlerParam`]s.
+pub trait HandlerParamFunction<Marker>: Send + Sync + 'static {
+    /// The handler params used by this function, combined into a single type.
+    type Param: HandlerParam;
 
     /// Call the function.
-    fn run(&mut self, param: <Self::Param as SystemParam>::Item<'_>);
+    fn run(&mut self, param: <Self::Param as HandlerParam>::Item<'_>);
 }
 
-macro_rules! impl_system_param_function {
+macro_rules! impl_handler_param_function {
     ($(($P:ident, $p:ident)),*) => {
-        impl<F, $($P: SystemParam),*> SystemParamFunction<fn($($P),*)> for F
+        impl<F, $($P: HandlerParam),*> HandlerParamFunction<fn($($P),*)> for F
         where
             F: FnMut($($P),*) + FnMut($($P::Item<'_>),*) + Send + Sync + 'static,
         {
@@ -1158,7 +1158,7 @@ macro_rules! impl_system_param_function {
 
             fn run(
                 &mut self,
-                ($($p,)*): <Self::Param as SystemParam>::Item<'_>
+                ($($p,)*): <Self::Param as HandlerParam>::Item<'_>
             ) {
                 (self)($($p),*)
             }
@@ -1166,37 +1166,37 @@ macro_rules! impl_system_param_function {
     }
 }
 
-all_tuples!(impl_system_param_function, 0, 15, P, p);
+all_tuples!(impl_handler_param_function, 0, 15, P, p);
 
-/// A [`SystemParam`] for storing system-local state.
+/// A [`HandlerParam`] for storing handler-local state.
 ///
 /// Any type that implements [`Default`] can be wrapped in a `Local`.
 ///
 /// # Examples
 ///
 /// ```
+/// use evenio::handler::Local;
 /// use evenio::prelude::*;
-/// use evenio::system::Local;
 ///
 /// #[derive(Event)]
 /// struct E;
 ///
 /// let mut world = World::new();
 ///
-/// fn my_system(_: Receiver<E>, mut counter: Local<u32>) {
+/// fn my_handler(_: Receiver<E>, mut counter: Local<u32>) {
 ///     println!("counter is {counter}");
 ///     *counter += 1;
 /// }
 ///
-/// let sys = world.add_system(my_system);
+/// let handler = world.add_handler(my_handler);
 /// world.send(E);
 /// world.send(E);
 /// world.send(E);
 ///
-/// // System is destroyed and re-added, so the local is reset.
-/// println!("refreshing system...");
-/// world.remove_system(sys);
-/// world.add_system(my_system);
+/// // Handler is destroyed and re-added, so the local is reset.
+/// println!("refreshing handler...");
+/// world.remove_handler(handler);
+/// world.add_handler(my_handler);
 /// world.send(E);
 /// world.send(E);
 /// ```
@@ -1207,7 +1207,7 @@ all_tuples!(impl_system_param_function, 0, 15, P, p);
 /// counter is 0
 /// counter is 1
 /// counter is 2
-/// refreshing system...
+/// refreshing handler...
 /// counter is 0
 /// counter is 1
 /// ```
@@ -1216,7 +1216,7 @@ pub struct Local<'a, T> {
     state: &'a mut T,
 }
 
-unsafe impl<T: Default + Send + 'static> SystemParam for Local<'_, T> {
+unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
     type State = Exclusive<T>;
 
     type Item<'a> = Local<'a, T>;
@@ -1227,7 +1227,7 @@ unsafe impl<T: Default + Send + 'static> SystemParam for Local<'_, T> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -1262,11 +1262,11 @@ impl<T: fmt::Display> fmt::Display for Local<'_, T> {
     }
 }
 
-/// Obtains the [`SystemInfo`] for the running system.
-unsafe impl SystemParam for &'_ SystemInfo {
+/// Obtains the [`HandlerInfo`] for the running handler.
+unsafe impl HandlerParam for &'_ HandlerInfo {
     type State = ();
 
-    type Item<'a> = &'a SystemInfo;
+    type Item<'a> = &'a HandlerInfo;
 
     fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
         Ok(())
@@ -1274,7 +1274,7 @@ unsafe impl SystemParam for &'_ SystemInfo {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        info: &'a SystemInfo,
+        info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -1289,7 +1289,7 @@ unsafe impl SystemParam for &'_ SystemInfo {
 
 #[cfg(feature = "std")]
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
+unsafe impl<P: HandlerParam> HandlerParam for std::sync::Mutex<P> {
     type State = P::State;
 
     type Item<'a> = std::sync::Mutex<P::Item<'a>>;
@@ -1300,7 +1300,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        info: &'a SystemInfo,
+        info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -1319,7 +1319,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::Mutex<P> {
 
 #[cfg(feature = "std")]
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
+unsafe impl<P: HandlerParam> HandlerParam for std::sync::RwLock<P> {
     type State = P::State;
 
     type Item<'a> = std::sync::RwLock<P::Item<'a>>;
@@ -1330,7 +1330,7 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        info: &'a SystemInfo,
+        info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -1347,15 +1347,15 @@ unsafe impl<P: SystemParam> SystemParam for std::sync::RwLock<P> {
     }
 }
 
-/// An event sent immediately after a new system is added to the world.
-/// Contains the ID of the added system.
+/// An event sent immediately after a new handler is added to the world.
+/// Contains the ID of the added handler.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct AddSystem(pub SystemId);
+pub struct AddHandler(pub HandlerId);
 
-/// An event sent immediately before a system is removed from the world.
-/// Contains the ID of the system to be removed.
+/// An event sent immediately before a handler is removed from the world.
+/// Contains the ID of the handler to be removed.
 #[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct RemoveSystem(pub SystemId);
+pub struct RemoveHandler(pub HandlerId);
 
 #[cfg(test)]
 mod tests {
@@ -1365,42 +1365,42 @@ mod tests {
     use crate::event::Events;
 
     #[test]
-    fn derive_system_param() {
+    fn derive_handler_param() {
         #![allow(dead_code)]
 
-        #[derive(SystemParam)]
+        #[derive(HandlerParam)]
         struct UnitParam;
 
-        #[derive(SystemParam)]
+        #[derive(HandlerParam)]
         struct ParamWithLifetime<'a> {
-            foo: &'a Systems,
+            foo: &'a Handlers,
         }
 
-        #[derive(SystemParam)]
+        #[derive(HandlerParam)]
         struct ParamWithTwoLifetimes<'a, 'b> {
-            foo: &'a Systems,
+            foo: &'a Handlers,
             bar: &'b Events,
         }
 
-        #[derive(SystemParam)]
+        #[derive(HandlerParam)]
         struct ParamWithTypeParam<'a, T> {
-            foo: &'a Systems,
+            foo: &'a Handlers,
             bar: T,
         }
 
-        #[derive(SystemParam)]
-        struct TupleStructParam<'a>(&'a Systems, &'a Events);
+        #[derive(HandlerParam)]
+        struct TupleStructParam<'a>(&'a Handlers, &'a Events);
 
-        assert_system_param::<UnitParam>();
-        assert_system_param::<ParamWithLifetime>();
-        assert_system_param::<ParamWithTwoLifetimes>();
-        assert_system_param::<ParamWithTypeParam<()>>();
+        assert_handler_param::<UnitParam>();
+        assert_handler_param::<ParamWithLifetime>();
+        assert_handler_param::<ParamWithTwoLifetimes>();
+        assert_handler_param::<ParamWithTypeParam<()>>();
 
-        fn assert_system_param<P: SystemParam>() {}
+        fn assert_handler_param<P: HandlerParam>() {}
     }
 
     #[test]
-    fn system_run_order() {
+    fn handler_run_order() {
         let mut world = World::new();
 
         #[derive(Event)]
@@ -1420,12 +1420,12 @@ mod tests {
             assert_eq!(r.query.0, "b");
         }
 
-        let a_id = world.add_system(a);
-        world.add_system(b);
+        let a_id = world.add_handler(a);
+        world.add_handler(b);
 
-        world.remove_system(a_id);
+        world.remove_handler(a_id);
 
-        world.add_system(c);
+        world.add_handler(c);
 
         let e = world.spawn();
         world.insert(e, Tracker(String::new()));
@@ -1434,13 +1434,13 @@ mod tests {
     }
 
     #[test]
-    fn system_info_aliasing() {
+    fn handler_info_aliasing() {
         let mut world = World::new();
 
         #[derive(Event)]
         struct E;
 
-        world.add_system(|_: Receiver<E>, info: &SystemInfo| {
+        world.add_handler(|_: Receiver<E>, info: &HandlerInfo| {
             let _foo = info.name();
             let _bar = info.received_event();
             let _baz = info.referenced_components();

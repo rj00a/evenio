@@ -9,9 +9,9 @@ use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
 use crate::assert::{assume_debug_checked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
+use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
-use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
 /// Internal state for a [`Fetcher`].
@@ -40,7 +40,7 @@ impl<Q: Query> FetcherState<Q> {
                 return Err(InitError(
                     format!(
                         "query `{}` has incompatible component access with previous queries in \
-                         this system",
+                         this handler",
                         any::type_name::<Q>()
                     )
                     .into(),
@@ -199,7 +199,7 @@ impl<Q: Query> fmt::Debug for FetcherState<Q> {
     }
 }
 
-/// A [`SystemParam`] for accessing data from entities matching a given
+/// A [`HandlerParam`] for accessing data from entities matching a given
 /// [`Query`].
 ///
 /// For more information, see the relevant [tutorial
@@ -309,7 +309,7 @@ impl fmt::Display for GetError {
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for GetError {}
 
-unsafe impl<Q> SystemParam for Fetcher<'_, Q>
+unsafe impl<Q> HandlerParam for Fetcher<'_, Q>
 where
     Q: Query + 'static,
 {
@@ -323,7 +323,7 @@ where
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -340,7 +340,7 @@ where
     }
 }
 
-/// A [`SystemParam`] which fetches a single entity from the world.
+/// A [`HandlerParam`] which fetches a single entity from the world.
 ///
 /// If there isn't exactly one entity that matches the [`Query`], a runtime
 /// panic occurs. This is useful for representing global variables or singleton
@@ -357,7 +357,7 @@ where
 ///
 /// let mut world = World::new();
 ///
-/// world.add_system(
+/// world.add_handler(
 ///     |_: Receiver<E>, Single(MyComponent(data)): Single<&MyComponent>| {
 ///         println!("The data is: {data}");
 ///     },
@@ -371,7 +371,7 @@ where
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
 
-unsafe impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
+unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = Single<'a, Q>;
@@ -383,7 +383,7 @@ unsafe impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
     #[track_caller]
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        info: &'a SystemInfo,
+        info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -415,7 +415,7 @@ unsafe impl<Q: Query + 'static> SystemParam for Single<'_, Q> {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
 
-unsafe impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
+unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = TrySingle<'a, Q>;
@@ -426,7 +426,7 @@ unsafe impl<Q: Query + 'static> SystemParam for TrySingle<'_, Q> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -744,23 +744,23 @@ mod tests {
         world.insert(e2, C1(456));
         world.insert(e3, C2(789));
 
-        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+        world.add_handler(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             assert_eq!(f.get(e), Ok(&C1(123)));
         });
 
-        world.add_system(move |_: Receiver<E2>, f: Fetcher<&C2>| {
+        world.add_handler(move |_: Receiver<E2>, f: Fetcher<&C2>| {
             assert_eq!(f.get(e3), Ok(&C2(789)))
         });
 
         world.send(E1);
 
-        world.add_system(|_: Receiver<E2>, f: Fetcher<&C1>| {
+        world.add_handler(|_: Receiver<E2>, f: Fetcher<&C1>| {
             assert_eq!(f.get(EntityId::NULL), Err(GetError::NoSuchEntity));
         });
 
         world.send(E2);
 
-        world.add_system(move |_: Receiver<E3>, f: Fetcher<&C2>| {
+        world.add_handler(move |_: Receiver<E3>, f: Fetcher<&C2>| {
             assert_eq!(f.get(e), Err(GetError::QueryDoesNotMatch))
         });
 
@@ -789,7 +789,7 @@ mod tests {
             set.insert(i.pow(2));
         }
 
-        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+        world.add_handler(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             for c in f {
                 assert!(set.remove(&c.0));
             }
@@ -823,7 +823,7 @@ mod tests {
             }
         }
 
-        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+        world.add_handler(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             let sum = f.par_iter().map(|c| c.0).sum::<u32>();
             assert_eq!(sum, N * (N - 1) / 2);
         });
@@ -835,7 +835,7 @@ mod tests {
     fn iter_empty() {
         let mut world = World::new();
 
-        world.add_system(move |_: Receiver<E1>, f: Fetcher<&C1>| {
+        world.add_handler(move |_: Receiver<E1>, f: Fetcher<&C1>| {
             for _ in f {
                 core::hint::black_box(());
             }
@@ -863,7 +863,7 @@ mod tests {
             }
         }
 
-        world.add_system(
+        world.add_handler(
             move |_: Receiver<E1>, f1: Fetcher<&C1>, f2: Fetcher<&C2>, f3: Fetcher<&C3>| {
                 assert_eq!(f1.iter().len(), count as usize);
                 assert_eq!(f2.iter().len(), count as usize / 2);
@@ -883,7 +883,7 @@ mod tests {
             world.insert(e, C1(123));
         }
 
-        world.add_system(|_: Receiver<E1>, Single(&C1(n)): Single<&C1>| {
+        world.add_handler(|_: Receiver<E1>, Single(&C1(n)): Single<&C1>| {
             assert_eq!(n, 123);
         });
 
@@ -895,7 +895,7 @@ mod tests {
     fn single_param_panics_on_zero() {
         let mut world = World::new();
 
-        world.add_system(|_: Receiver<E1>, _: Single<&C1>| {});
+        world.add_handler(|_: Receiver<E1>, _: Single<&C1>| {});
 
         world.send(E1);
     }
@@ -912,7 +912,7 @@ mod tests {
             world.insert(e, C1(456));
         }
 
-        world.add_system(|_: Receiver<E1>, _: Single<&C1>| {});
+        world.add_handler(|_: Receiver<E1>, _: Single<&C1>| {});
 
         world.send(E1);
     }
@@ -931,7 +931,7 @@ mod tests {
             world.insert(e, C3(456));
         }
 
-        world.add_system(
+        world.add_handler(
             |_: Receiver<E1>, s1: TrySingle<&C1>, s2: TrySingle<&C2>, s3: TrySingle<&C3>| {
                 assert_eq!(s1.0, Err(SingleError::QueryDoesNotMatch));
                 assert_eq!(s2.0, Ok(&C2(123)));

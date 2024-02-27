@@ -23,13 +23,13 @@ pub mod entity;
 pub mod event;
 pub mod exclusive;
 pub mod fetch;
+pub mod handler;
 mod layout_util;
 mod map;
 pub mod query;
 mod slot_map;
 pub mod sparse;
 mod sparse_map;
-pub mod system;
 #[cfg(doc)]
 pub mod tutorial;
 pub mod world;
@@ -58,7 +58,7 @@ pub mod prelude {
         Despawn, Event, EventId, EventMut, Insert, Receiver, ReceiverMut, Remove, Sender, Spawn,
     };
     pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
+    pub use crate::handler::{Handler, HandlerId, HandlerParam, IntoHandler};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
-    pub use crate::system::{IntoSystem, SystemId, SystemParam};
     pub use crate::world::World;
 }

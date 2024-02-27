@@ -26,17 +26,17 @@ use crate::component::ComponentIdx;
 use crate::drop::DropFn;
 use crate::entity::{EntityId, EntityLocation};
 use crate::fetch::FetcherState;
+use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, TypeIdMap};
 use crate::prelude::Component;
 use crate::query::Query;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
-use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::{UnsafeWorldCell, World};
 
 /// Stores metadata for all [`Event`]s in the world.
 ///
-/// This can be obtained in a system by using the `&Events` system
+/// This can be obtained in a handler by using the `&Events` handler
 /// parameter.
 ///
 /// ```
@@ -46,7 +46,7 @@ use crate::world::{UnsafeWorldCell, World};
 /// # #[derive(Event)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_system(|_: Receiver<E>, events: &Events| {});
+/// world.add_handler(|_: Receiver<E>, events: &Events| {});
 #[derive(Debug)]
 pub struct Events {
     untargeted_events: SlotMap<EventInfo>,
@@ -209,7 +209,7 @@ impl Index<TypeId> for Events {
     }
 }
 
-unsafe impl SystemParam for &'_ Events {
+unsafe impl HandlerParam for &'_ Events {
     type State = ();
 
     type Item<'a> = &'a Events;
@@ -220,7 +220,7 @@ unsafe impl SystemParam for &'_ Events {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -232,9 +232,10 @@ unsafe impl SystemParam for &'_ Events {
 
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
-/// Messages which systems listen for.
+
+/// Messages which event handlers listen for.
 ///
-/// To send and receive events within systems, see [`Sender`] and
+/// To send and receive events within handlers, see [`Sender`] and
 /// [`Receiver`].
 ///
 /// # Targeted vs. Untargeted
@@ -243,7 +244,7 @@ unsafe impl SystemParam for &'_ Events {
 /// may not be. For instance, the standard [`Despawn`] event is targeted because
 /// it contains the [`EntityId`] of the entity it is intended to affect.
 ///
-/// Targeted events allow systems to efficiently filter out events whose target
+/// Targeted events allow handlers to efficiently filter out events whose target
 /// does not match a particular query.
 ///
 /// # Deriving
@@ -709,9 +710,9 @@ impl EventMeta {
     }
 }
 
-/// Type-erased pointer to an event. Passed to systems in [`System::run`].
+/// Type-erased pointer to an event. Passed to handlers in [`Handler::run`].
 ///
-/// [`System::run`]: crate::system::System::run
+/// [`Handler::run`]: crate::handler::Handler::run
 #[derive(Clone, Copy, Debug)]
 pub struct EventPtr<'a> {
     event: NonNull<u8>,
@@ -741,8 +742,8 @@ impl<'a> EventPtr<'a> {
         self.event
     }
 
-    /// Marks the event as owned. It is then the system's responsibility to drop
-    /// the event.
+    /// Marks the event as owned. It is then the handler's responsibility to
+    /// drop the event.
     ///
     /// # Safety
     ///
@@ -772,8 +773,8 @@ impl<'a, E> EventMut<'a, E> {
         }
     }
 
-    /// Takes ownership of the event. Any other systems listening for this event
-    /// will not run.
+    /// Takes ownership of the event. Any other handlers listening for this
+    /// event will not run.
     ///
     /// # Examples
     ///
@@ -785,14 +786,14 @@ impl<'a, E> EventMut<'a, E> {
     /// #
     /// # let mut world = World::new();
     /// #
-    /// world.add_system(|r: ReceiverMut<E>| {
+    /// world.add_handler(|r: ReceiverMut<E>| {
     ///     EventMut::take(r.event); // Took ownership of event.
     /// });
     ///
-    /// world.add_system(|_: Receiver<E>| panic!("boom"));
+    /// world.add_handler(|_: Receiver<E>| panic!("boom"));
     ///
     /// world.send(E);
-    /// // ^ No panic occurs because the first system took
+    /// // ^ No panic occurs because the first handler took
     /// // ownership of the event before the second could run.
     /// ```
     pub fn take(this: Self) -> E {
@@ -825,10 +826,10 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
     }
 }
 
-/// A [`SystemParam`] which listens for events of type `E`.
+/// A [`HandlerParam`] which listens for events of type `E`.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch01_systems_and_events#systems-and-events).
+/// chapter](crate::tutorial::ch01_handlers_and_events#handlers-and-events).
 ///
 /// # Examples
 ///
@@ -840,7 +841,7 @@ impl<E: fmt::Debug> fmt::Debug for EventMut<'_, E> {
 ///
 /// let mut world = World::new();
 ///
-/// world.add_system(|r: Receiver<E>| {
+/// world.add_handler(|r: Receiver<E>| {
 ///     println!("got event of type E!");
 /// });
 /// ```
@@ -853,7 +854,7 @@ pub struct Receiver<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery
     pub query: Q::Item<'a>,
 }
 
-unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
+unsafe impl<E: Event> HandlerParam for Receiver<'_, E> {
     type State = ();
 
     type Item<'a> = Receiver<'a, E>;
@@ -868,7 +869,7 @@ unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -876,7 +877,7 @@ unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
         Receiver {
             // SAFETY:
             // - We have permission to access the event immutably.
-            // - System was configured to listen for `E`.
+            // - Handler was configured to listen for `E`.
             event: event_ptr.as_ptr().cast().as_ref(),
             query: (),
         }
@@ -887,7 +888,7 @@ unsafe impl<E: Event> SystemParam for Receiver<'_, E> {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
+unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = Receiver<'a, E, Q>;
@@ -909,7 +910,7 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
             return Err(InitError(
                 format!(
                     "query `{}` has incompatible component access with previous queries in this \
-                     system",
+                     handler",
                     any::type_name::<Q>()
                 )
                 .into(),
@@ -921,7 +922,7 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for Receiver<'_, E, Q> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -971,7 +972,7 @@ pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQu
     pub query: Q::Item<'a>,
 }
 
-unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
+unsafe impl<E: Event> HandlerParam for ReceiverMut<'_, E> {
     type State = ();
 
     type Item<'a> = ReceiverMut<'a, E>;
@@ -987,7 +988,7 @@ unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -1003,7 +1004,7 @@ unsafe impl<E: Event> SystemParam for ReceiverMut<'_, E> {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
-unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> {
+unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q> {
     type State = FetcherState<Q>;
 
     type Item<'a> = ReceiverMut<'a, E, Q>;
@@ -1026,7 +1027,7 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> 
             return Err(InitError(
                 format!(
                     "query `{}` has incompatible component access with previous queries in this \
-                     system",
+                     handler",
                     any::type_name::<Q>()
                 )
                 .into(),
@@ -1038,7 +1039,7 @@ unsafe impl<E: Event, Q: Query + 'static> SystemParam for ReceiverMut<'_, E, Q> 
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
@@ -1092,9 +1093,9 @@ fn set_received_event<E: Event>(
 
             return Err(InitError(
                 format!(
-                    "tried to set `{}` as the received event for this system, but the system was \
-                     already configured to receive `{other}`. Systems must listen for exactly one \
-                     event type",
+                    "tried to set `{}` as the received event for this handler, but the handler \
+                     was already configured to receive `{other}`. Handlers must listen for \
+                     exactly one event type",
                     any::type_name::<E>(),
                 )
                 .into(),
@@ -1107,7 +1108,7 @@ fn set_received_event<E: Event>(
     if !config.received_event_access.set_if_compatible(access) {
         return Err(InitError(
             format!(
-                "tried to set `{access:?}` as the received event access for this system, but it \
+                "tried to set `{access:?}` as the received event access for this handler, but it \
                  was already set to `{:?}`",
                 config.received_event_access
             )
@@ -1149,10 +1150,10 @@ mod private {
     impl<Q: Query> Sealed for Q {}
 }
 
-/// A [`SystemParam`] for sending events from the set `T`.
+/// A [`HandlerParam`] for sending events from the set `T`.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch03_sending_events_from_systems).
+/// chapter](crate::tutorial::ch03_sending_events_from_handlers).
 #[derive(Clone, Copy)]
 pub struct Sender<'a, T: EventSet> {
     state: &'a T::EventIndices,
@@ -1161,7 +1162,7 @@ pub struct Sender<'a, T: EventSet> {
 
 impl<T: EventSet> Sender<'_, T> {
     /// Add an [`Event`] to the queue of events to send. The queue is flushed
-    /// once the system returns.
+    /// once the handler returns.
     ///
     /// # Panics
     ///
@@ -1208,7 +1209,7 @@ impl<T: EventSet> Sender<'_, T> {
     /// # struct E;
     /// # #[derive(Component)]
     /// # struct C;
-    /// # world.add_system(|_: Receiver<E>, mut sender: Sender<Insert<C>>| {
+    /// # world.add_handler(|_: Receiver<E>, mut sender: Sender<Insert<C>>| {
     /// #     let entity = EntityId::NULL;
     /// #     let component = C;
     /// sender.send(Insert::new(entity, component));
@@ -1233,7 +1234,7 @@ impl<T: EventSet> Sender<'_, T> {
     /// # let entity = world.spawn();
     /// # #[derive(Event)] struct E;
     /// # #[derive(Component)] struct C;
-    /// # world.add_system(move |_: Receiver<E>, mut sender: Sender<Remove<C>>| {
+    /// # world.add_handler(move |_: Receiver<E>, mut sender: Sender<Remove<C>>| {
     /// sender.send(Remove::<C>::new(entity));
     /// # });
     /// ```
@@ -1255,7 +1256,7 @@ impl<T: EventSet> Sender<'_, T> {
     /// # let mut world = World::new();
     /// # let entity = world.spawn();
     /// # #[derive(Event)] struct E;
-    /// # world.add_system(move |_: Receiver<E>, mut sender: Sender<Despawn>| {
+    /// # world.add_handler(move |_: Receiver<E>, mut sender: Sender<Despawn>| {
     /// sender.send(Despawn(entity));
     /// # });
     /// ```
@@ -1269,7 +1270,7 @@ impl<T: EventSet> Sender<'_, T> {
     }
 }
 
-unsafe impl<T: EventSet> SystemParam for Sender<'_, T> {
+unsafe impl<T: EventSet> HandlerParam for Sender<'_, T> {
     type State = T::EventIndices;
 
     type Item<'a> = Sender<'a, T>;
@@ -1281,8 +1282,8 @@ unsafe impl<T: EventSet> SystemParam for Sender<'_, T> {
         {
             return Err(InitError(
                 format!(
-                    "`{}` has conflicting access with a previous system parameter. Only one \
-                     system parameter can send events",
+                    "`{}` has conflicting access with a previous handler parameter. Only one \
+                     handler parameter can send events",
                     any::type_name::<Self>()
                 )
                 .into(),
@@ -1303,7 +1304,7 @@ unsafe impl<T: EventSet> SystemParam for Sender<'_, T> {
 
     unsafe fn get<'a>(
         state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -1416,7 +1417,7 @@ all_tuples!(impl_event_set_tuple, 0, 15, E, e);
 /// An [`Event`] which adds component `C` on an entity when sent. If the entity
 /// already has the component, then the component is replaced.
 ///
-/// Any system which listens for `Insert<C>` will run before the component is
+/// Any handler which listens for `Insert<C>` will run before the component is
 /// inserted. `Insert<C>` has no effect if the target entity does not exist or
 /// the event is consumed before it finishes broadcasting.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -1455,7 +1456,7 @@ impl<C: Component> Event for Insert<C> {
 /// An [`Event`] which removes component `C` from an entity when sent. The
 /// component is dropped and cannot be recovered.
 ///
-/// Any system which listens for `Remove<C>` will run before the component is
+/// Any handler which listens for `Remove<C>` will run before the component is
 /// removed. `Remove<C>` has no effect if the target entity does not exist or
 /// the event is consumed before it finishes broadcasting.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -1501,7 +1502,7 @@ pub struct Spawn(#[event(target)] pub EntityId);
 /// An [`Event`] which removes an entity from the [`World`] when sent. All
 /// components of the target entity are dropped.
 ///
-/// Any system which listens for `Despawn` will run before the entity is
+/// Any handler which listens for `Despawn` will run before the entity is
 /// removed. `Despawn` has no effect if the target entity does not exist or the
 /// event is consumed before it finishes broadcasting.
 ///
@@ -1516,7 +1517,7 @@ pub struct Spawn(#[event(target)] pub EntityId);
 ///
 /// assert!(world.entities().contains(id));
 ///
-/// world.add_system(|r: Receiver<Despawn, ()>| {
+/// world.add_handler(|r: Receiver<Despawn, ()>| {
 ///     println!("{:?} is about to despawn!", r.event.0);
 /// });
 ///
@@ -1573,11 +1574,11 @@ mod tests {
         #[derive(Component)]
         struct C(String);
 
-        world.add_system(|r: Receiver<E, ()>, mut s: Sender<Remove<C>>| {
+        world.add_handler(|r: Receiver<E, ()>, mut s: Sender<Remove<C>>| {
             s.remove::<C>(r.event.0);
         });
 
-        world.add_system(|r: Receiver<E, &mut C>| {
+        world.add_handler(|r: Receiver<E, &mut C>| {
             r.query.0.push_str("123");
         });
 
@@ -1619,9 +1620,9 @@ mod tests {
         let res = world.spawn();
         world.insert(res, Result(vec![]));
 
-        world.add_system(get_a_send_b);
-        world.add_system(get_b_send_c);
-        world.add_system(get_c);
+        world.add_handler(get_a_send_b);
+        world.add_handler(get_b_send_c);
+        world.add_handler(get_c);
 
         world.send(A);
 
@@ -1641,7 +1642,7 @@ mod tests {
         #[derive(Component)]
         struct Result(Vec<i32>);
 
-        world.add_system(|r: Receiver<E>, res: Single<&mut Result>| {
+        world.add_handler(|r: Receiver<E>, res: Single<&mut Result>| {
             res.0 .0.push(r.event.0);
         });
 
@@ -1668,11 +1669,11 @@ mod tests {
         #[derive(Component)]
         struct C;
 
-        world.add_system(|mut r: ReceiverMut<E, &C>| {
+        world.add_handler(|mut r: ReceiverMut<E, &C>| {
             r.event.0 = EntityId::NULL;
         });
 
-        world.add_system(|_: Receiver<E, &C>| {});
+        world.add_handler(|_: Receiver<E, &C>| {});
 
         let e = world.spawn();
         world.insert(e, C);

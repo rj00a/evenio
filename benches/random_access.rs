@@ -56,7 +56,7 @@ fn random_access_evenio(bencher: Bencher) {
     #[derive(Event)]
     struct E;
 
-    world.add_system(move |_: Receiver<E>, f: Fetcher<ComponentQuery>| {
+    world.add_handler(move |_: Receiver<E>, f: Fetcher<ComponentQuery>| {
         for &e in &entities {
             let _ = black_box(f.get(e));
         }

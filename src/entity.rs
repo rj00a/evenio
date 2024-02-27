@@ -4,14 +4,14 @@ use core::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
 use crate::event::EventPtr;
+use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
 use crate::prelude::World;
 use crate::slot_map::{Key, NextKeyIter, SlotMap};
-use crate::system::{Config, InitError, SystemInfo, SystemParam};
 use crate::world::UnsafeWorldCell;
 
 /// Contains metadata for all the entities in a world.
 ///
-/// This can be obtained in a system by using the `&Entities` system
+/// This can be obtained in a handler by using the `&Entities` handler
 /// parameter.
 ///
 /// ```
@@ -21,7 +21,7 @@ use crate::world::UnsafeWorldCell;
 /// # #[derive(Event)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_system(|_: Receiver<E>, entities: &Entities| {});
+/// world.add_handler(|_: Receiver<E>, entities: &Entities| {});
 /// ```
 #[derive(Debug)]
 pub struct Entities {
@@ -105,7 +105,7 @@ impl Index<EntityIdx> for Entities {
     }
 }
 
-unsafe impl SystemParam for &'_ Entities {
+unsafe impl HandlerParam for &'_ Entities {
     type State = ();
 
     type Item<'a> = &'a Entities;
@@ -116,7 +116,7 @@ unsafe impl SystemParam for &'_ Entities {
 
     unsafe fn get<'a>(
         _state: &'a mut Self::State,
-        _info: &'a SystemInfo,
+        _info: &'a HandlerInfo,
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
@@ -272,14 +272,14 @@ mod tests {
         let entities_1 = entities.clone();
         let entities_2 = entities.clone();
 
-        world.add_system(move |_: Receiver<E1>, mut s: Sender<(Spawn, E2)>| {
+        world.add_handler(move |_: Receiver<E1>, mut s: Sender<(Spawn, E2)>| {
             let e1 = s.spawn();
             s.send(E2);
             let e2 = s.spawn();
             *entities_1.lock().unwrap() = (e1, e2);
         });
 
-        world.add_system(move |_: Receiver<E2>, entities: &Entities| {
+        world.add_handler(move |_: Receiver<E2>, entities: &Entities| {
             let (e1, e2) = *entities_2.lock().unwrap();
 
             assert!(entities.contains(e1));
@@ -296,7 +296,7 @@ mod tests {
         #[derive(Event)]
         struct E;
 
-        world.add_system(|r: Receiver<Spawn, ()>, entities: &Entities| {
+        world.add_handler(|r: Receiver<Spawn, ()>, entities: &Entities| {
             assert!(entities.contains(r.event.0));
         });
     }
