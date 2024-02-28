@@ -227,12 +227,9 @@ impl World {
     /// let e = world.spawn();
     /// world.insert(e, MyComponent(123));
     ///
-    /// assert_eq!(
-    ///     world.get_component::<MyComponent>(e),
-    ///     Some(&MyComponent(123))
-    /// );
+    /// assert_eq!(world.get::<MyComponent>(e), Some(&MyComponent(123)));
     /// ```
-    pub fn get_component<C: Component>(&self, entity: EntityId) -> Option<&C> {
+    pub fn get<C: Component>(&self, entity: EntityId) -> Option<&C> {
         let loc = self.entities.get(entity)?;
 
         let component_idx = self
@@ -271,12 +268,9 @@ impl World {
     /// let e = world.spawn();
     /// world.insert(e, MyComponent(123));
     ///
-    /// assert_eq!(
-    ///     world.get_component_mut::<MyComponent>(e),
-    ///     Some(&mut MyComponent(123))
-    /// );
+    /// assert_eq!(world.get_mut::<MyComponent>(e), Some(&mut MyComponent(123)));
     /// ```
-    pub fn get_component_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
+    pub fn get_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
         let () = AssertMutable::<C>::COMPONENT;
 
         let loc = self.entities.get(entity)?;

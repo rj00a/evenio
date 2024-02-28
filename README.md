@@ -64,7 +64,7 @@ pub fn main() {
     }
 
     // Get the `Position` component from the entity we added earlier.
-    let pos = world.get_component::<Position>(e).unwrap();
+    let pos = world.get::<Position>(e).unwrap();
 
     println!("Final position of the entity: ({}, {})", pos.x, pos.y);
 }

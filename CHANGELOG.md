@@ -7,6 +7,7 @@
 - Fixed bug related to handler ordering. Handlers with the same priority always run in the order they were added to the world.
 - Changed alignment of identifier types to match `u64`.
 - Renamed `Priority::{Before, Normal, After}` to `Priority::{High, Medium, Low}`.
+- Renamed `World::{get_component, get_component_mut}` to `World::{get, get_mut}`.
 
 ## 0.3.0 - 2024-02-13
 

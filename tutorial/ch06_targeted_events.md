@@ -56,7 +56,7 @@ world.send(MyTargetedEvent {
     data: 10,
 });
 
-assert_eq!(world.get_component::<Health>(e).unwrap().0, 30);
+assert_eq!(world.get::<Health>(e).unwrap().0, 30);
 ```
 
 [`Query`]: crate::query::Query

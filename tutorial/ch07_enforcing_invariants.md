@@ -34,7 +34,7 @@ let e = world.spawn();
 world.insert(e, Uuid(12345));
 
 // Does not compile.
-world.get_component_mut::<Uuid>(e);
+world.get_mut::<Uuid>(e);
 ```
 
 The UUID could still be changed using the `Insert` event, so let's raise an error if the UUID would be overwritten.

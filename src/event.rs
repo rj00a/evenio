@@ -1627,7 +1627,7 @@ mod tests {
         world.send(A);
 
         assert_eq!(
-            world.get_component::<Result>(res).unwrap().0.as_slice(),
+            world.get::<Result>(res).unwrap().0.as_slice(),
             &[0, 1, 2, 3, 4, 5]
         );
     }
@@ -1655,7 +1655,7 @@ mod tests {
             s.send(E(3));
         });
 
-        let Result(values) = world.get_component_mut::<Result>(e).unwrap();
+        let Result(values) = world.get_mut::<Result>(e).unwrap();
         assert_eq!(values, &[1, 2, 3]);
     }
 

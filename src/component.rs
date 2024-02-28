@@ -446,7 +446,7 @@ mod tests {
             b.push("hello".into());
         });
         world.send(E);
-        assert_eq!(world.get_component::<B>(e2), Some(&B(vec!["hello".into()])));
+        assert_eq!(world.get::<B>(e2), Some(&B(vec!["hello".into()])));
 
         assert!(world.remove_component(c2).is_some());
         assert!(!world.handlers().contains(s2));
