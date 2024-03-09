@@ -1365,9 +1365,8 @@ mod tests {
     use crate::event::Events;
 
     #[test]
+    #[allow(dead_code)]
     fn derive_handler_param() {
-        #![allow(dead_code)]
-
         #[derive(HandlerParam)]
         struct UnitParam;
 
