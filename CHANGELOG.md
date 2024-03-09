@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 0.4.0 - 2024-03-09
 
 - Renamed "system" to "handler" to avoid confusion with other ECS libraries.
 - Removed `Column::component_index`. To obtain the component index of a column, use `Archetype::component_indices`.
@@ -17,11 +17,11 @@
 - Changed `EventPtr` interface and relaxed `Send` and `Sync` bounds for `EventMut`.
 - Fixed buggy behavior when mutating the target of a broadcasting event.
 
-## 0.2.2 - 2024-02-8
+## 0.2.2 - 2024-02-08
 
 - Update documentation
 
-## 0.2.1 - 2024-02-2
+## 0.2.1 - 2024-02-02
 
 - Added Rayon parallel iterator for `Fetcher`, available behind the `rayon` feature flag.
 - Fixed archetype refresh bugs and changed semantics of `refresh_archetype`.
