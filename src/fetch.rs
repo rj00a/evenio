@@ -127,26 +127,29 @@ impl<Q: Query> FetcherState<Q> {
 
         assume_debug_checked(indices.len() == states.len());
 
-        let first_arch_len = indices.first().map_or(0, |&idx| {
-            unsafe { archetypes.get(idx).unwrap_debug_checked() }.entity_count()
-        });
-
-        let state = NonNull::new(states.as_ptr().cast_mut()).unwrap_or(NonNull::dangling());
-        let state_last = if states.is_empty() {
-            NonNull::dangling()
+        if states.is_empty() {
+            Iter {
+                state: NonNull::dangling(),
+                state_last: NonNull::dangling(),
+                index: NonNull::dangling(),
+                row: ArchetypeRow(0),
+                len: 0,
+                archetypes,
+            }
         } else {
-            NonNull::new(state.as_ptr().add(states.len() - 1)).unwrap_debug_checked()
-        };
-
-        let index = NonNull::new(indices.as_ptr().cast_mut()).unwrap_or(NonNull::dangling());
-
-        Iter {
-            state,
-            state_last,
-            index,
-            row: ArchetypeRow(0),
-            len: first_arch_len,
-            archetypes,
+            let start = states.as_ptr().cast_mut();
+            let end = start.add(states.len() - 1);
+            Iter {
+                state: NonNull::new(start).unwrap_debug_checked(),
+                state_last: NonNull::new(end).unwrap_debug_checked(),
+                index: NonNull::new(indices.as_ptr().cast_mut()).unwrap_debug_checked(),
+                row: ArchetypeRow(0),
+                len: archetypes
+                    .get(indices[0])
+                    .unwrap_debug_checked()
+                    .entity_count(),
+                archetypes,
+            }
         }
     }
 
@@ -836,11 +839,27 @@ mod tests {
         let mut world = World::new();
 
         world.add_handler(move |_: Receiver<E1>, f: Fetcher<&C1>| {
-            for _ in f {
-                core::hint::black_box(());
+            for c in f {
+                println!("{c:?}");
             }
         });
 
+        world.send(E1);
+    }
+
+    #[test]
+    fn iter_previously_nonempty() {
+        let mut world = World::new();
+
+        world.add_handler(move |_: Receiver<E1>, f: Fetcher<EntityId>| {
+            for id in f {
+                println!("{id:?}");
+            }
+        });
+
+        let e = world.spawn();
+        world.send(E1);
+        world.despawn(e);
         world.send(E1);
     }
 
