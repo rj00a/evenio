@@ -66,9 +66,8 @@ fn random_access_evenio(bencher: Bencher) {
 }
 
 #[divan::bench]
+#[allow(non_snake_case)] // Can't add attributes to the generated `ComponentQueryItem`.
 fn random_access_bevy(bencher: Bencher) {
-    #![allow(non_snake_case)] // Can't add attributes to the generated `ComponentQueryItem`.
-
     use bevy_ecs::prelude::*;
     use bevy_ecs::query::QueryData;
     use bevy_ecs::schedule::ScheduleLabel;

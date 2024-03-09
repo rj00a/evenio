@@ -827,9 +827,8 @@ mod tests {
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
 
     #[test]
+    #[allow(dead_code)]
     fn derived_query() {
-        #![allow(dead_code)]
-
         #[derive(Query)]
         struct UnitQuery;
 
