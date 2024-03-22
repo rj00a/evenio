@@ -38,12 +38,6 @@ pub mod world;
 #[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 pub use rayon;
 
-/// For macros only.
-#[doc(hidden)]
-pub mod __private {
-    pub use memoffset::offset_of;
-}
-
 /// Re-exports of the most commonly used items in the library.
 ///
 /// This is intended to be glob-imported like so:
