@@ -6,6 +6,7 @@ use alloc::{format, vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
+use core::mem::offset_of;
 use core::num::NonZeroU32;
 use core::ops::{Deref, DerefMut, Index};
 use core::panic::{RefUnwindSafe, UnwindSafe};
@@ -15,7 +16,6 @@ use core::{any, fmt};
 use bumpalo::Bump;
 use evenio_macros::all_tuples;
 pub use evenio_macros::Event;
-use memoffset::offset_of;
 
 use crate::access::Access;
 use crate::archetype::Archetype;
