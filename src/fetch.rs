@@ -960,4 +960,10 @@ mod tests {
 
         world.send(E1);
     }
+
+    fn _assert_auto_trait_impls<Q>()
+    where
+        for<'a> Fetcher<'a, Q>: Send + Sync,
+    {
+    }
 }
