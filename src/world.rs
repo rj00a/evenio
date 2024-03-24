@@ -1104,6 +1104,11 @@ impl<'a> UnsafeWorldCell<'a> {
     }
 }
 
+// SAFETY: `&World` and `&mut World` are `Send`.
+unsafe impl Send for UnsafeWorldCell<'_> {}
+// SAFETY: `&World` and `&mut World` are `Sync`.
+unsafe impl Sync for UnsafeWorldCell<'_> {}
+
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
@@ -1222,6 +1227,8 @@ mod tests {
     fn _assert_auto_trait_impls()
     where
         World: Send + Sync + UnwindSafe + RefUnwindSafe,
+        for<'a> &'a World: Send + Sync,
+        for<'a> &'a mut World: Send + Sync,
     {
     }
 }

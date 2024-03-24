@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.4.1 - 2024-03-24
+
+- Impl `Send` and `Sync` for `UnsafeWorldCell` and `Fetcher`.
+- Removed dependency on `memoffset`.
+
 ## 0.4.0 - 2024-03-09
 
 - Renamed "system" to "handler" to avoid confusion with other ECS libraries.
