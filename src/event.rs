@@ -960,7 +960,8 @@ where
     }
 }
 
-/// Like [`Receiver`], but provides mutable access to the received event.
+/// Like [`Receiver`], but provides mutable access to the received event. Prefer
+/// `Receiver` if mutable access is not needed.
 ///
 /// For more information, see the relevant [tutorial
 /// chapter](crate::tutorial::ch02_event_mutation).
@@ -1554,6 +1555,8 @@ pub struct RemoveEvent(pub EventId);
 
 #[cfg(test)]
 mod tests {
+    use rand::prelude::*;
+
     use crate::prelude::*;
 
     #[test]
@@ -1679,5 +1682,38 @@ mod tests {
         world.insert(e, C);
 
         world.send(E(e));
+    }
+
+    #[test]
+    fn despawn_many() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E;
+
+        #[derive(Component)]
+        struct C(#[allow(unused)] i32);
+
+        let mut entities = vec![];
+
+        let n = 50;
+
+        for i in 0..n {
+            let e = world.spawn();
+            world.insert(e, C(i));
+            entities.push(e);
+        }
+
+        entities.shuffle(&mut rand::thread_rng());
+
+        world.add_handler(move |_: Receiver<E>, mut s: Sender<Despawn>| {
+            for &e in &entities {
+                s.send(Despawn(e));
+            }
+        });
+
+        world.send(E);
+
+        assert_eq!(world.entities().len(), 0);
     }
 }

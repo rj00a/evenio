@@ -961,9 +961,11 @@ mod tests {
         world.send(E1);
     }
 
-    fn _assert_auto_trait_impls<Q>()
+    fn _assert_auto_trait_impls()
     where
-        for<'a> Fetcher<'a, Q>: Send + Sync,
+        for<'a> Fetcher<'a, ()>: Send + Sync,
+        for<'a, 'b> Fetcher<'a, &'b C1>: Send + Sync,
+        for<'a, 'b, 'c> Fetcher<'a, (&'b C1, &'c mut C2)>: Send + Sync,
     {
     }
 }

@@ -509,6 +509,11 @@ impl Archetypes {
 
         arch.entity_ids.swap_remove(loc.row.0 as usize);
 
+        if (loc.row.0 as usize) < arch.entity_ids.len() {
+            let displaced = *unsafe { arch.entity_ids.get_debug_checked(loc.row.0 as usize) };
+            unsafe { entities.get_mut(displaced).unwrap_debug_checked() }.row = loc.row;
+        }
+
         if arch.entity_count() == 0 {
             for mut ptr in arch.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().remove_archetype(arch) };
