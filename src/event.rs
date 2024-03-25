@@ -904,9 +904,7 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
 
         config.targeted_event_expr = expr.expr.clone();
 
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
+        if config.try_add_component_access(expr).is_err() {
             return Err(InitError(
                 format!(
                     "query `{}` has incompatible component access with previous queries in this \
@@ -1022,9 +1020,7 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q>
 
         config.targeted_event_expr = expr.expr.clone();
 
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
+        if config.try_add_component_access(expr).is_err() {
             return Err(InitError(
                 format!(
                     "query `{}` has incompatible component access with previous queries in this \
