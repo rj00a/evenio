@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.4.2 - 2024-03-24
+
+- Fixed bug in entity despawning.
+
 ## 0.4.1 - 2024-03-24
 
 - Impl `Send` and `Sync` for `UnsafeWorldCell` and `Fetcher`.
