@@ -29,6 +29,7 @@ ahash = "0.8.7"
 bevy_ecs = { version = "0.13.0", features = ["multi-threaded"] }
 bevy_tasks = "0.13.0"
 divan = "0.1.11"
+rand = "0.8.5"
 
 [package.metadata.docs.rs]
 all-features = true
