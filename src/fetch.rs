@@ -34,18 +34,15 @@ impl<Q: Query> FetcherState<Q> {
 
         let res = FetcherState::new(state);
 
-        match expr.or(&config.component_access) {
-            Ok(new_component_access) => config.component_access = new_component_access,
-            Err(_) => {
-                return Err(InitError(
-                    format!(
-                        "query `{}` has incompatible component access with previous queries in \
-                         this handler",
-                        any::type_name::<Q>()
-                    )
-                    .into(),
-                ))
-            }
+        if config.try_add_component_access(expr).is_err() {
+            return Err(InitError(
+                format!(
+                    "query `{}` has incompatible component access with previous queries in this \
+                     handler",
+                    any::type_name::<Q>()
+                )
+                .into(),
+            ));
         }
 
         Ok(res)

@@ -317,7 +317,7 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
-    pub(crate) component_access: ComponentAccessExpr,
+    pub(crate) component_access: BoolExpr<ComponentIdx>,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
     pub(crate) priority: Priority,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
@@ -392,7 +392,7 @@ impl HandlerInfo {
     }
 
     /// Gets the expression describing this handler's access
-    pub fn component_access(&self) -> &ComponentAccessExpr {
+    pub fn component_access(&self) -> &BoolExpr<ComponentIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
     }
 
@@ -858,7 +858,11 @@ pub struct Config {
     /// Access to the queue of events.
     pub event_queue_access: Access,
     /// Expression describing the components accessed by the handler.
-    pub component_access: ComponentAccessExpr,
+    pub component_access: BoolExpr<ComponentIdx>,
+    /// Each component access expression, one for each accessor (Fetcher,
+    /// Receiver, etc).
+    pub each_component_access: Vec<ComponentAccessExpr>,
+
     /// The set of components referenced by this handler. Used for handler
     /// cleanup when a component is removed.
     ///
@@ -880,9 +884,23 @@ impl Config {
             sent_untargeted_events: Default::default(),
             sent_targeted_events: Default::default(),
             event_queue_access: Default::default(),
-            component_access: ComponentAccessExpr::new(false),
+            component_access: BoolExpr::new(false),
+            each_component_access: Vec::default(),
             referenced_components: Default::default(),
         }
+    }
+
+    pub(crate) fn try_add_component_access(
+        &mut self,
+        expr: ComponentAccessExpr,
+    ) -> Result<(), ComponentAccessExpr> {
+        for access in &self.each_component_access {
+            expr.clone().or(access)?;
+        }
+
+        self.each_component_access.push(expr.clone());
+        self.component_access = expr.expr.or(&self.component_access);
+        Ok(())
     }
 }
 
