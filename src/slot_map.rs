@@ -83,8 +83,8 @@ impl<T> SlotMap<T> {
 
         let res = unsafe { ManuallyDrop::take(&mut slot.union.value) };
 
-        // If the generation overflowed then we consider the slot retired and won't try
-        // to use it again.
+        // If the generation didn't overflow then add the slot to the free list.
+        // Otherwise, the slot is considered retired and won't be used again.
         if slot.generation != 0 {
             slot.union.next_free = self.next_free;
             self.next_free = key.index();
@@ -213,6 +213,7 @@ impl<T> IndexMut<Key> for SlotMap<T> {
 
 struct Slot<T> {
     union: SlotUnion<T>,
+    // Odd when occupied, even when vacant.
     generation: u32,
 }
 

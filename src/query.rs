@@ -94,7 +94,7 @@ pub unsafe trait Query {
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
 }
 
-/// Marker trait for queries which dot not access data mutably.
+/// Marker trait for queries which do not access data mutably.
 ///
 /// For instance, the query `(&A, &B)` is read-only, but `(&A, &mut B)` is not.
 ///

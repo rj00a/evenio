@@ -172,6 +172,8 @@ impl Archetypes {
                 f(entity_id);
             }
 
+            // Remove all references to the removed archetype.
+
             for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
                 let other_arch =
                     unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
