@@ -118,7 +118,7 @@ unsafe impl<C: Component> Query for &'_ C {
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(idx, Access::Read);
+        let expr = ComponentAccessExpr::var(idx, Access::Read);
         config.referenced_components.insert(idx);
 
         Ok((expr, idx))
@@ -153,7 +153,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
         let () = AssertMutable::<C>::COMPONENT;
 
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(idx, Access::ReadWrite);
+        let expr = ComponentAccessExpr::var(idx, Access::ReadWrite);
         config.referenced_components.insert(idx);
 
         Ok((expr, idx))
@@ -194,7 +194,7 @@ macro_rules! impl_query_tuple {
                 $(
                     let (expr, $q) = $Q::init(world, config)?;
 
-                    let Ok(expr) = res.and(&expr) else {
+                    let Some(expr) = res.and(&expr) else {
                         return Err(InitError(format!(
                             "conflicting access in tuple `{}`: tuple element `{}` conflicts with previous elements",
                             any::type_name::<Self>(),
@@ -336,7 +336,7 @@ where
         let (left_expr, left_state) = L::init(world, config)?;
         let (right_expr, right_state) = R::init(world, config)?;
 
-        let Ok(expr) = left_expr.or(&right_expr) else {
+        let Some(expr) = left_expr.or(&right_expr) else {
             return Err(InitError(
                 format!(
                     "conflicting query in `{}` (both operands of an OR query may be active at the \
@@ -513,7 +513,8 @@ unsafe impl<Q: Query> Query for Not<Q> {
         world: &mut World,
         config: &mut Config,
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (expr, state) = Q::init(world, config)?;
+        let (mut expr, state) = Q::init(world, config)?;
+        expr.clear_access();
 
         Ok((expr.not(), state))
     }
@@ -585,7 +586,7 @@ unsafe impl<Q: Query> Query for With<Q> {
     ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
         let (mut expr, state) = Q::init(world, config)?;
 
-        expr.access.clear();
+        expr.clear_access();
 
         Ok((expr, state))
     }
@@ -825,6 +826,16 @@ mod tests {
     t!(t14, true, (Option<&A>, &A, &A));
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
+    t!(
+        t17,
+        true,
+        Or<Or<(&mut A, With<&B>), (&A, Not<&B>)>, (&A, Not<&B>)>
+    );
+    t!(
+        t18,
+        true,
+        (((&mut A, With<&B>), (&A, Not<&B>)), (&A, Not<&B>))
+    );
 
     #[test]
     #[allow(dead_code)]

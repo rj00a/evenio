@@ -2,8 +2,12 @@
 
 use core::cmp::Ordering;
 use core::fmt;
+use std::collections::HashSet;
 
-use crate::component::ComponentIdx;
+// use crate::component::ComponentIdx;
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ComponentIdx(pub u32);
 
 /// Describes how a particular piece of data is accessed. Used to prevent
 /// aliased mutabliity.
@@ -224,6 +228,23 @@ impl ComponentAccessExpr {
             acc ^ term.iter().all(|var| get_var(var.idx))
         })
     }
+
+    pub fn collect_conflicts(&self) -> HashSet<ComponentIdx> {
+        self.terms
+            .iter()
+            .flat_map(|term| {
+                term.iter()
+                    .filter(|v| v.access == VarAccess::Conflict)
+                    .map(|v| v.idx)
+            })
+            .collect()
+    }
+
+    pub fn has_conflicts(&self) -> bool {
+        self.terms
+            .iter()
+            .any(|term| term.iter().any(|v| v.access == VarAccess::Conflict))
+    }
 }
 
 impl fmt::Debug for ComponentAccessExpr {
@@ -275,8 +296,9 @@ impl fmt::Debug for ComponentAccessExpr {
 
 #[derive(Clone, Debug)]
 struct Variable {
-    idx: ComponentIdx,
+    idx: ComponentIdx, 
     access: VarAccess,
+    archetype_ignore: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -653,13 +675,12 @@ mod tests {
     fn and() {
         let left = Cae::new(true)
             .xor(&Cae::var(X, None))
-            .and(&Cae::new(true).xor(&Cae::var(X, None).xor(&Cae::var(Y, None))))
-            .unwrap();
+            .and(&Cae::new(true).xor(&Cae::var(X, None).xor(&Cae::var(Y, None))));
 
         let right = Cae::new(true)
             .xor(&Cae::var(X, None))
             .xor(&Cae::var(Y, None))
-            .xor(&Cae::var(X, None).and(&Cae::var(Y, None)).unwrap());
+            .xor(&Cae::var(X, None).and(&Cae::var(Y, None)));
 
         assert_eq!(left.terms, right.terms, "{left:?} ... {right:?}");
     }
@@ -669,11 +690,10 @@ mod tests {
     fn or() {
         let left = Cae::new(true)
             .xor(&Cae::var(X, None))
-            .or(&Cae::new(true).xor(&Cae::var(X, None).xor(&Cae::var(Y, None))))
-            .unwrap();
+            .or(&Cae::new(true).xor(&Cae::var(X, None).xor(&Cae::var(Y, None))));
 
-        let right = &Cae::new(true)
-            .xor(&Cae::var(X, None).xor(&Cae::var(X, None).and(&Cae::var(Y, None)).unwrap()));
+        let right =
+            &Cae::new(true).xor(&Cae::var(X, None).xor(&Cae::var(X, None).and(&Cae::var(Y, None))));
 
         assert_eq!(left.terms, right.terms, "{left:?} ... {right:?}");
     }
@@ -683,15 +703,11 @@ mod tests {
     fn and_vars() {
         let left = Cae::var(X, None)
             .and(&Cae::var(Z, None))
-            .unwrap()
-            .and(&Cae::var(Y, None).and(&Cae::var(Z, None)).unwrap())
-            .unwrap();
+            .and(&Cae::var(Y, None).and(&Cae::var(Z, None)));
 
         let right = Cae::var(X, None)
             .and(&Cae::var(Y, None))
-            .unwrap()
-            .and(&Cae::var(Z, None))
-            .unwrap();
+            .and(&Cae::var(Z, None));
 
         assert_eq!(left.terms, right.terms, "{left:?} ... {right:?}");
     }
@@ -709,37 +725,37 @@ mod tests {
     }
 
     #[test]
-    fn aliasing() {
-        assert!(Cae::var(X, Read).and(&Cae::var(X, ReadWrite)).is_none());
-        assert!(Cae::var(X, Read).and(&Cae::var(X, Read)).is_some());
-        assert!(Cae::var(X, None).and(&Cae::var(X, ReadWrite)).is_some());
+    fn conflicts() {
+        assert!(Cae::var(X, Read)
+            .and(&Cae::var(X, ReadWrite))
+            .has_conflicts());
+
+        assert!(!Cae::var(X, Read).and(&Cae::var(X, Read)).has_conflicts());
+
+        assert!(!Cae::var(X, None)
+            .and(&Cae::var(X, ReadWrite))
+            .has_conflicts());
     }
 
     #[test]
     fn or_true() {
-        assert!(Cae::var(X, ReadWrite)
-            .or(&Cae::new(true))
-            .unwrap()
-            .is_true());
+        assert!(Cae::var(X, ReadWrite).or(&Cae::new(true)).is_true());
     }
 
     #[test]
     fn blah() {
-        // (((&mut A, With<&B>), (&A, Not<&B>)), (&A, Not<&B>))
-
-        // let expr = Cae::var(X, None).and(&Cae::var(Y,
-        // None)).unwrap().and(&Cae::var(Y, None).not()).unwrap();
-
         // (&mut X and Y) or (&X and not Y)
 
         let expr = Cae::var(X, ReadWrite)
-            .and(&Cae::var(Y, None))
-            .unwrap()
-            .or(&Cae::var(X, Read).and(&Cae::var(Y, None).not()).unwrap())
-            .unwrap();
+            .and(&Cae::var(Y, ReadWrite))
+            .or(&Cae::var(X, Read).and(&Cae::var(Y, None).not()));
 
-        panic!("{expr:?}");
+        assert_eq!(expr.collect_conflicts(), HashSet::new());
+
+        // panic!("{expr:?}");
     }
+
+    // B xor Not<B> // 
 
     // XY or (X and not Y)
     // - Rewrite NOT
@@ -788,3 +804,5 @@ mod tests {
     // - AND
     // XY xor (X xor XY)
 }
+
+fn main() {}

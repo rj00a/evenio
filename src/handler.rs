@@ -21,7 +21,6 @@ use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
-use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
@@ -313,7 +312,7 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) order: u64,
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
-    pub(crate) targeted_event_expr: BoolExpr<ComponentIdx>,
+    pub(crate) targeted_event_expr: ComponentAccessExpr,
     pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
@@ -370,7 +369,7 @@ impl HandlerInfo {
 
     /// Gets the expression describing the handler's targeted event query, or
     /// `None` if this handler is not targeted.
-    pub fn targeted_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
+    pub fn targeted_event_expr(&self) -> Option<&ComponentAccessExpr> {
         self.received_event()
             .is_targeted()
             .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_expr })
@@ -850,7 +849,7 @@ pub struct Config {
     pub received_event_access: Access,
     /// The targeted event filter. This should be a subset of
     /// [`Self::component_access`].
-    pub targeted_event_expr: BoolExpr<ComponentIdx>,
+    pub targeted_event_expr: ComponentAccessExpr,
     /// The set of untargeted events sent by the handler.
     pub sent_untargeted_events: BitSet<UntargetedEventIdx>,
     /// The set of targeted events sent by the handler.
@@ -876,7 +875,7 @@ impl Config {
             priority: Default::default(),
             received_event: Default::default(),
             received_event_access: Default::default(),
-            targeted_event_expr: BoolExpr::new(false),
+            targeted_event_expr: ComponentAccessExpr::new(false),
             sent_untargeted_events: Default::default(),
             sent_targeted_events: Default::default(),
             event_queue_access: Default::default(),

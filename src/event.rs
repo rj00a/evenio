@@ -900,11 +900,7 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
 
         let (expr, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(state);
-
-        config.targeted_event_expr = expr.expr.clone();
-
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
+        if let Some(new_component_access) = expr.or(&config.component_access) {
             config.component_access = new_component_access;
         } else {
             return Err(InitError(
@@ -917,7 +913,9 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
             ));
         }
 
-        Ok(res)
+        config.targeted_event_expr = expr.clone();
+
+        Ok(FetcherState::new(state))
     }
 
     unsafe fn get<'a>(
@@ -1018,11 +1016,7 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q>
 
         let (expr, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(state);
-
-        config.targeted_event_expr = expr.expr.clone();
-
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
+        if let Some(new_component_access) = expr.or(&config.component_access) {
             config.component_access = new_component_access;
         } else {
             return Err(InitError(
@@ -1035,7 +1029,9 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q>
             ));
         }
 
-        Ok(res)
+        config.targeted_event_expr = expr;
+
+        Ok(FetcherState::new(state))
     }
 
     unsafe fn get<'a>(
@@ -1106,7 +1102,7 @@ fn set_received_event<E: Event>(
 
     config.received_event = Some(id);
 
-    if !config.received_event_access.set_if_compatible(access) {
+    if !config.received_event_access.is_compatible(access) {
         return Err(InitError(
             format!(
                 "tried to set `{access:?}` as the received event access for this handler, but it \
@@ -1116,6 +1112,8 @@ fn set_received_event<E: Event>(
             .into(),
         ));
     }
+
+    config.received_event_access = access;
 
     Ok(id)
 }
@@ -1277,10 +1275,7 @@ unsafe impl<T: EventSet> HandlerParam for Sender<'_, T> {
     type Item<'a> = Sender<'a, T>;
 
     fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        if !config
-            .event_queue_access
-            .set_if_compatible(Access::ReadWrite)
-        {
+        if !config.event_queue_access.is_compatible(Access::ReadWrite) {
             return Err(InitError(
                 format!(
                     "`{}` has conflicting access with a previous handler parameter. Only one \
@@ -1290,6 +1285,8 @@ unsafe impl<T: EventSet> HandlerParam for Sender<'_, T> {
                 .into(),
             ));
         }
+
+        config.event_queue_access = Access::ReadWrite;
 
         let state = T::new_state(world);
 

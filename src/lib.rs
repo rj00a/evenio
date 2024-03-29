@@ -16,7 +16,6 @@ pub mod archetype;
 mod assert;
 pub mod bit_set;
 mod blob_vec;
-pub mod bool_expr;
 pub mod component;
 pub mod drop;
 pub mod entity;

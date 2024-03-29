@@ -677,7 +677,6 @@ impl Archetype {
     fn register_handler(&mut self, info: &mut HandlerInfo) {
         if info
             .component_access()
-            .expr
             .eval(|idx| self.column_of(idx).is_some())
         {
             if self.entity_count() > 0 {

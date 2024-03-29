@@ -35,8 +35,8 @@ impl<Q: Query> FetcherState<Q> {
         let res = FetcherState::new(state);
 
         match expr.or(&config.component_access) {
-            Ok(new_component_access) => config.component_access = new_component_access,
-            Err(_) => {
+            Some(new_component_access) => config.component_access = new_component_access,
+            None => {
                 return Err(InitError(
                     format!(
                         "query `{}` has incompatible component access with previous queries in \
