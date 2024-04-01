@@ -5,7 +5,7 @@ use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
-use core::ops::{BitOr, BitOrAssign};
+use core::ops::{BitOr, BitOrAssign, BitXor, BitXorAssign};
 use core::{any, fmt};
 
 use crate::assert::GetDebugChecked;
@@ -162,12 +162,12 @@ impl<T: SparseIndex> BitSet<T> {
 }
 
 impl<T> BitOrAssign<&Self> for BitSet<T> {
-    fn bitor_assign(&mut self, other: &Self) {
-        if self.blocks.len() < other.blocks.len() {
-            self.blocks.resize(other.blocks.len(), 0);
+    fn bitor_assign(&mut self, rhs: &Self) {
+        if self.blocks.len() < rhs.blocks.len() {
+            self.blocks.resize(rhs.blocks.len(), 0);
         }
 
-        for (a, b) in self.blocks.iter_mut().zip(other.blocks.iter()) {
+        for (a, b) in self.blocks.iter_mut().zip(rhs.blocks.iter()) {
             *a |= *b;
         }
     }
@@ -176,8 +176,29 @@ impl<T> BitOrAssign<&Self> for BitSet<T> {
 impl<T> BitOr<&Self> for BitSet<T> {
     type Output = Self;
 
-    fn bitor(mut self, other: &Self) -> Self::Output {
-        self |= other;
+    fn bitor(mut self, rhs: &Self) -> Self::Output {
+        self |= rhs;
+        self
+    }
+}
+
+impl<T> BitXorAssign<&Self> for BitSet<T> {
+    fn bitxor_assign(&mut self, rhs: &Self) {
+        if self.blocks.len() < rhs.blocks.len() {
+            self.blocks.resize(rhs.blocks.len(), 0);
+        }
+
+        for (a, b) in self.blocks.iter_mut().zip(rhs.blocks.iter()) {
+            *a ^= *b;
+        }
+    }
+}
+
+impl<T> BitXor<&Self> for BitSet<T> {
+    type Output = Self;
+
+    fn bitxor(mut self, rhs: &Self) -> Self::Output {
+        self ^= rhs;
         self
     }
 }

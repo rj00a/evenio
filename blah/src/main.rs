@@ -2,15 +2,17 @@
 
 use core::cmp::Ordering;
 use core::fmt;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::mem;
 
 // use crate::component::ComponentIdx;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ComponentIdx(pub u32);
 
-/// Describes how a particular piece of data is accessed. Used to prevent
-/// aliased mutabliity.
+/// Describes how a particular piece of data is accessed according to Rust's
+/// "aliasing XOR mutability" rules.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub enum Access {
     /// Cannot read or write to the data.
@@ -48,6 +50,344 @@ impl Access {
     }
 }
 
+/// An expression which precisely describes the components accessed by a query.
+#[derive(Clone, Default, Debug)]
+pub struct ComponentAccess {
+    /// The set of cases that need to be considered for access checking.
+    ///
+    /// Example: The query `(Or<&A, &B>, &C)` matches an archetype in three
+    /// cases:
+    /// - Archetype has components `A` and `C`.
+    /// - Archetype has components `B` and `C`.
+    /// - Archetype has all of `A`, `B`, `C`.
+    ///
+    /// If any of the cases end up with a [`CaseAccess::Conflict`], then we know
+    /// the query is invalid.
+    cases: Vec<Case>,
+}
+
+/// Association list from component to access. Sorted in ascending order by
+/// [`ComponentIdx`].
+type Case = Vec<(ComponentIdx, CaseAccess)>;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum CaseAccess {
+    /// Archetype must have the component, but the component is not read or
+    /// written.
+    With,
+    /// Component is read.
+    Read,
+    /// Component is read and written.
+    ReadWrite,
+    /// Archetype must not have the component.
+    Not,
+    Conflict,
+}
+
+impl ComponentAccess {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn var(idx: ComponentIdx, access: Access) -> Self {
+        Self {
+            cases: vec![vec![(
+                idx,
+                match access {
+                    Access::None => CaseAccess::With,
+                    Access::Read => CaseAccess::Read,
+                    Access::ReadWrite => CaseAccess::ReadWrite,
+                },
+            )]],
+        }
+    }
+
+    pub fn and(&self, other: &Self) -> Self {
+        let mut cases = vec![];
+
+        for left in &self.cases {
+            for right in &other.cases {
+                let mut case = vec![];
+                let mut il = 0;
+                let mut ir = 0;
+
+                loop {
+                    match (left.get(il), right.get(ir)) {
+                        (None, None) => break,
+                        (None, Some(_)) => {
+                            case.extend(right[ir..].iter().copied());
+                            break;
+                        }
+                        (Some(_), None) => {
+                            case.extend(left[il..].iter().copied());
+                            break;
+                        }
+                        (Some(&(left_idx, left_access)), Some(&(right_idx, right_access))) => {
+                            match left_idx.cmp(&right_idx) {
+                                Ordering::Less => {
+                                    case.push((left_idx, left_access));
+                                    il += 1;
+                                }
+                                Ordering::Equal => {
+                                    use CaseAccess::*;
+                                    let combined_access = match (left_access, right_access) {
+                                        (Conflict, _)
+                                        | (_, Conflict)
+                                        | (Read, ReadWrite)
+                                        | (ReadWrite, Read)
+                                        | (ReadWrite, ReadWrite) => Conflict,
+                                        (With, Read) | (Read, With) | (Read, Read) => Read,
+                                        (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
+                                        (With, With) => With,
+                                        (Not, Not) => Not,
+                                        (Not, With | Read | ReadWrite)
+                                        // Case is impossible, so skip it.
+                                        | (With | Read | ReadWrite, Not) => continue,
+                                    };
+                                    case.push((left_idx, combined_access));
+                                    il += 1;
+                                    ir += 1;
+                                }
+                                Ordering::Greater => {
+                                    case.push((right_idx, right_access));
+                                    ir += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                cases.push(case);
+            }
+        }
+
+        Self { cases }
+    }
+
+    pub fn not(&self) -> Self {
+        Self {
+            cases: self
+                .cases
+                .iter()
+                .cloned()
+                .map(|mut branch| {
+                    for (_, access) in &mut branch {
+                        *access = match *access {
+                            CaseAccess::With => CaseAccess::Not,
+                            CaseAccess::Read => CaseAccess::Not,
+                            CaseAccess::ReadWrite => CaseAccess::Not,
+                            CaseAccess::Not => CaseAccess::With,
+                            CaseAccess::Conflict => CaseAccess::Not,
+                        }
+                    }
+
+                    branch
+                })
+                .collect(),
+        }
+    }
+
+    pub fn or(&self, other: &Self) -> Self {
+        Self {
+            cases: self
+                .cases
+                .iter()
+                .cloned()
+                .chain(other.cases.iter().cloned())
+                .chain(self.and(&other).cases)
+                .collect(),
+        }
+    }
+
+    pub fn xor(&self, other: &Self) -> Self {
+        let left = self.and(&other.not());
+        let right = other.and(&self.not());
+
+        Self {
+            cases: left.cases.into_iter().chain(right.cases).collect(),
+        }
+    }
+
+    pub(crate) fn collect_conflicts(&self) -> HashSet<ComponentIdx> {
+        let mut res = HashSet::new();
+
+        for case in &self.cases {
+            for &(idx, access) in case {
+                if access == CaseAccess::Conflict {
+                    res.insert(idx);
+                }
+            }
+        }
+
+        res
+    }
+}
+
+/*
+#[derive(Clone, Default, Debug)]
+pub struct ComponentAccessExpr {
+    branches: Vec<AccessMap>,
+}
+
+impl ComponentAccessExpr {
+    pub fn new() -> Self {
+        Self { branches: vec![] }
+    }
+
+    pub fn var(idx: ComponentIdx, access: Access) -> Self {
+        Self {
+            branches: vec![AccessMap::from([(
+                idx,
+                match access {
+                    Access::None => VarAccess::With,
+                    Access::Read => VarAccess::Read,
+                    Access::ReadWrite => VarAccess::ReadWrite,
+                },
+            )])],
+        }
+    }
+
+    pub fn xor(mut self, other: &Self) -> Self {
+        self.branches.extend(other.branches.iter().cloned());
+        self
+    }
+
+    pub fn and(mut self, other: &Self) -> Self {
+        self.branches = self.branches.iter().flat_map(|left| {
+            other.branches.iter().flat_map(|right| {
+                let mut res = AccessMap::new();
+
+                let mut join = |left: &AccessMap, right: &AccessMap| {
+                    for (&idx, &access) in left.iter() {
+                        if let Entry::Vacant(v) = res.entry(idx) {
+                            v.insert(if let Some(other_access) = right.get(&idx) {
+                                use VarAccess::*;
+                                match (access, other_access) {
+                                    (Conflict, _)
+                                    | (_, Conflict)
+                                    | (Read, ReadWrite)
+                                    | (ReadWrite, Read)
+                                    | (ReadWrite, ReadWrite) => Conflict,
+                                    (With, Read) | (Read, With) | (Read, Read) => Read,
+                                    (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
+                                    (With, With) => With,
+                                    (Not, Not) => Not,
+                                    (Not, With | Read | ReadWrite)
+                                    | (With | Read | ReadWrite, Not) => return None,
+                                }
+                            } else {
+                                access
+                            });
+                        }
+                    }
+
+                    Some(())
+                };
+
+                join(left, right)?;
+                join(right, left)?;
+
+                Some(res)
+            })
+        }).collect();
+
+        self
+    }
+
+    pub fn not(mut self) -> Self {
+        self.
+    }
+
+    pub(crate) fn collect_conflicts(&self) -> HashSet<ComponentIdx> {
+        let mut res = HashSet::new();
+
+        res
+    }
+}
+
+#[derive(Clone, Debug)]
+enum CaeInner {
+    Xor(Box<Self>, Box<Self>),
+    And(Box<Self>, Box<Self>),
+    With(ComponentIdx),
+    Read(ComponentIdx),
+    ReadWrite(ComponentIdx),
+    Not(ComponentIdx),
+}
+
+impl CaeInner {
+    fn collect_conflicts(&self) -> Vec<AccessMap> {
+        match self {
+            CaeInner::Xor(left, right) => {
+                let mut left = left.collect_conflicts();
+                let right = right.collect_conflicts();
+                left.extend(right);
+                left
+            }
+            CaeInner::And(left, right) => {
+                let left = left.collect_conflicts();
+                let right = right.collect_conflicts();
+
+                left.iter()
+                    .flat_map(|left| {
+                        right.iter().flat_map(|right| {
+                            let mut res = AccessMap::new();
+
+                            let mut join = |left: &AccessMap, right: &AccessMap| {
+                                for (&idx, &access) in left.iter() {
+                                    if let Entry::Vacant(v) = res.entry(idx) {
+                                        v.insert(if let Some(other_access) = right.get(&idx) {
+                                            use VarAccess::*;
+                                            match (access, other_access) {
+                                                (Conflict, _)
+                                                | (_, Conflict)
+                                                | (Read, ReadWrite)
+                                                | (ReadWrite, Read)
+                                                | (ReadWrite, ReadWrite) => Conflict,
+                                                (With, Read) | (Read, With) | (Read, Read) => Read,
+                                                (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
+                                                (With, With) => With,
+                                                (Not, Not) => Not,
+                                                (Not, With | Read | ReadWrite)
+                                                | (With | Read | ReadWrite, Not) => return None,
+                                            }
+                                        } else {
+                                            access
+                                        });
+                                    }
+                                }
+
+                                Some(())
+                            };
+
+                            join(left, right)?;
+                            join(right, left)?;
+
+                            Some(res)
+                        })
+                    })
+                    .collect()
+            }
+            CaeInner::With(idx) => vec![AccessMap::from([(*idx, VarAccess::With)])],
+            CaeInner::Read(idx) => vec![AccessMap::from([(*idx, VarAccess::Read)])],
+            CaeInner::ReadWrite(idx) => vec![AccessMap::from([(*idx, VarAccess::ReadWrite)])],
+            CaeInner::Not(idx) => vec![AccessMap::from([(*idx, VarAccess::Not)])],
+        }
+    }
+}
+
+type AccessMap = HashMap<ComponentIdx, VarAccess>;
+
+#[derive(Copy, Clone, Debug)]
+enum VarAccess {
+    With,
+    Read,
+    ReadWrite,
+    Not,
+    Conflict,
+}
+
+/*
 #[derive(Clone)]
 pub struct ComponentAccessExpr {
     /// A propositional logic formula in [Algebraic Normal Form (ANF)](https://en.wikipedia.org/wiki/Algebraic_normal_form).
@@ -296,7 +636,7 @@ impl fmt::Debug for ComponentAccessExpr {
 
 #[derive(Clone, Debug)]
 struct Variable {
-    idx: ComponentIdx, 
+    idx: ComponentIdx,
     access: VarAccess,
     archetype_ignore: bool,
 }
@@ -351,6 +691,7 @@ impl Ord for Variable {
         self.idx.cmp(&other.idx)
     }
 }
+*/
 
 /*
 /// Map from `T` to [`Access`] with sparse index keys. All keys map to
@@ -633,6 +974,7 @@ mod tests {
 }
 */
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,7 +1097,7 @@ mod tests {
         // panic!("{expr:?}");
     }
 
-    // B xor Not<B> // 
+    // B xor Not<B> //
 
     // XY or (X and not Y)
     // - Rewrite NOT
@@ -804,5 +1146,7 @@ mod tests {
     // - AND
     // XY xor (X xor XY)
 }
+*/
+*/
 
 fn main() {}

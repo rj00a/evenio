@@ -1,5 +1,9 @@
 # Change Log
 
+## Unreleased
+
+- 
+
 ## 0.4.2 - 2024-03-24
 
 - Fixed bug in entity despawning.

@@ -1,6 +1,5 @@
 //! Accessing components on entities.
 
-use alloc::format;
 use core::iter::FusedIterator;
 use core::ptr::NonNull;
 use core::{any, fmt};
@@ -30,23 +29,12 @@ impl<Q: Query> FetcherState<Q> {
     }
 
     pub(crate) fn init(world: &mut World, config: &mut Config) -> Result<Self, InitError> {
-        let (expr, state) = Q::init(world, config)?;
+        let (filter, ca, state) = Q::init(world, config)?;
+
+        config.archetype_filter = config.archetype_filter.or(&filter);
+        config.component_access = config.component_access.and(&ca);
 
         let res = FetcherState::new(state);
-
-        match expr.or(&config.component_access) {
-            Some(new_component_access) => config.component_access = new_component_access,
-            None => {
-                return Err(InitError(
-                    format!(
-                        "query `{}` has incompatible component access with previous queries in \
-                         this handler",
-                        any::type_name::<Q>()
-                    )
-                    .into(),
-                ))
-            }
-        }
 
         Ok(res)
     }

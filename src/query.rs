@@ -1,14 +1,13 @@
 //! Type-level DSL for retrieving data from entities.
 
-use alloc::format;
+use core::fmt;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::{any, fmt};
 
 use evenio_macros::all_tuples;
 pub use evenio_macros::Query;
 
-use crate::access::{Access, ComponentAccessExpr};
+use crate::access::{Access, ArchetypeFilter, ComponentAccess};
 use crate::archetype::{Archetype, ArchetypeRow};
 use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{Component, ComponentIdx};
@@ -73,7 +72,7 @@ pub unsafe trait Query {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError>;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError>;
 
     /// Returns a new [`Self::State`] instance.
     fn new_state(world: &mut World) -> Self::State;
@@ -116,12 +115,13 @@ unsafe impl<C: Component> Query for &'_ C {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::var(idx, Access::Read);
+        let filter = ArchetypeFilter::var(idx);
+        let ca = ComponentAccess::var(idx, Access::Read);
         config.referenced_components.insert(idx);
 
-        Ok((expr, idx))
+        Ok((filter, ca, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -149,14 +149,15 @@ unsafe impl<C: Component> Query for &'_ mut C {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
         let () = AssertMutable::<C>::COMPONENT;
 
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::var(idx, Access::ReadWrite);
+        let filter = ArchetypeFilter::var(idx);
+        let ca = ComponentAccess::var(idx, Access::ReadWrite);
         config.referenced_components.insert(idx);
 
-        Ok((expr, idx))
+        Ok((filter, ca, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -182,30 +183,22 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
+            #[allow(unused_mut)]
             fn init(
                 world: &mut World,
                 config: &mut Config
-            ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-                #![allow(unused_variables)]
-
-                #[allow(unused_mut)]
-                let mut res = ComponentAccessExpr::new(true);
+            ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+                let mut filter = ArchetypeFilter::from(true);
+                let mut ca = ComponentAccess::new();
 
                 $(
-                    let (expr, $q) = $Q::init(world, config)?;
+                    let (this_filter, this_ca, $q) = $Q::init(world, config)?;
 
-                    let Some(expr) = res.and(&expr) else {
-                        return Err(InitError(format!(
-                            "conflicting access in tuple `{}`: tuple element `{}` conflicts with previous elements",
-                            any::type_name::<Self>(),
-                            any::type_name::<$Q>(),
-                        ).into()));
-                    };
-
-                    res = expr;
+                    filter = filter.and(&this_filter);
+                    ca = ca.and(&this_ca);
                 )*
 
-                Ok((res, ($($q,)*)))
+                Ok((filter, ca, ($($q,)*)))
             }
 
             fn new_state(world: &mut World) -> Self::State {
@@ -251,12 +244,11 @@ unsafe impl<Q: Query> Query for Option<Q> {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut expr, state) = Q::init(world, config)?;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (_, ca, state) = Q::init(world, config)?;
 
-        expr = expr.or(&ComponentAccessExpr::new(true)).unwrap();
-
-        Ok((expr, state))
+        // Access components as `Q` does, but without affecting the matched archetypes.
+        Ok((ArchetypeFilter::from(true), ca, state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -332,22 +324,15 @@ where
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (left_expr, left_state) = L::init(world, config)?;
-        let (right_expr, right_state) = R::init(world, config)?;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (filter_lhs, ca_lhs, state_lhs) = L::init(world, config)?;
+        let (filter_rhs, ca_rhs, state_rhs) = R::init(world, config)?;
 
-        let Some(expr) = left_expr.or(&right_expr) else {
-            return Err(InitError(
-                format!(
-                    "conflicting query in `{}` (both operands of an OR query may be active at the \
-                     same time)",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        };
-
-        Ok((expr, (left_state, right_state)))
+        Ok((
+            filter_lhs.or(&filter_rhs),
+            ca_lhs.or(&ca_rhs),
+            (state_lhs, state_rhs),
+        ))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -434,11 +419,15 @@ where
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (left_expr, left_state) = L::init(world, config)?;
-        let (right_expr, right_state) = R::init(world, config)?;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (filter_lhs, ca_lhs, state_lhs) = L::init(world, config)?;
+        let (filter_rhs, ca_rhs, state_rhs) = R::init(world, config)?;
 
-        Ok((left_expr.xor(&right_expr), (left_state, right_state)))
+        Ok((
+            filter_lhs.xor(&filter_rhs),
+            ca_lhs.xor(&ca_rhs),
+            (state_lhs, state_rhs),
+        ))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -512,11 +501,10 @@ unsafe impl<Q: Query> Query for Not<Q> {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut expr, state) = Q::init(world, config)?;
-        expr.clear_access();
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (filter, ca, state) = Q::init(world, config)?;
 
-        Ok((expr.not(), state))
+        Ok((filter.not(), ca.not(), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -583,12 +571,12 @@ unsafe impl<Q: Query> Query for With<Q> {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut expr, state) = Q::init(world, config)?;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (filter, mut ca, state) = Q::init(world, config)?;
 
-        expr.clear_access();
+        ca.clear_access();
 
-        Ok((expr, state))
+        Ok((filter, ca, state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -663,10 +651,10 @@ unsafe impl<Q: Query> Query for Has<Q> {
     fn init(
         world: &mut World,
         config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (_, state) = Q::init(world, config)?;
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        let (_, _, state) = Q::init(world, config)?;
 
-        Ok((ComponentAccessExpr::new(true), state))
+        Ok((ArchetypeFilter::from(true), ComponentAccess::new(), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -695,8 +683,8 @@ unsafe impl Query for EntityId {
     fn init(
         _world: &mut World,
         _config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        Ok((ComponentAccessExpr::new(true), ()))
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        Ok((ArchetypeFilter::from(true), ComponentAccess::new(), ()))
     }
 
     fn new_state(_world: &mut World) -> Self::State {}
@@ -725,8 +713,8 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
     fn init(
         _world: &mut World,
         _config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        Ok((ComponentAccessExpr::new(true), ()))
+    ) -> Result<(ArchetypeFilter, ComponentAccess, Self::State), InitError> {
+        Ok((ArchetypeFilter::from(true), ComponentAccess::new(), ()))
     }
 
     fn new_state(_world: &mut World) -> Self::State {}
@@ -836,6 +824,8 @@ mod tests {
         true,
         (((&mut A, With<&B>), (&A, Not<&B>)), (&A, Not<&B>))
     );
+    t!(t19, true, (&mut A, &A, Not<&A>));
+    t!(t20, true, (Not<&A>, &mut A, &A));
 
     #[test]
     #[allow(dead_code)]

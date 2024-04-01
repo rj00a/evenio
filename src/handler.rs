@@ -16,7 +16,7 @@ use core::{any, fmt};
 use evenio_macros::all_tuples;
 pub use evenio_macros::HandlerParam;
 
-use crate::access::{Access, ComponentAccessExpr};
+use crate::access::{Access, ArchetypeFilter, ComponentAccess};
 use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
@@ -312,11 +312,12 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) order: u64,
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
-    pub(crate) targeted_event_expr: ComponentAccessExpr,
+    pub(crate) targeted_event_filter: ArchetypeFilter,
     pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
-    pub(crate) component_access: ComponentAccessExpr,
+    pub(crate) component_access: ComponentAccess,
+    pub(crate) archetype_filter: ArchetypeFilter,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
     pub(crate) priority: Priority,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
@@ -369,10 +370,10 @@ impl HandlerInfo {
 
     /// Gets the expression describing the handler's targeted event query, or
     /// `None` if this handler is not targeted.
-    pub fn targeted_event_expr(&self) -> Option<&ComponentAccessExpr> {
+    pub fn targeted_event_filter(&self) -> Option<&ArchetypeFilter> {
         self.received_event()
             .is_targeted()
-            .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_expr })
+            .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_filter })
     }
 
     /// Returns the set of untargeted events this handler sends.
@@ -391,8 +392,12 @@ impl HandlerInfo {
     }
 
     /// Gets the expression describing this handler's access
-    pub fn component_access(&self) -> &ComponentAccessExpr {
+    pub fn component_access(&self) -> &ComponentAccess {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
+    }
+
+    pub fn archetype_filter(&self) -> &ArchetypeFilter {
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).archetype_filter }
     }
 
     /// Gets the set of components referenced by this handler.
@@ -426,11 +431,12 @@ impl fmt::Debug for HandlerInfo {
             .field("order", &self.order())
             .field("received_event", &self.received_event())
             .field("received_event_access", &self.received_event_access())
-            .field("targeted_event_expr", &self.targeted_event_expr())
+            .field("targeted_event_filter", &self.targeted_event_filter())
             .field("sent_untargeted_events", &self.sent_untargeted_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
             .field("component_access", &self.component_access())
+            .field("archetype_filter", &self.archetype_filter())
             .field("referenced_components", &self.referenced_components())
             .field("priority", &self.priority())
             // Don't access the `handler` field.
@@ -834,8 +840,8 @@ pub enum Priority {
     Low,
 }
 
-/// The Configuration of a handler. Accessible during handler initialization.
-#[derive(Clone, Debug)]
+/// The configuration of a handler. Accessible during handler initialization.
+#[derive(Clone, Default, Debug)]
 #[non_exhaustive]
 pub struct Config {
     /// The priority of this handler.
@@ -847,9 +853,9 @@ pub struct Config {
     pub received_event: Option<EventId>,
     /// Access to the received event value.
     pub received_event_access: Access,
-    /// The targeted event filter. This should be a subset of
-    /// [`Self::component_access`].
-    pub targeted_event_expr: ComponentAccessExpr,
+    /// Archetypes matched by the targeted event receiver. This should be a
+    /// subset of [`Self::archetype_filter`].
+    pub targeted_event_filter: ArchetypeFilter,
     /// The set of untargeted events sent by the handler.
     pub sent_untargeted_events: BitSet<UntargetedEventIdx>,
     /// The set of targeted events sent by the handler.
@@ -857,7 +863,12 @@ pub struct Config {
     /// Access to the queue of events.
     pub event_queue_access: Access,
     /// Expression describing the components accessed by the handler.
-    pub component_access: ComponentAccessExpr,
+    ///
+    /// Note that this does not influence the archetypes matched by the handler.
+    /// It is used only to check for mutable aliasing.
+    pub component_access: ComponentAccess,
+    /// The
+    pub archetype_filter: ArchetypeFilter,
     /// The set of components referenced by this handler. Used for handler
     /// cleanup when a component is removed.
     ///
@@ -871,23 +882,7 @@ pub struct Config {
 impl Config {
     /// Creates the default configuration.
     pub fn new() -> Self {
-        Self {
-            priority: Default::default(),
-            received_event: Default::default(),
-            received_event_access: Default::default(),
-            targeted_event_expr: ComponentAccessExpr::new(false),
-            sent_untargeted_events: Default::default(),
-            sent_targeted_events: Default::default(),
-            event_queue_access: Default::default(),
-            component_access: ComponentAccessExpr::new(false),
-            referenced_components: Default::default(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }
 
@@ -1439,6 +1434,7 @@ mod tests {
         struct E;
 
         world.add_handler(|_: Receiver<E>, info: &HandlerInfo| {
+            // For Miri.
             let _foo = info.name();
             let _bar = info.received_event();
             let _baz = info.referenced_components();

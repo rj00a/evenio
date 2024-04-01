@@ -349,6 +349,12 @@ impl World {
             )
         };
 
+        let conflicts = config.component_access.collect_conflicts();
+
+        if !conflicts.is_empty() {
+            todo!("error message")
+        }
+
         let info = HandlerInfo::new(HandlerInfoInner {
             name: handler.name(),
             id: HandlerId::NULL, // Filled in later.
@@ -356,11 +362,12 @@ impl World {
             order: 0, // Filled in later.
             received_event,
             received_event_access: config.received_event_access,
-            targeted_event_expr: config.targeted_event_expr,
+            targeted_event_filter: config.targeted_event_filter,
             sent_untargeted_events: config.sent_untargeted_events,
             sent_targeted_events: config.sent_targeted_events,
             event_queue_access: config.event_queue_access,
             component_access: config.component_access,
+            archetype_filter: config.archetype_filter,
             referenced_components: config.referenced_components,
             priority: config.priority,
             handler,

@@ -898,22 +898,11 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
 
         set_received_event::<E>(world, config, Access::Read)?;
 
-        let (expr, state) = Q::init(world, config)?;
+        let (filter, ca, state) = Q::init(world, config)?;
 
-        if let Some(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
-            return Err(InitError(
-                format!(
-                    "query `{}` has incompatible component access with previous queries in this \
-                     handler",
-                    any::type_name::<Q>()
-                )
-                .into(),
-            ));
-        }
-
-        config.targeted_event_expr = expr.clone();
+        config.archetype_filter = config.archetype_filter.or(&filter);
+        config.component_access = config.component_access.and(&ca);
+        config.targeted_event_filter = filter;
 
         Ok(FetcherState::new(state))
     }
@@ -1014,22 +1003,11 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q>
 
         set_received_event::<E>(world, config, Access::ReadWrite)?;
 
-        let (expr, state) = Q::init(world, config)?;
+        let (filter, ca, state) = Q::init(world, config)?;
 
-        if let Some(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
-            return Err(InitError(
-                format!(
-                    "query `{}` has incompatible component access with previous queries in this \
-                     handler",
-                    any::type_name::<Q>()
-                )
-                .into(),
-            ));
-        }
-
-        config.targeted_event_expr = expr;
+        config.archetype_filter = config.archetype_filter.or(&filter);
+        config.component_access = config.component_access.and(&ca);
+        config.targeted_event_filter = filter;
 
         Ok(FetcherState::new(state))
     }
