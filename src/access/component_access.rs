@@ -5,6 +5,7 @@ use crate::component::ComponentIdx;
 use crate::map::IndexSet;
 
 /// An expressions describing the components accessed by a query.
+#[must_use]
 #[derive(Clone, Debug)]
 pub struct ComponentAccess {
     /// The set of cases that need to be considered for access checking.
@@ -41,8 +42,18 @@ enum CaseAccess {
 }
 
 impl ComponentAccess {
-    pub fn new() -> Self {
-        Self::default() // TODO: make this consistent with ArchetypeFilter
+    /// Create a new `ComponentAccess` which matches all archetypes but has no
+    /// access.
+    pub fn new_true() -> Self {
+        Self {
+            cases: vec![vec![]],
+        }
+    }
+
+    /// Create a new `ComponentAccess` which matches no archetypes and has no
+    /// access.
+    pub fn new_false() -> Self {
+        Self { cases: vec![] }
     }
 
     pub fn var(idx: ComponentIdx, access: Access) -> Self {
@@ -61,8 +72,8 @@ impl ComponentAccess {
     pub fn and(&self, rhs: &Self) -> Self {
         let mut cases = vec![];
 
-        for left in &self.cases {
-            for right in &rhs.cases {
+        for right in &rhs.cases {
+            'next_case: for left in &self.cases {
                 let mut case = vec![];
                 let mut il = 0;
                 let mut ir = 0;
@@ -81,32 +92,37 @@ impl ComponentAccess {
                         (Some(&(left_idx, left_access)), Some(&(right_idx, right_access))) => {
                             match left_idx.cmp(&right_idx) {
                                 Ordering::Less => {
-                                    case.push((left_idx, left_access));
                                     il += 1;
+                                    case.push((left_idx, left_access));
                                 }
                                 Ordering::Equal => {
-                                    use CaseAccess::*;
+                                    dbg!(left_access, right_access);
                                     il += 1;
                                     ir += 1;
+                                    use CaseAccess::*;
                                     let combined_access = match (left_access, right_access) {
-                                        (Conflict, _)
-                                        | (_, Conflict)
-                                        | (Read, ReadWrite)
-                                        | (ReadWrite, Read)
-                                        | (ReadWrite, ReadWrite) => Conflict,
                                         (With, Read) | (Read, With) | (Read, Read) => Read,
                                         (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
                                         (With, With) => With,
                                         (Not, Not) => Not,
-                                        (Not, With | Read | ReadWrite)
-                                        // Case is impossible, so delete it.
-                                        | (With | Read | ReadWrite, Not) => continue,
+                                        (Not, With | Read | ReadWrite | Conflict)
+                                        | (With | Read | ReadWrite | Conflict, Not) => {
+                                            // Skip this case since both accessing and not accessing
+                                            // the same component is impossible.
+                                            continue 'next_case;
+                                        }
+                                        (Conflict, With | Read | ReadWrite)
+                                        | (With | Read | ReadWrite, Conflict)
+                                        | (Conflict, Conflict)
+                                        | (Read, ReadWrite)
+                                        | (ReadWrite, Read)
+                                        | (ReadWrite, ReadWrite) => Conflict,
                                     };
                                     case.push((left_idx, combined_access));
                                 }
                                 Ordering::Greater => {
-                                    case.push((right_idx, right_access));
                                     ir += 1;
+                                    case.push((right_idx, right_access));
                                 }
                             }
                         }
@@ -120,9 +136,14 @@ impl ComponentAccess {
         Self { cases }
     }
 
+    pub fn or(&self, rhs: &Self) -> Self {
+        Self {
+            cases: self.cases.iter().chain(rhs.cases.iter()).cloned().collect(),
+        }
+    }
+
     pub fn not(&self) -> Self {
         // Apply De Morgan's laws.
-
         self.cases
             .iter()
             .map(|case| Self {
@@ -141,30 +162,11 @@ impl ComponentAccess {
                     })
                     .collect(),
             })
-            .fold(Self::new(), |acc, item| acc.and(&item))
+            .fold(Self::new_true(), |acc, item| acc.and(&item))
     }
 
-    pub fn or(&self, rhs: &Self) -> Self {
-        Self {
-            cases: self
-                .cases
-                .iter()
-                .cloned()
-                .chain(rhs.cases.iter().cloned())
-                .chain(self.and(&rhs).cases)
-                .collect(),
-        }
-    }
-
-    pub fn xor(&self, rhs: &Self) -> Self {
-        let left = self.and(&rhs.not());
-        let right = rhs.and(&self.not());
-
-        Self {
-            cases: left.cases.into_iter().chain(right.cases).collect(),
-        }
-    }
-
+    /// Clears all component access without altering the matched archetypes.
+    /// Equivalent to `self = self.not().not()`.
     pub fn clear_access(&mut self) {
         for case in &mut self.cases {
             for (_, access) in case {
@@ -193,13 +195,21 @@ impl ComponentAccess {
 
         res
     }
+
+    pub(crate) fn matches_archetype<F>(&self, mut f: F) -> bool
+    where
+        F: FnMut(ComponentIdx) -> bool,
+    {
+        self.cases
+            .iter()
+            .any(|case| case.iter().all(|(idx, _)| f(*idx)))
+    }
 }
 
+/// Equivalent to [`Self::new_false`].
 impl Default for ComponentAccess {
     fn default() -> Self {
-        Self {
-            cases: vec![vec![]],
-        }
+        Self::new_false()
     }
 }
 
@@ -212,6 +222,7 @@ mod tests {
     const A: ComponentIdx = ComponentIdx(0);
     const B: ComponentIdx = ComponentIdx(1);
     const C: ComponentIdx = ComponentIdx(2);
+    const D: ComponentIdx = ComponentIdx(2);
 
     #[track_caller]
     fn check(ca: Ca, it: impl IntoIterator<Item = ComponentIdx>) {
@@ -233,23 +244,21 @@ mod tests {
         Ca::var(C, access)
     }
 
+    fn d(access: Access) -> Ca {
+        Ca::var(D, access)
+    }
+
     #[test]
     fn collect_conflicts() {
         use Access::*;
 
-        panic!(
-            "{:?}",
-            a(ReadWrite).and(&b(None)).or(&a(Read).and(&b(None).not()))
-        );
-
         check(a(Read).and(&a(Read)), []);
         check(a(ReadWrite).and(&a(ReadWrite)), [A]);
         check(a(Read).and(&a(ReadWrite)).and(&a(None)), [A]);
+
         check(
-            a(ReadWrite).and(&b(None)).or(&a(Read).and(&b(None).not())),
+            a(ReadWrite).and(&b(None)).and(&a(Read).and(&b(None).not())),
             [],
         );
-
-        // panic!("{:?}", a(Read).and(&b(Read)).xor(&b(Read).and(&c(Read))));
     }
 }

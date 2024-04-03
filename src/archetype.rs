@@ -18,7 +18,7 @@ use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::handler::{
-    Config, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
+    HandlerConfig, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
 };
 use crate::map::{Entry, HashMap};
 use crate::prelude::World;
@@ -529,7 +529,7 @@ unsafe impl HandlerParam for &'_ Archetypes {
 
     type Item<'a> = &'a Archetypes;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 

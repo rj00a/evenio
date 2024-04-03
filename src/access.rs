@@ -7,7 +7,7 @@ pub use archetype_filter::*;
 pub use component_access::*;
 
 /// Describes how a particular piece of data is accessed. Used to prevent
-/// aliased mutabliity.
+/// aliased mutabliity according to Rust's rules.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub enum Access {
     /// Cannot read or write to the data.
@@ -20,14 +20,40 @@ pub enum Access {
 }
 
 impl Access {
-    /// Can `self` and `other` be active at the same time without causing
-    /// aliased mutability?
-    ///
-    /// This operation is symmetric.
+    /// Produces the access which is the superset of `self` and `other`. If the
+    /// two accesses are incompatible with each other, then `None` is returned
+    /// instead.
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```
+    /// use evenio::access::Access::*;
+    ///
+    /// assert_eq!(Read.join(Read), Some(Read));
+    /// assert_eq!(Read.join(ReadWrite), None);
+    /// assert_eq!(ReadWrite.join(None), Some(ReadWrite));
+    /// ```
+    #[must_use]
+    pub const fn join(self, other: Self) -> Option<Access> {
+        match (self, other) {
+            (Access::None, Access::None) => Some(Access::None),
+            (Access::Read | Access::ReadWrite, Access::None) => Some(self),
+            (Access::None, Access::Read | Access::ReadWrite) => Some(other),
+            (Access::Read, Access::Read) => Some(Access::Read),
+            (Access::Read, Access::ReadWrite)
+            | (Access::ReadWrite, Access::Read)
+            | (Access::ReadWrite, Access::ReadWrite) => None,
+        }
+    }
+
+    /// Shorthand for `self.join(other).is_some()`. See [`join`] for more
+    /// information.
+    ///
+    /// [`join`]: Self::join
+    ///
+    /// # Examples
+    ///
+    /// ```
     /// use evenio::access::Access::*;
     ///
     /// assert!(Read.is_compatible(Read));
@@ -36,11 +62,6 @@ impl Access {
     /// ```
     #[must_use]
     pub const fn is_compatible(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Access::None, _)
-                | (Access::Read, Access::None | Access::Read)
-                | (Access::ReadWrite, Access::None)
-        )
+        self.join(other).is_some()
     }
 }
