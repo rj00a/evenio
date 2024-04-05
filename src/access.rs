@@ -77,12 +77,13 @@ pub struct ComponentAccess {
     /// If any of the cases end up with a [`CaseAccess::Conflict`], then we know
     /// the query is invalid.
     ///
-    /// Example: The query `(Or<&A, &mut B>, &B)` has three cases:
-    /// 1. Read `A` and read `B`.
-    /// 2. Conflict in `B`.
-    /// 3. Read `A`, Conflict in `B`.
+    /// Example: The query `Or<&A, &mut A>` has three cases.
+    /// 1. `&A` left branch.
+    /// 2. `&mut A` right branch.
+    /// 3. `(&A, &mut A)` both branches. `&A` and `&mut A` are merged together
+    ///    to form a conflict in `A`.
     ///
-    /// Since cases (2) and (3) have conflicts, we know the query is invalid.
+    /// Since case (3) has a conflict, we know the whole query is invalid.
     ///
     /// This vec can be viewed as the "lists of lists" needed for
     /// [Disjunctive Normal Form][dnf], but with some necessary modifications in
