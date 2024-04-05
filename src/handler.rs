@@ -930,12 +930,12 @@ impl HandlerConfig {
     }
 
     /// Pushes a [`ComponentAccess`] to the list of [`ComponentAccess`] for this
-    /// handler. The accesses are ANDed together in order to determine the
-    /// component access of the whole handler.
+    /// handler. The conjunction of the accesses determines the component access
+    /// of the whole handler, while the disjunction determines which archetypes
+    /// are matched.
     ///
     /// Generally, this means that there should be one [`ComponentAccess`]
     /// pushed per handler param that accesses components.
-    #[allow(clippy::doc_markdown)]
     pub fn push_component_access(&mut self, component_access: ComponentAccess) {
         self.component_accesses.push(component_access);
     }
@@ -943,7 +943,6 @@ impl HandlerConfig {
     /// Inserts a component into the set of components referenced by this
     /// handler. The set is used for cleanup when a component type is removed
     /// from the world.
-    #[allow(clippy::doc_markdown)]
     pub fn insert_referenced_components(&mut self, comp: ComponentIdx) {
         self.referenced_components.insert(comp);
     }
