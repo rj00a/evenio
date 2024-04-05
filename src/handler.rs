@@ -428,7 +428,7 @@ impl HandlerInfo {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }.contains(idx)
     }
 
-    /// Gets the [`Priority`] of this handler.
+    /// Gets the [`HandlerPriority`] of this handler.
     pub fn priority(&self) -> HandlerPriority {
         unsafe { (*AliasedBox::as_ptr(&self.0)).priority }
     }
@@ -610,15 +610,15 @@ pub trait IntoHandler<Marker>: Sized {
     }
 
     /// Returns a wrapper which sets the priority of this handler to
-    /// [`Priority::High`].
-    fn high(self) -> High<Self::Handler> {
-        High(self.into_handler())
+    /// [`HandlerPriority::High`].
+    fn high(self) -> HighPriority<Self::Handler> {
+        HighPriority(self.into_handler())
     }
 
     /// Returns a wrapper which sets the priority of this handler to
-    /// [`Priority::Low`].
-    fn low(self) -> Low<Self::Handler> {
-        Low(self.into_handler())
+    /// [`HandlerPriority::Low`].
+    fn low(self) -> LowPriority<Self::Handler> {
+        LowPriority(self.into_handler())
     }
 }
 
@@ -684,9 +684,9 @@ impl<H: Handler> Handler for NoTypeId<H> {
 
 /// The wrapper handler returned by [`IntoHandler::high`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct High<S>(pub S);
+pub struct HighPriority<S>(pub S);
 
-impl<H: Handler> Handler for High<H> {
+impl<H: Handler> Handler for HighPriority<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -722,9 +722,9 @@ impl<H: Handler> Handler for High<H> {
 
 /// The wrapper handler returned by [`IntoHandler::low`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Low<S>(pub S);
+pub struct LowPriority<S>(pub S);
 
-impl<H: Handler> Handler for Low<H> {
+impl<H: Handler> Handler for LowPriority<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -788,12 +788,14 @@ pub trait Handler: Send + Sync + 'static {
     /// - `info` must be the correct information for this handler.
     /// - `event_ptr` must point to the correct type of event configured by this
     ///   handler in [`init`].
-    /// - `target_location` must be a valid location to an entity matching
-    ///   [`Config::targeted_event_expr`], unless the event is not targeted.
+    /// - `target_location` must be a valid location to an entity matching the
+    ///   component access set by [`set_targeted_event_component_access`],
+    ///   unless the event is not targeted.
     /// - `world` must have permission to access all data configured by this
     ///   handler in [`init`].
     ///
     /// [`init`]: Self::init
+    /// [`set_targeted_event_component_access`]: HandlerConfig::set_targeted_event_component_access
     unsafe fn run(
         &mut self,
         info: &HandlerInfo,
@@ -1028,7 +1030,7 @@ pub unsafe trait HandlerParam {
     /// of `Self` but with the lifetime of `'a`.
     type Item<'a>;
 
-    /// Initializes the handler using the input [`World`] and [`Config`].
+    /// Initializes the handler using the input [`World`] and [`HandlerConfig`].
     ///
     /// If initialization fails, [`InitError`] is returned and the handler is
     /// not considered initialized.

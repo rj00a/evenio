@@ -85,7 +85,7 @@ pub unsafe trait Query {
     /// # Safety
     /// - `row` must be in bounds.
     /// - Must have the appropriate component access permissions described by
-    ///   the [`ComponentAccessExpr`] returned by [`init`].
+    ///   the [`ComponentAccess`] returned by [`init`].
     /// - The lifetime of the item is chosen by the caller. The item must not
     ///   outlive the data it references.
     ///

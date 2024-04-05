@@ -61,10 +61,10 @@ world.add_handler(|| {});
 
 When multiple handlers listen for the same event, we'll need to consider the order those handlers should run when the event is sent.
 
-Handler order is first determined by the handler's [`Priority`]. This is a enum with three states: `High`, `Medium`, and `Low`. `Medium` is the default.
+Handler order is first determined by the handler's [`HandlerPriority`]. This is a enum with three states: `High`, `Medium`, and `Low`. `Medium` is the default.
 If handlers have the same priority, then we fall back on the order the handlers were added to the `World` to decide the order.
 
-[`Priority`]: crate::handler::Priority
+[`HandlerPriority`]: crate::handler::HandlerPriority
 
 ```rust
 use evenio::prelude::*;
