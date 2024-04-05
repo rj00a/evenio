@@ -1,12 +1,13 @@
 //! Data access checking.
 
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
-use core::fmt;
 
-use crate::bit_set::BitSet;
-use crate::bool_expr::BoolExpr;
+use ahash::RandomState;
+
 use crate::component::ComponentIdx;
-use crate::sparse::SparseIndex;
+use crate::map::IndexSet;
 
 /// Describes how a particular piece of data is accessed. Used to prevent
 /// aliased mutabliity.
@@ -22,15 +23,43 @@ pub enum Access {
 }
 
 impl Access {
-    /// Can `self` and `other` be active at the same time without causing
-    /// aliased mutability?
-    ///
-    /// This operation is symmetric.
+    /// Produces the access which is the superset of `self` and `other`. If the
+    /// two accesses are incompatible with each other, then `None` is returned
+    /// instead.
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use evenio::access::Access::*;
+    /// ```
+    /// use evenio::access::Access;
+    ///
+    /// assert_eq!(Access::Read.join(Access::Read), Some(Access::Read));
+    /// assert_eq!(Access::Read.join(Access::ReadWrite), None);
+    /// assert_eq!(
+    ///     Access::ReadWrite.join(Access::None),
+    ///     Some(Access::ReadWrite)
+    /// );
+    /// ```
+    #[must_use]
+    pub const fn join(self, other: Self) -> Option<Access> {
+        match (self, other) {
+            (Access::None, Access::None) => Some(Access::None),
+            (Access::Read | Access::ReadWrite, Access::None) => Some(self),
+            (Access::None, Access::Read | Access::ReadWrite) => Some(other),
+            (Access::Read, Access::Read) => Some(Access::Read),
+            (Access::Read | Access::ReadWrite, Access::ReadWrite)
+            | (Access::ReadWrite, Access::Read) => None,
+        }
+    }
+
+    /// Shorthand for `self.join(other).is_some()`. See [`join`] for more
+    /// information.
+    ///
+    /// [`join`]: Self::join
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::access::Access::{None, Read, ReadWrite};
     ///
     /// assert!(Read.is_compatible(Read));
     /// assert!(!Read.is_compatible(ReadWrite));
@@ -38,255 +67,229 @@ impl Access {
     /// ```
     #[must_use]
     pub const fn is_compatible(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Access::None, _)
-                | (Access::Read, Access::None | Access::Read)
-                | (Access::ReadWrite, Access::None)
-        )
-    }
-
-    /// Sets `self` equal to `other` if `self` is [compatible] with `other`.
-    /// Returns whether or not the assignment occurred.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use evenio::access::Access;
-    ///
-    /// let mut access = Access::None;
-    ///
-    /// assert!(access.set_if_compatible(Access::ReadWrite));
-    /// assert_eq!(access, Access::ReadWrite);
-    /// ```
-    ///
-    /// [compatible]: Access::is_compatible
-    #[must_use]
-    pub fn set_if_compatible(&mut self, other: Self) -> bool {
-        if self.is_compatible(other) {
-            *self = other;
-            true
-        } else {
-            false
-        }
+        self.join(other).is_some()
     }
 }
 
-/// Map from `T` to [`Access`] with sparse index keys. All keys map to
-/// [`Access::None`] by default.
-pub struct AccessMap<T> {
-    read: BitSet<T>,
-    write: BitSet<T>,
-}
-
-impl<T> AccessMap<T> {
-    /// Creates an empty access map.
-    pub fn new() -> Self {
-        Self {
-            read: BitSet::new(),
-            write: BitSet::new(),
-        }
-    }
-
-    /// Gets the access for `key`.
-    pub fn get(&self, key: T) -> Access
-    where
-        T: SparseIndex,
-    {
-        match (self.read.contains(key), self.write.contains(key)) {
-            (true, true) => Access::ReadWrite,
-            (true, false) => Access::Read,
-            (false, true) => unreachable!("read-write implies read"),
-            (false, false) => Access::None,
-        }
-    }
-
-    /// Sets the access for `key`.
-    pub fn set(&mut self, key: T, access: Access)
-    where
-        T: SparseIndex,
-    {
-        match access {
-            Access::None => {
-                self.read.remove(key);
-                self.write.remove(key);
-            }
-            Access::Read => {
-                self.read.insert(key);
-                self.write.remove(key);
-            }
-            Access::ReadWrite => {
-                self.read.insert(key);
-                self.write.insert(key);
-            }
-        }
-    }
-
-    /// Clears the access map. All keys will map to [`Access::None`].
-    pub fn clear(&mut self) {
-        self.read.clear();
-        self.write.clear();
-    }
-
-    /// Returns whether all values in `self` can be active at the same time as
-    /// all values in `other`.
-    pub fn is_compatible(&self, other: &Self) -> bool {
-        self.read.is_disjoint(&other.write) && self.write.is_disjoint(&other.read)
-    }
-
-    /// Computes the union between `self` and `other` and assigns the result to
-    /// `self`.
-    pub fn union_assign(&mut self, other: &Self) {
-        self.read |= &other.read;
-        self.write |= &other.write;
-    }
-}
-
-impl<T> Default for AccessMap<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> Clone for AccessMap<T> {
-    fn clone(&self) -> Self {
-        Self {
-            read: self.read.clone(),
-            write: self.write.clone(),
-        }
-    }
-}
-
-impl<T: SparseIndex> Ord for AccessMap<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.read
-            .cmp(&other.read)
-            .then_with(|| self.write.cmp(&other.write))
-    }
-}
-
-impl<T: SparseIndex> PartialOrd for AccessMap<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T: SparseIndex> PartialEq for AccessMap<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
-    }
-}
-
-impl<T: SparseIndex> Eq for AccessMap<T> {}
-
-impl<T> fmt::Debug for AccessMap<T>
-where
-    T: SparseIndex + fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccessMap")
-            .field("read", &self.read)
-            .field("write", &self.write)
-            .finish()
-    }
-}
-
-/// The combination of a [`BoolExpr`] with an [`AccessMap`].
+/// An expression describing the components accessed by a query.
 ///
-/// This is capable of precisely describing the components accessed by a query,
-/// e.g. `(&A, &mut B)`.
+/// This is used for checking that queries don't break aliasing rules, as well
+/// as determining which archetypes are matched by a query.
+#[must_use]
 #[derive(Clone, Debug)]
-pub struct ComponentAccessExpr {
-    /// The boolean expression part.
-    pub expr: BoolExpr<ComponentIdx>,
-    /// The access map part.
-    pub access: AccessMap<ComponentIdx>,
+pub struct ComponentAccess {
+    /// The set of cases that need to be considered for access checking.
+    ///
+    /// If any of the cases end up with a [`CaseAccess::Conflict`], then we know
+    /// the query is invalid.
+    ///
+    /// Example: The query `Or<&A, &mut A>` has three cases.
+    /// 1. `&A` left branch.
+    /// 2. `&mut A` right branch.
+    /// 3. `(&A, &mut A)` both branches. `&A` and `&mut A` are merged together
+    ///    to form a conflict in `A`.
+    ///
+    /// Since case (3) has a conflict, we know the whole query is invalid.
+    ///
+    /// This vec can be viewed as the "lists of lists" needed for
+    /// [Disjunctive Normal Form][dnf], but with some necessary modifications in
+    /// order to track access conflicts.
+    ///
+    /// [dnf]: https://en.wikipedia.org/wiki/Disjunctive_normal_form
+    cases: Vec<Case>,
 }
 
-#[allow(clippy::should_implement_trait)]
-impl ComponentAccessExpr {
-    /// Creates a new component access expr corresponding to `true` or `false`.
-    /// The access map is initialized empty.
-    pub fn new(b: bool) -> Self {
+/// Association list from component to access. Sorted in ascending order by
+/// [`ComponentIdx`].
+type Case = Vec<(ComponentIdx, CaseAccess)>;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum CaseAccess {
+    /// Archetype must have the component, but the component is not read or
+    /// written.
+    With,
+    /// Component is read.
+    Read,
+    /// Component is read and/or written.
+    ReadWrite,
+    /// Archetype must not have the component.
+    Not,
+    /// Access to component violates mutable aliasing.
+    Conflict,
+}
+
+impl ComponentAccess {
+    /// Create a new `ComponentAccess` which matches all archetypes but has no
+    /// access.
+    pub fn new_true() -> Self {
         Self {
-            expr: BoolExpr::new(b),
-            access: AccessMap::new(),
+            cases: vec![vec![]],
         }
     }
 
-    /// Creates a new component access expr which accesses a single component,
-    /// e.g. `&A` or `&mut A`.
-    pub fn with(component: ComponentIdx, access: Access) -> Self {
-        let mut map = AccessMap::new();
-        map.set(component, access);
+    /// Create a new `ComponentAccess` which matches no archetypes and has no
+    /// access.
+    pub fn new_false() -> Self {
+        Self { cases: vec![] }
+    }
 
+    /// Create a new `ComponentAccess` which accesses a single component.
+    pub fn var(idx: ComponentIdx, access: Access) -> Self {
         Self {
-            expr: BoolExpr::var(component),
-            access: map,
+            cases: vec![vec![(
+                idx,
+                match access {
+                    Access::None => CaseAccess::With,
+                    Access::Read => CaseAccess::Read,
+                    Access::ReadWrite => CaseAccess::ReadWrite,
+                },
+            )]],
         }
     }
 
-    /// Creates a new component access expr which does not access a single
-    /// component, e.g. `Not<A>`.
-    pub fn without(component: ComponentIdx) -> Self {
+    /// Logically AND two access expressions together.i
+    pub fn and(&self, rhs: &Self) -> Self {
+        let mut cases = vec![];
+
+        for right in &rhs.cases {
+            'next_case: for left in &self.cases {
+                let mut case = vec![];
+                let mut il = 0;
+                let mut ir = 0;
+
+                loop {
+                    match (left.get(il), right.get(ir)) {
+                        (None, None) => break,
+                        (None, Some(_)) => {
+                            case.extend(right[ir..].iter().copied());
+                            break;
+                        }
+                        (Some(_), None) => {
+                            case.extend(left[il..].iter().copied());
+                            break;
+                        }
+                        (Some(&(left_idx, left_access)), Some(&(right_idx, right_access))) => {
+                            match left_idx.cmp(&right_idx) {
+                                Ordering::Less => {
+                                    il += 1;
+                                    case.push((left_idx, left_access));
+                                }
+                                Ordering::Equal => {
+                                    il += 1;
+                                    ir += 1;
+                                    use CaseAccess::*;
+                                    let combined_access = match (left_access, right_access) {
+                                        (With | Read, Read) | (Read, With) => Read,
+                                        (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
+                                        (With, With) => With,
+                                        (Not, Not) => Not,
+                                        (Not, With | Read | ReadWrite | Conflict)
+                                        | (With | Read | ReadWrite | Conflict, Not) => {
+                                            // Skip this case since both accessing and not accessing
+                                            // the same component is impossible.
+                                            continue 'next_case;
+                                        }
+                                        (Conflict, With | Read | ReadWrite | Conflict)
+                                        | (With | Read | ReadWrite, Conflict)
+                                        | (Read | ReadWrite, ReadWrite)
+                                        | (ReadWrite, Read) => Conflict,
+                                    };
+                                    case.push((left_idx, combined_access));
+                                }
+                                Ordering::Greater => {
+                                    ir += 1;
+                                    case.push((right_idx, right_access));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                cases.push(case);
+            }
+        }
+
+        Self { cases }
+    }
+
+    /// Logically OR two access expressions together.
+    pub fn or(&self, rhs: &Self) -> Self {
         Self {
-            expr: BoolExpr::not_var(component),
-            access: AccessMap::new(),
+            cases: self.cases.iter().chain(rhs.cases.iter()).cloned().collect(),
         }
     }
 
-    /// Checks if `self` can be active as the same time as `other` without
-    /// causing access conflicts.
-    pub fn is_compatible(&self, other: &Self) -> bool {
-        if self.access.is_compatible(&other.access) {
-            return true;
+    /// Inverts the accesses according to De Morgan's laws.
+    ///
+    /// This that this is a lossy operation because read/write information is
+    /// lost.
+    pub fn not(&self) -> Self {
+        self.cases
+            .iter()
+            .map(|case| Self {
+                cases: case
+                    .iter()
+                    .map(|&(idx, access)| {
+                        let new_access = match access {
+                            CaseAccess::With => CaseAccess::Not,
+                            CaseAccess::Read => CaseAccess::Not,
+                            CaseAccess::ReadWrite => CaseAccess::Not,
+                            CaseAccess::Not => CaseAccess::With,
+                            CaseAccess::Conflict => CaseAccess::Not,
+                        };
+
+                        vec![(idx, new_access)]
+                    })
+                    .collect(),
+            })
+            .fold(Self::new_true(), |acc, item| acc.and(&item))
+    }
+
+    /// Clears all component access without altering the matched archetypes.
+    /// Equivalent to `self = self.not().not()`.
+    pub fn clear_access(&mut self) {
+        for case in &mut self.cases {
+            for (_, access) in case {
+                *access = match *access {
+                    CaseAccess::With => CaseAccess::With,
+                    CaseAccess::Read => CaseAccess::With,
+                    CaseAccess::ReadWrite => CaseAccess::With,
+                    CaseAccess::Not => CaseAccess::Not,
+                    CaseAccess::Conflict => CaseAccess::With,
+                }
+            }
+        }
+    }
+
+    /// Returns the set of all conflicting components.
+    pub(crate) fn collect_conflicts(&self) -> IndexSet<ComponentIdx> {
+        let mut res = IndexSet::with_hasher(RandomState::new());
+
+        for case in &self.cases {
+            for &(idx, access) in case {
+                if access == CaseAccess::Conflict {
+                    res.insert(idx);
+                }
+            }
         }
 
-        // The component accesses of `self` and `other` are incompatible. However, if
-        // the accesses don't overlap, then there's no incompatibility.
-        //
-        // For instance, `(&mut A, &B)` and `(&mut A, Not<&B>)` are incompatible with
-        // respect to `A`, but are disjoint so there's no overlap.
-        self.expr.is_disjoint(&other.expr)
+        res
     }
 
-    /// ANDs two access exprs together. Returns `Err` if the two exprs are
-    /// incompatible.
-    pub fn and(mut self, other: &Self) -> Result<Self, Self> {
-        if !self.is_compatible(other) {
-            return Err(self);
-        }
-
-        self.access.union_assign(&other.access);
-        self.expr = self.expr.and(&other.expr);
-        Ok(self)
+    pub(crate) fn matches_archetype<F>(&self, mut f: F) -> bool
+    where
+        F: FnMut(ComponentIdx) -> bool,
+    {
+        self.cases
+            .iter()
+            .any(|case| case.iter().all(|(idx, _)| f(*idx)))
     }
+}
 
-    /// ORs two access exprs together. Returns `Err` if the two exprs are
-    /// incompatible.
-    pub fn or(mut self, other: &Self) -> Result<Self, Self> {
-        if !self.is_compatible(other) {
-            return Err(self);
-        }
-
-        self.access.union_assign(&other.access);
-        self.expr = self.expr.or(&other.expr);
-        Ok(self)
-    }
-
-    /// Performs a logical NOT on this expr. The access map is cleared.
-    pub fn not(mut self) -> Self {
-        self.access.clear();
-
-        self.expr = self.expr.not();
-        self
-    }
-
-    /// XORs two access exprs together.
-    pub fn xor(mut self, other: &Self) -> Self {
-        self.access.union_assign(&other.access);
-        self.expr = self.expr.xor(&other.expr);
-        self
+/// Equivalent to [`Self::new_false`].
+impl Default for ComponentAccess {
+    fn default() -> Self {
+        Self::new_false()
     }
 }
 
@@ -294,59 +297,49 @@ impl ComponentAccessExpr {
 mod tests {
     use super::*;
 
-    type Cae = ComponentAccessExpr;
+    type Ca = ComponentAccess;
+
     const A: ComponentIdx = ComponentIdx(0);
     const B: ComponentIdx = ComponentIdx(1);
     const C: ComponentIdx = ComponentIdx(2);
 
-    #[test]
-    fn t0() {
-        let expr = Cae::with(A, Access::ReadWrite);
-        let expr2 = expr.clone();
-        let expr3 = Cae::with(A, Access::Read);
+    #[track_caller]
+    fn check(ca: Ca, it: impl IntoIterator<Item = ComponentIdx>) {
+        assert_eq!(
+            ca.collect_conflicts(),
+            IndexSet::<ComponentIdx>::from_iter(it)
+        )
+    }
 
-        assert!(!expr.is_compatible(&expr2));
-        assert!(!expr.is_compatible(&expr3));
+    fn a(access: Access) -> Ca {
+        Ca::var(A, access)
+    }
+
+    fn b(access: Access) -> Ca {
+        Ca::var(B, access)
+    }
+
+    fn c(access: Access) -> Ca {
+        Ca::var(C, access)
     }
 
     #[test]
-    fn t1() {
-        let expr = Cae::with(A, Access::Read)
-            .and(&Cae::with(B, Access::ReadWrite))
-            .unwrap();
+    fn collect_conflicts() {
+        use Access::*;
 
-        let expr2 = Cae::with(A, Access::Read)
-            .and(&Cae::with(B, Access::None))
-            .unwrap()
-            .and(&Cae::with(C, Access::ReadWrite))
-            .unwrap();
+        check(a(Read).and(&a(Read)), []);
+        check(a(ReadWrite).and(&a(ReadWrite)), [A]);
+        check(a(Read).and(&a(ReadWrite)).and(&a(None)), [A]);
 
-        assert!(expr.is_compatible(&expr2));
-    }
+        check(
+            a(ReadWrite).and(&b(None)).and(&a(Read).and(&b(None).not())),
+            [],
+        );
 
-    #[test]
-    fn t2() {
-        let expr = Cae::with(A, Access::ReadWrite)
-            .and(&Cae::with(B, Access::None))
-            .unwrap();
-
-        let expr2 = Cae::with(A, Access::ReadWrite)
-            .and(&Cae::without(B))
-            .unwrap();
-
-        assert!(expr.is_compatible(&expr2));
-    }
-
-    #[test]
-    fn t3() {
-        let expr = Cae::with(A, Access::ReadWrite)
-            .and(&Cae::with(B, Access::None))
-            .unwrap()
-            .and(&Cae::without(C))
-            .unwrap();
-
-        let expr2 = Cae::with(A, Access::None);
-
-        assert!(expr.is_compatible(&expr2));
+        // (Xor<(&A, &B), (&B, &C)>, &mut B)
+        let left = a(Read).and(&b(Read));
+        let right = b(Read).and(&c(Read));
+        let xor = left.and(&right.not()).or(&right.and(&left.not()));
+        check(xor.and(&b(ReadWrite)), [B]);
     }
 }

@@ -14,7 +14,7 @@ use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventPtr};
-use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
+use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, IndexSet, TypeIdMap};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
@@ -175,7 +175,7 @@ unsafe impl HandlerParam for &'_ Components {
 
     type Item<'a> = &'a Components;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 

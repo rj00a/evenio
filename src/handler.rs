@@ -16,12 +16,11 @@ use core::{any, fmt};
 use evenio_macros::all_tuples;
 pub use evenio_macros::HandlerParam;
 
-use crate::access::{Access, ComponentAccessExpr};
+use crate::access::{Access, ComponentAccess};
 use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
 use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
-use crate::bool_expr::BoolExpr;
 use crate::component::ComponentIdx;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
@@ -229,7 +228,7 @@ unsafe impl HandlerParam for &'_ Handlers {
 
     type Item<'a> = &'a Handlers;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 
@@ -313,13 +312,14 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) order: u64,
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
-    pub(crate) targeted_event_expr: BoolExpr<ComponentIdx>,
+    pub(crate) targeted_event_component_access: ComponentAccess,
     pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
-    pub(crate) component_access: ComponentAccessExpr,
+    pub(crate) component_access: ComponentAccess,
+    pub(crate) archetype_filter: ComponentAccess,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
-    pub(crate) priority: Priority,
+    pub(crate) priority: HandlerPriority,
     // SAFETY: There is intentionally no public accessor for this field as it would lead to mutable
     // aliasing.
     pub(crate) handler: H,
@@ -370,19 +370,31 @@ impl HandlerInfo {
 
     /// Gets the expression describing the handler's targeted event query, or
     /// `None` if this handler is not targeted.
-    pub fn targeted_event_expr(&self) -> Option<&BoolExpr<ComponentIdx>> {
+    pub fn targeted_event_component_access(&self) -> Option<&ComponentAccess> {
         self.received_event()
             .is_targeted()
-            .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_expr })
+            .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_component_access })
     }
 
     /// Returns the set of untargeted events this handler sends.
-    pub fn sent_untargeted_events(&self) -> &BitSet<UntargetedEventIdx> {
+    pub fn sent_untargeted_events(
+        &self,
+    ) -> impl Iterator<Item = UntargetedEventIdx> + Clone + fmt::Debug + '_ {
+        self.sent_untargeted_events_bitset().iter()
+    }
+
+    pub(crate) fn sent_untargeted_events_bitset(&self) -> &BitSet<UntargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
 
     /// Returns the set of targeted events this handler sends.
-    pub fn sent_targeted_events(&self) -> &BitSet<TargetedEventIdx> {
+    pub fn sent_targeted_events(
+        &self,
+    ) -> impl Iterator<Item = TargetedEventIdx> + Clone + fmt::Debug + '_ {
+        self.sent_targeted_events_bitset().iter()
+    }
+
+    pub(crate) fn sent_targeted_events_bitset(&self) -> &BitSet<TargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
 
@@ -392,20 +404,32 @@ impl HandlerInfo {
     }
 
     /// Gets the expression describing this handler's access
-    pub fn component_access(&self) -> &ComponentAccessExpr {
+    pub fn component_access(&self) -> &ComponentAccess {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
+    }
+
+    /// Returns the [`ComponentAccess`] used for matching archetypes.
+    pub fn archetype_filter(&self) -> &ComponentAccess {
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).archetype_filter }
     }
 
     /// Gets the set of components referenced by this handler.
     ///
     /// Referenced components are components used by the handler in any way.
     /// Used for cleanup when removing components.
-    pub fn referenced_components(&self) -> &BitSet<ComponentIdx> {
-        unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }
+    pub fn referenced_components(
+        &self,
+    ) -> impl Iterator<Item = ComponentIdx> + Clone + fmt::Debug + '_ {
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }.iter()
     }
 
-    /// Gets the [`Priority`] of this handler.
-    pub fn priority(&self) -> Priority {
+    /// Does this handler reference the given component?
+    pub fn references_component(&self, idx: ComponentIdx) -> bool {
+        unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }.contains(idx)
+    }
+
+    /// Gets the [`HandlerPriority`] of this handler.
+    pub fn priority(&self) -> HandlerPriority {
         unsafe { (*AliasedBox::as_ptr(&self.0)).priority }
     }
 
@@ -427,11 +451,12 @@ impl fmt::Debug for HandlerInfo {
             .field("order", &self.order())
             .field("received_event", &self.received_event())
             .field("received_event_access", &self.received_event_access())
-            .field("targeted_event_expr", &self.targeted_event_expr())
+            .field("targeted_event_component_access", &self.targeted_event_component_access())
             .field("sent_untargeted_events", &self.sent_untargeted_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
             .field("component_access", &self.component_access())
+            .field("archetype_filter", &self.archetype_filter())
             .field("referenced_components", &self.referenced_components())
             .field("priority", &self.priority())
             // Don't access the `handler` field.
@@ -457,20 +482,20 @@ impl HandlerList {
         }
     }
 
-    pub(crate) fn insert(&mut self, ptr: HandlerInfoPtr, priority: Priority) {
+    pub(crate) fn insert(&mut self, ptr: HandlerInfoPtr, priority: HandlerPriority) {
         assert!(self.entries.len() < u32::MAX as usize);
 
         match priority {
-            Priority::High => {
+            HandlerPriority::High => {
                 self.entries.insert(self.before as usize, ptr);
                 self.before += 1;
                 self.after += 1;
             }
-            Priority::Medium => {
+            HandlerPriority::Medium => {
                 self.entries.insert(self.after as usize, ptr);
                 self.after += 1;
             }
-            Priority::Low => {
+            HandlerPriority::Low => {
                 self.entries.push(ptr);
             }
         }
@@ -585,15 +610,15 @@ pub trait IntoHandler<Marker>: Sized {
     }
 
     /// Returns a wrapper which sets the priority of this handler to
-    /// [`Priority::High`].
-    fn high(self) -> High<Self::Handler> {
-        High(self.into_handler())
+    /// [`HandlerPriority::High`].
+    fn high(self) -> HighPriority<Self::Handler> {
+        HighPriority(self.into_handler())
     }
 
     /// Returns a wrapper which sets the priority of this handler to
-    /// [`Priority::Low`].
-    fn low(self) -> Low<Self::Handler> {
-        Low(self.into_handler())
+    /// [`HandlerPriority::Low`].
+    fn low(self) -> LowPriority<Self::Handler> {
+        LowPriority(self.into_handler())
     }
 }
 
@@ -634,7 +659,7 @@ impl<H: Handler> Handler for NoTypeId<H> {
         self.0.name()
     }
 
-    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+    fn init(&mut self, world: &mut World, config: &mut HandlerConfig) -> Result<(), InitError> {
         self.0.init(world, config)
     }
 
@@ -659,9 +684,9 @@ impl<H: Handler> Handler for NoTypeId<H> {
 
 /// The wrapper handler returned by [`IntoHandler::high`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct High<S>(pub S);
+pub struct HighPriority<S>(pub S);
 
-impl<H: Handler> Handler for High<H> {
+impl<H: Handler> Handler for HighPriority<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -670,9 +695,9 @@ impl<H: Handler> Handler for High<H> {
         self.0.name()
     }
 
-    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+    fn init(&mut self, world: &mut World, config: &mut HandlerConfig) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::High;
+        config.set_priority(HandlerPriority::High);
         res
     }
 
@@ -697,9 +722,9 @@ impl<H: Handler> Handler for High<H> {
 
 /// The wrapper handler returned by [`IntoHandler::low`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
-pub struct Low<S>(pub S);
+pub struct LowPriority<S>(pub S);
 
-impl<H: Handler> Handler for Low<H> {
+impl<H: Handler> Handler for LowPriority<H> {
     fn type_id(&self) -> Option<TypeId> {
         self.0.type_id()
     }
@@ -708,9 +733,9 @@ impl<H: Handler> Handler for Low<H> {
         self.0.name()
     }
 
-    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+    fn init(&mut self, world: &mut World, config: &mut HandlerConfig) -> Result<(), InitError> {
         let res = self.0.init(world, config);
-        config.priority = Priority::Low;
+        config.set_priority(HandlerPriority::Low);
         res
     }
 
@@ -750,7 +775,7 @@ pub trait Handler: Send + Sync + 'static {
     fn name(&self) -> Cow<'static, str>;
 
     /// Initializes the handler. Returns [`InitError`] on failure.
-    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError>;
+    fn init(&mut self, world: &mut World, config: &mut HandlerConfig) -> Result<(), InitError>;
 
     /// Execute the handler by passing in the handler's metadata, a pointer to
     /// the received event of the configured type, the entity location of
@@ -763,12 +788,14 @@ pub trait Handler: Send + Sync + 'static {
     /// - `info` must be the correct information for this handler.
     /// - `event_ptr` must point to the correct type of event configured by this
     ///   handler in [`init`].
-    /// - `target_location` must be a valid location to an entity matching
-    ///   [`Config::targeted_event_expr`], unless the event is not targeted.
+    /// - `target_location` must be a valid location to an entity matching the
+    ///   component access set by [`set_targeted_event_component_access`],
+    ///   unless the event is not targeted.
     /// - `world` must have permission to access all data configured by this
     ///   handler in [`init`].
     ///
     /// [`init`]: Self::init
+    /// [`set_targeted_event_component_access`]: HandlerConfig::set_targeted_event_component_access
     unsafe fn run(
         &mut self,
         info: &HandlerInfo,
@@ -819,13 +846,117 @@ impl fmt::Display for InitError {
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for InitError {}
 
+/// The configuration of a handler. Accessible during handler initialization.
+#[derive(Clone, Default, Debug)]
+pub struct HandlerConfig {
+    pub(crate) priority: HandlerPriority,
+    pub(crate) received_event: ReceivedEventId,
+    pub(crate) received_event_access: MaybeInvalidAccess,
+    pub(crate) targeted_event_component_access: ComponentAccess,
+    pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
+    pub(crate) event_queue_access: MaybeInvalidAccess,
+    pub(crate) component_accesses: Vec<ComponentAccess>,
+    pub(crate) referenced_components: BitSet<ComponentIdx>,
+}
+
+impl HandlerConfig {
+    /// Creates the default configuration.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Overwrites the [`HandlerPriority`] of this handler.
+    ///
+    /// Handlers default to [`HandlerPriority::Medium`].
+    pub fn set_priority(&mut self, priority: HandlerPriority) {
+        self.priority = priority;
+    }
+
+    /// Sets the event sent by this handler. Causes an initialization error
+    /// if a different event was previously set.
+    pub fn set_received_event(&mut self, event: EventId) {
+        self.received_event = match self.received_event {
+            ReceivedEventId::None => ReceivedEventId::Ok(event),
+            ReceivedEventId::Ok(old_event) => {
+                if old_event == event {
+                    ReceivedEventId::Ok(event)
+                } else {
+                    ReceivedEventId::Invalid
+                }
+            }
+            ReceivedEventId::Invalid => ReceivedEventId::Invalid,
+        };
+    }
+
+    /// Sets the [`Access`]
+    pub fn set_received_event_access(&mut self, access: Access) {
+        self.received_event_access = match self.received_event_access {
+            MaybeInvalidAccess::Ok(old_access) => access
+                .join(old_access)
+                .map_or(MaybeInvalidAccess::Invalid, MaybeInvalidAccess::Ok),
+            MaybeInvalidAccess::Invalid => MaybeInvalidAccess::Invalid,
+        };
+    }
+
+    /// Sets the [`ComponentAccess`] describing the data accessed on the target
+    /// of the event received by this handler. This should be a subset of the
+    /// component access given to [`Self::push_component_access`].
+    ///
+    /// Has no effect if the received event is untargeted. Defaults to
+    /// [`ComponentAccess::new_false`].
+    pub fn set_targeted_event_component_access(&mut self, component_access: ComponentAccess) {
+        self.targeted_event_component_access = component_access;
+    }
+
+    /// Inserts an event type to the set of event types this handler is able to
+    /// send.
+    ///
+    /// Returns whether the given event was already configured to be sent.
+    pub fn insert_sent_event(&mut self, event: EventId) -> bool {
+        match event.index() {
+            EventIdx::Targeted(e) => self.sent_targeted_events.insert(e),
+            EventIdx::Untargeted(e) => self.sent_untargeted_events.insert(e),
+        }
+    }
+
+    /// Sets the handler's access to the event queue. Produces a configuration
+    /// failure if the given access conflicts with the previously set access.
+    pub fn set_event_queue_access(&mut self, access: Access) {
+        self.event_queue_access = match self.event_queue_access {
+            MaybeInvalidAccess::Ok(old_access) => access
+                .join(old_access)
+                .map_or(MaybeInvalidAccess::Invalid, MaybeInvalidAccess::Ok),
+            MaybeInvalidAccess::Invalid => MaybeInvalidAccess::Invalid,
+        };
+    }
+
+    /// Pushes a [`ComponentAccess`] to the list of [`ComponentAccess`] for this
+    /// handler. The conjunction of the accesses determines the component access
+    /// of the whole handler, while the disjunction determines which archetypes
+    /// are matched.
+    ///
+    /// Generally, this means that there should be one [`ComponentAccess`]
+    /// pushed per handler param that accesses components.
+    pub fn push_component_access(&mut self, component_access: ComponentAccess) {
+        self.component_accesses.push(component_access);
+    }
+
+    /// Inserts a component into the set of components referenced by this
+    /// handler. The set is used for cleanup when a component type is removed
+    /// from the world.
+    pub fn insert_referenced_components(&mut self, comp: ComponentIdx) {
+        self.referenced_components.insert(comp);
+    }
+}
+
 /// The priority of a handler relative to other handlers that handle the same
 /// event.
 ///
 /// If multiple handlers have the same priority, then the order they were added
 /// to the [`World`] is used as a fallback.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub enum Priority {
+pub enum HandlerPriority {
     /// The handler runs before other handlers.
     High,
     /// The default handler priority.
@@ -835,60 +966,23 @@ pub enum Priority {
     Low,
 }
 
-/// The Configuration of a handler. Accessible during handler initialization.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct Config {
-    /// The priority of this handler.
-    pub priority: Priority,
-    /// The event type to be received by the handler.
-    ///
-    /// Defaults to `None`, but must be assigned to `Some` before configuration
-    /// is finished.
-    pub received_event: Option<EventId>,
-    /// Access to the received event value.
-    pub received_event_access: Access,
-    /// The targeted event filter. This should be a subset of
-    /// [`Self::component_access`].
-    pub targeted_event_expr: BoolExpr<ComponentIdx>,
-    /// The set of untargeted events sent by the handler.
-    pub sent_untargeted_events: BitSet<UntargetedEventIdx>,
-    /// The set of targeted events sent by the handler.
-    pub sent_targeted_events: BitSet<TargetedEventIdx>,
-    /// Access to the queue of events.
-    pub event_queue_access: Access,
-    /// Expression describing the components accessed by the handler.
-    pub component_access: ComponentAccessExpr,
-    /// The set of components referenced by this handler. Used for handler
-    /// cleanup when a component is removed.
-    ///
-    /// This is a superset of the components accessed by this handler. Consider
-    /// the query `Has<&C>`: `Has` does not access `C`, but it still makes use
-    /// of `C`'s component index, so the whole handler must be removed when
-    /// component `C` is removed.
-    pub referenced_components: BitSet<ComponentIdx>,
+#[derive(Copy, Clone, Default, Debug)]
+pub(crate) enum ReceivedEventId {
+    #[default]
+    None,
+    Ok(EventId),
+    Invalid,
 }
 
-impl Config {
-    /// Creates the default configuration.
-    pub fn new() -> Self {
-        Self {
-            priority: Default::default(),
-            received_event: Default::default(),
-            received_event_access: Default::default(),
-            targeted_event_expr: BoolExpr::new(false),
-            sent_untargeted_events: Default::default(),
-            sent_targeted_events: Default::default(),
-            event_queue_access: Default::default(),
-            component_access: ComponentAccessExpr::new(false),
-            referenced_components: Default::default(),
-        }
-    }
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum MaybeInvalidAccess {
+    Ok(Access),
+    Invalid,
 }
 
-impl Default for Config {
+impl Default for MaybeInvalidAccess {
     fn default() -> Self {
-        Self::new()
+        Self::Ok(Access::default())
     }
 }
 
@@ -936,11 +1030,11 @@ pub unsafe trait HandlerParam {
     /// of `Self` but with the lifetime of `'a`.
     type Item<'a>;
 
-    /// Initializes the handler using the input [`World`] and [`Config`].
+    /// Initializes the handler using the input [`World`] and [`HandlerConfig`].
     ///
     /// If initialization fails, [`InitError`] is returned and the handler is
     /// not considered initialized.
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError>;
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError>;
 
     /// Obtains a new instance of the handler parameter.
     ///
@@ -974,7 +1068,7 @@ unsafe impl<T> HandlerParam for PhantomData<T> {
 
     type Item<'a> = Self;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 
@@ -1002,7 +1096,7 @@ macro_rules! impl_handler_param_tuple {
             type Item<'a> = ($($P::Item<'a>,)*);
 
             #[inline]
-            fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+            fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
                 Ok((
                     $(
                         $P::init(world, config)?,
@@ -1095,7 +1189,7 @@ where
         Cow::Borrowed(any::type_name::<F>())
     }
 
-    fn init(&mut self, world: &mut World, config: &mut Config) -> Result<(), InitError> {
+    fn init(&mut self, world: &mut World, config: &mut HandlerConfig) -> Result<(), InitError> {
         self.state = Some(<F::Param as HandlerParam>::init(world, config)?);
         Ok(())
     }
@@ -1221,7 +1315,7 @@ unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
 
     type Item<'a> = Local<'a, T>;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(Exclusive::new(T::default()))
     }
 
@@ -1268,7 +1362,7 @@ unsafe impl HandlerParam for &'_ HandlerInfo {
 
     type Item<'a> = &'a HandlerInfo;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 
@@ -1294,7 +1388,7 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::Mutex<P> {
 
     type Item<'a> = std::sync::Mutex<P::Item<'a>>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         P::init(world, config)
     }
 
@@ -1324,7 +1418,7 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::RwLock<P> {
 
     type Item<'a> = std::sync::RwLock<P::Item<'a>>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         P::init(world, config)
     }
 
@@ -1440,6 +1534,7 @@ mod tests {
         struct E;
 
         world.add_handler(|_: Receiver<E>, info: &HandlerInfo| {
+            // For Miri.
             let _foo = info.name();
             let _bar = info.received_event();
             let _baz = info.referenced_components();

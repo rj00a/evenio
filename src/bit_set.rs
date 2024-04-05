@@ -5,14 +5,14 @@ use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
-use core::ops::{BitOr, BitOrAssign};
+use core::ops::{BitOr, BitOrAssign, BitXor, BitXorAssign};
 use core::{any, fmt};
 
 use crate::assert::GetDebugChecked;
 use crate::sparse::SparseIndex;
 
 /// A set data structure backed by a vector of bits.
-pub struct BitSet<T = usize> {
+pub(crate) struct BitSet<T = usize> {
     blocks: Vec<Block>,
     _marker: PhantomData<T>,
 }
@@ -30,9 +30,10 @@ type Block = usize;
 /// Number of bits in a block.
 const BITS: usize = Block::BITS as usize;
 
+#[allow(dead_code)]
 impl<T> BitSet<T> {
     /// Create a new, empty bit set.
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             blocks: vec![],
             _marker: PhantomData,
@@ -40,7 +41,7 @@ impl<T> BitSet<T> {
     }
 
     /// Clears the set, removing all elements.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.blocks.clear();
     }
 
@@ -64,7 +65,7 @@ impl<T> BitSet<T> {
 
     /// Returns `true` if `self` has no elements in common with `other`.
     #[must_use]
-    pub fn is_disjoint(&self, other: &Self) -> bool {
+    pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
         self.blocks
             .iter()
             .zip(other.blocks.iter())
@@ -73,7 +74,7 @@ impl<T> BitSet<T> {
 
     /// Returns the number of elements in the set.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.blocks
             .iter()
             .map(|block| block.count_ones() as usize)
@@ -82,16 +83,17 @@ impl<T> BitSet<T> {
 
     /// Returns `true` if the set contains no elements.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.blocks.iter().all(|&block| block == 0)
     }
 }
 
+#[allow(dead_code)]
 impl<T: SparseIndex> BitSet<T> {
     /// Adds a value to the set. Returns whether the value was newly inserted.
     #[track_caller]
     #[inline]
-    pub fn insert(&mut self, value: T) -> bool {
+    pub(crate) fn insert(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -108,7 +110,7 @@ impl<T: SparseIndex> BitSet<T> {
     /// Removes a value from the set. Returns whether such an element was
     /// present.
     #[inline]
-    pub fn remove(&mut self, value: T) -> bool {
+    pub(crate) fn remove(&mut self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -126,7 +128,7 @@ impl<T: SparseIndex> BitSet<T> {
 
     /// Returns `true` if the set contains an element equal to the value.
     #[must_use]
-    pub fn contains(&self, value: T) -> bool {
+    pub(crate) fn contains(&self, value: T) -> bool {
         let idx = value.index();
 
         let (block, bit) = div_rem(idx, BITS);
@@ -137,7 +139,7 @@ impl<T: SparseIndex> BitSet<T> {
     }
 
     /// Returns an iterator over the element in the set in ascending order.
-    pub fn iter(&self) -> Iter<T> {
+    pub(crate) fn iter(&self) -> Iter<T> {
         Iter {
             bits: self.blocks.first().copied().unwrap_or(0),
             block_idx: 0,
@@ -147,7 +149,7 @@ impl<T: SparseIndex> BitSet<T> {
     }
 
     /// Shrinks the capacity of the set as much as possible.
-    pub fn shrink_to_fit(&mut self) {
+    pub(crate) fn shrink_to_fit(&mut self) {
         while let Some(&last) = self.blocks.last() {
             if last != 0 {
                 // There are bits in this block.
@@ -162,12 +164,12 @@ impl<T: SparseIndex> BitSet<T> {
 }
 
 impl<T> BitOrAssign<&Self> for BitSet<T> {
-    fn bitor_assign(&mut self, other: &Self) {
-        if self.blocks.len() < other.blocks.len() {
-            self.blocks.resize(other.blocks.len(), 0);
+    fn bitor_assign(&mut self, rhs: &Self) {
+        if self.blocks.len() < rhs.blocks.len() {
+            self.blocks.resize(rhs.blocks.len(), 0);
         }
 
-        for (a, b) in self.blocks.iter_mut().zip(other.blocks.iter()) {
+        for (a, b) in self.blocks.iter_mut().zip(rhs.blocks.iter()) {
             *a |= *b;
         }
     }
@@ -176,8 +178,29 @@ impl<T> BitOrAssign<&Self> for BitSet<T> {
 impl<T> BitOr<&Self> for BitSet<T> {
     type Output = Self;
 
-    fn bitor(mut self, other: &Self) -> Self::Output {
-        self |= other;
+    fn bitor(mut self, rhs: &Self) -> Self::Output {
+        self |= rhs;
+        self
+    }
+}
+
+impl<T> BitXorAssign<&Self> for BitSet<T> {
+    fn bitxor_assign(&mut self, rhs: &Self) {
+        if self.blocks.len() < rhs.blocks.len() {
+            self.blocks.resize(rhs.blocks.len(), 0);
+        }
+
+        for (a, b) in self.blocks.iter_mut().zip(rhs.blocks.iter()) {
+            *a ^= *b;
+        }
+    }
+}
+
+impl<T> BitXor<&Self> for BitSet<T> {
+    type Output = Self;
+
+    fn bitxor(mut self, rhs: &Self) -> Self::Output {
+        self ^= rhs;
         self
     }
 }
@@ -230,11 +253,22 @@ where
 
 /// An iterator over the items in a [`BitSet`].
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct Iter<'a, T = usize> {
+pub(crate) struct Iter<'a, T = usize> {
     bits: Block,
     block_idx: usize,
     blocks: &'a [Block],
     _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for Iter<'_, T> {
+    fn clone(&self) -> Self {
+        Self {
+            bits: self.bits,
+            block_idx: self.block_idx,
+            blocks: self.blocks,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {

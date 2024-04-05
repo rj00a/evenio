@@ -4,7 +4,7 @@ use core::ops::Index;
 
 use crate::archetype::{ArchetypeIdx, ArchetypeRow};
 use crate::event::EventPtr;
-use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
+use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::prelude::World;
 use crate::slot_map::{Key, NextKeyIter, SlotMap};
 use crate::world::UnsafeWorldCell;
@@ -110,7 +110,7 @@ unsafe impl HandlerParam for &'_ Entities {
 
     type Item<'a> = &'a Entities;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 

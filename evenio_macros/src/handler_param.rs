@@ -122,7 +122,7 @@ pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
 
             fn init(
                 world: &mut ::evenio::world::World,
-                config: &mut ::evenio::handler::Config,
+                config: &mut ::evenio::handler::HandlerConfig,
             ) -> ::core::result::Result<Self::State, ::evenio::handler::InitError>
             {
                 <#tuple_ty as ::evenio::handler::HandlerParam>::init(world, config)

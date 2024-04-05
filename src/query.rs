@@ -1,19 +1,18 @@
 //! Type-level DSL for retrieving data from entities.
 
-use alloc::format;
+use core::fmt;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::{any, fmt};
 
 use evenio_macros::all_tuples;
 pub use evenio_macros::Query;
 
-use crate::access::{Access, ComponentAccessExpr};
+use crate::access::{Access, ComponentAccess};
 use crate::archetype::{Archetype, ArchetypeRow};
 use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{Component, ComponentIdx};
 use crate::entity::EntityId;
-use crate::handler::{Config, InitError};
+use crate::handler::{HandlerConfig, InitError};
 use crate::world::World;
 
 /// Types that can be fetched from an entity.
@@ -72,8 +71,8 @@ pub unsafe trait Query {
     /// accessed by the query and a new instance of [`Self::State`].
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError>;
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError>;
 
     /// Returns a new [`Self::State`] instance.
     fn new_state(world: &mut World) -> Self::State;
@@ -86,7 +85,7 @@ pub unsafe trait Query {
     /// # Safety
     /// - `row` must be in bounds.
     /// - Must have the appropriate component access permissions described by
-    ///   the [`ComponentAccessExpr`] returned by [`init`].
+    ///   the [`ComponentAccess`] returned by [`init`].
     /// - The lifetime of the item is chosen by the caller. The item must not
     ///   outlive the data it references.
     ///
@@ -115,13 +114,13 @@ unsafe impl<C: Component> Query for &'_ C {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(idx, Access::Read);
+        let ca = ComponentAccess::var(idx, Access::Read);
         config.referenced_components.insert(idx);
 
-        Ok((expr, idx))
+        Ok((ca, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -148,15 +147,15 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
         let () = AssertMutable::<C>::COMPONENT;
 
         let idx = Self::new_state(world);
-        let expr = ComponentAccessExpr::with(idx, Access::ReadWrite);
+        let ca = ComponentAccess::var(idx, Access::ReadWrite);
         config.referenced_components.insert(idx);
 
-        Ok((expr, idx))
+        Ok((ca, idx))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -182,30 +181,19 @@ macro_rules! impl_query_tuple {
 
             type State = ($($Q::State,)*);
 
+            #[allow(unused_mut)]
             fn init(
                 world: &mut World,
-                config: &mut Config
-            ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-                #![allow(unused_variables)]
-
-                #[allow(unused_mut)]
-                let mut res = ComponentAccessExpr::new(true);
+                config: &mut HandlerConfig
+            ) -> Result<(ComponentAccess, Self::State), InitError> {
+                let mut ca = ComponentAccess::new_true();
 
                 $(
-                    let (expr, $q) = $Q::init(world, config)?;
-
-                    let Ok(expr) = res.and(&expr) else {
-                        return Err(InitError(format!(
-                            "conflicting access in tuple `{}`: tuple element `{}` conflicts with previous elements",
-                            any::type_name::<Self>(),
-                            any::type_name::<$Q>(),
-                        ).into()));
-                    };
-
-                    res = expr;
+                    let (this_ca, $q) = $Q::init(world, config)?;
+                    ca = ca.and(&this_ca);
                 )*
 
-                Ok((res, ($($q,)*)))
+                Ok((ca, ($($q,)*)))
             }
 
             fn new_state(world: &mut World) -> Self::State {
@@ -250,13 +238,10 @@ unsafe impl<Q: Query> Query for Option<Q> {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut expr, state) = Q::init(world, config)?;
-
-        expr = expr.or(&ComponentAccessExpr::new(true)).unwrap();
-
-        Ok((expr, state))
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let (ca, state) = Q::init(world, config)?;
+        Ok((ComponentAccess::new_true().or(&ca), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -331,23 +316,14 @@ where
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (left_expr, left_state) = L::init(world, config)?;
-        let (right_expr, right_state) = R::init(world, config)?;
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let (ca_lhs, state_lhs) = L::init(world, config)?;
+        let (ca_rhs, state_rhs) = R::init(world, config)?;
 
-        let Ok(expr) = left_expr.or(&right_expr) else {
-            return Err(InitError(
-                format!(
-                    "conflicting query in `{}` (both operands of an OR query may be active at the \
-                     same time)",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        };
+        let ca_both = ca_lhs.and(&ca_rhs);
 
-        Ok((expr, (left_state, right_state)))
+        Ok((ca_lhs.or(&ca_rhs).or(&ca_both), (state_lhs, state_rhs)))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -433,12 +409,15 @@ where
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (left_expr, left_state) = L::init(world, config)?;
-        let (right_expr, right_state) = R::init(world, config)?;
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let (ca_lhs, state_lhs) = L::init(world, config)?;
+        let (ca_rhs, state_rhs) = R::init(world, config)?;
 
-        Ok((left_expr.xor(&right_expr), (left_state, right_state)))
+        Ok((
+            ca_lhs.and(&ca_rhs.not()).or(&ca_rhs.and(&ca_lhs.not())),
+            (state_lhs, state_rhs),
+        ))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -511,11 +490,11 @@ unsafe impl<Q: Query> Query for Not<Q> {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (expr, state) = Q::init(world, config)?;
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let (ca, state) = Q::init(world, config)?;
 
-        Ok((expr.not(), state))
+        Ok((ca.not(), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -581,13 +560,13 @@ unsafe impl<Q: Query> Query for With<Q> {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        let (mut expr, state) = Q::init(world, config)?;
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let (mut ca, state) = Q::init(world, config)?;
 
-        expr.access.clear();
+        ca.clear_access();
 
-        Ok((expr, state))
+        Ok((ca, state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -661,11 +640,11 @@ unsafe impl<Q: Query> Query for Has<Q> {
 
     fn init(
         world: &mut World,
-        config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
         let (_, state) = Q::init(world, config)?;
 
-        Ok((ComponentAccessExpr::new(true), state))
+        Ok((ComponentAccess::new_true(), state))
     }
 
     fn new_state(world: &mut World) -> Self::State {
@@ -693,9 +672,9 @@ unsafe impl Query for EntityId {
 
     fn init(
         _world: &mut World,
-        _config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        Ok((ComponentAccessExpr::new(true), ()))
+        _config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        Ok((ComponentAccess::new_true(), ()))
     }
 
     fn new_state(_world: &mut World) -> Self::State {}
@@ -723,9 +702,9 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
 
     fn init(
         _world: &mut World,
-        _config: &mut Config,
-    ) -> Result<(ComponentAccessExpr, Self::State), InitError> {
-        Ok((ComponentAccessExpr::new(true), ()))
+        _config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        Ok((ComponentAccess::new_true(), ()))
     }
 
     fn new_state(_world: &mut World) -> Self::State {}
@@ -774,27 +753,14 @@ mod tests {
     #[derive(Event)]
     struct E;
 
-    fn check_query<Q: Query + 'static>() -> bool {
-        let r = std::panic::catch_unwind(|| {
-            let mut world = World::new();
-
-            (world.add_handler(|_: Receiver<E>, _: Fetcher<Q>| {}), world)
-        });
-
-        if let Ok((_, mut world)) = r {
-            world.send(E);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Test for query access conflicts.
     macro_rules! t {
         ($name:ident, $succeed:expr, $Q:ty) => {
             #[test]
             fn $name() {
-                assert_eq!(check_query::<$Q>(), $succeed);
+                let mut world = World::new();
+                let res = world.try_add_handler(|_: Receiver<E>, _: Fetcher<$Q>| {});
+                assert_eq!(res.is_ok(), $succeed, "{res:?}");
             }
         };
     }
@@ -825,6 +791,18 @@ mod tests {
     t!(t14, true, (Option<&A>, &A, &A));
     t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
     t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
+    t!(
+        t17,
+        true,
+        Or<Or<(&mut A, With<&B>), (&A, Not<&B>)>, (&A, Not<&B>)>
+    );
+    t!(
+        t18,
+        true,
+        (((&mut A, With<&B>), (&A, Not<&B>)), (&A, Not<&B>))
+    );
+    t!(t19, true, (&mut A, &A, Not<&A>));
+    t!(t20, true, (Not<&A>, &mut A, &A));
 
     #[test]
     #[allow(dead_code)]

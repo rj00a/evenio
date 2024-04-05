@@ -1,6 +1,5 @@
 //! Accessing components on entities.
 
-use alloc::format;
 use core::iter::FusedIterator;
 use core::ptr::NonNull;
 use core::{any, fmt};
@@ -9,7 +8,7 @@ use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
 use crate::assert::{assume_debug_checked, UnwrapDebugChecked};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
-use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
+use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::query::{Query, ReadOnlyQuery};
 use crate::sparse_map::SparseMap;
 use crate::world::{UnsafeWorldCell, World};
@@ -29,26 +28,12 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
-    pub(crate) fn init(world: &mut World, config: &mut Config) -> Result<Self, InitError> {
-        let (expr, state) = Q::init(world, config)?;
+    pub(crate) fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self, InitError> {
+        let (ca, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(state);
+        config.push_component_access(ca);
 
-        match expr.or(&config.component_access) {
-            Ok(new_component_access) => config.component_access = new_component_access,
-            Err(_) => {
-                return Err(InitError(
-                    format!(
-                        "query `{}` has incompatible component access with previous queries in \
-                         this handler",
-                        any::type_name::<Q>()
-                    )
-                    .into(),
-                ))
-            }
-        }
-
-        Ok(res)
+        Ok(FetcherState::new(state))
     }
 
     #[inline]
@@ -320,7 +305,7 @@ where
 
     type Item<'a> = Fetcher<'a, Q>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
     }
 
@@ -379,7 +364,7 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
 
     type Item<'a> = Single<'a, Q>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
     }
 
@@ -423,7 +408,7 @@ unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
 
     type Item<'a> = TrySingle<'a, Q>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
     }
 

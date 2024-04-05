@@ -2,7 +2,7 @@
 
 use alloc::borrow::Cow;
 #[cfg(not(feature = "std"))]
-use alloc::{format, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -26,7 +26,7 @@ use crate::component::ComponentIdx;
 use crate::drop::DropFn;
 use crate::entity::{EntityId, EntityLocation};
 use crate::fetch::FetcherState;
-use crate::handler::{Config, HandlerInfo, HandlerParam, InitError};
+use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, TypeIdMap};
 use crate::prelude::Component;
 use crate::query::Query;
@@ -214,7 +214,7 @@ unsafe impl HandlerParam for &'_ Events {
 
     type Item<'a> = &'a Events;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 
@@ -859,10 +859,13 @@ unsafe impl<E: Event> HandlerParam for Receiver<'_, E> {
 
     type Item<'a> = Receiver<'a, E>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         let () = AssertUntargetedEvent::<E>::ASSERTION;
 
-        set_received_event::<E>(world, config, Access::Read)?;
+        let event_id = world.add_event::<E>();
+
+        config.set_received_event(event_id);
+        config.set_received_event_access(Access::Read);
 
         Ok(())
     }
@@ -893,31 +896,19 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for Receiver<'_, E, Q> {
 
     type Item<'a> = Receiver<'a, E, Q>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         let () = AssertTargetedEvent::<E>::ASSERTION;
 
-        set_received_event::<E>(world, config, Access::Read)?;
+        let event_id = world.add_event::<E>();
 
-        let (expr, state) = Q::init(world, config)?;
+        let (ca, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(state);
+        config.set_received_event(event_id);
+        config.set_received_event_access(Access::Read);
+        config.set_targeted_event_component_access(ca.clone());
+        config.push_component_access(ca);
 
-        config.targeted_event_expr = expr.expr.clone();
-
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
-            return Err(InitError(
-                format!(
-                    "query `{}` has incompatible component access with previous queries in this \
-                     handler",
-                    any::type_name::<Q>()
-                )
-                .into(),
-            ));
-        }
-
-        Ok(res)
+        Ok(FetcherState::new(state))
     }
 
     unsafe fn get<'a>(
@@ -978,11 +969,14 @@ unsafe impl<E: Event> HandlerParam for ReceiverMut<'_, E> {
 
     type Item<'a> = ReceiverMut<'a, E>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         let () = AssertMutable::<E>::EVENT;
         let () = AssertUntargetedEvent::<E>::ASSERTION;
 
-        set_received_event::<E>(world, config, Access::ReadWrite)?;
+        let event_id = world.add_event::<E>();
+
+        config.set_received_event(event_id);
+        config.set_received_event_access(Access::ReadWrite);
 
         Ok(())
     }
@@ -1010,32 +1004,20 @@ unsafe impl<E: Event, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q>
 
     type Item<'a> = ReceiverMut<'a, E, Q>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         let () = AssertMutable::<E>::EVENT;
         let () = AssertTargetedEvent::<E>::ASSERTION;
 
-        set_received_event::<E>(world, config, Access::ReadWrite)?;
+        let event_id = world.add_event::<E>();
 
-        let (expr, state) = Q::init(world, config)?;
+        let (ca, state) = Q::init(world, config)?;
 
-        let res = FetcherState::new(state);
+        config.set_received_event(event_id);
+        config.set_received_event_access(Access::ReadWrite);
+        config.set_targeted_event_component_access(ca.clone());
+        config.push_component_access(ca);
 
-        config.targeted_event_expr = expr.expr.clone();
-
-        if let Ok(new_component_access) = expr.or(&config.component_access) {
-            config.component_access = new_component_access;
-        } else {
-            return Err(InitError(
-                format!(
-                    "query `{}` has incompatible component access with previous queries in this \
-                     handler",
-                    any::type_name::<Q>()
-                )
-                .into(),
-            ));
-        }
-
-        Ok(res)
+        Ok(FetcherState::new(state))
     }
 
     unsafe fn get<'a>(
@@ -1076,48 +1058,6 @@ where
             .field("query", &self.query)
             .finish()
     }
-}
-
-fn set_received_event<E: Event>(
-    world: &mut World,
-    config: &mut Config,
-    access: Access,
-) -> Result<EventId, InitError> {
-    let id = world.add_event::<E>();
-
-    if let Some(received_event) = config.received_event {
-        if received_event != id {
-            let other = world
-                .events()
-                .get(received_event)
-                .map_or("<unknown>", |info| info.name());
-
-            return Err(InitError(
-                format!(
-                    "tried to set `{}` as the received event for this handler, but the handler \
-                     was already configured to receive `{other}`. Handlers must listen for \
-                     exactly one event type",
-                    any::type_name::<E>(),
-                )
-                .into(),
-            ));
-        }
-    }
-
-    config.received_event = Some(id);
-
-    if !config.received_event_access.set_if_compatible(access) {
-        return Err(InitError(
-            format!(
-                "tried to set `{access:?}` as the received event access for this handler, but it \
-                 was already set to `{:?}`",
-                config.received_event_access
-            )
-            .into(),
-        ));
-    }
-
-    Ok(id)
 }
 
 /// Indicates the absence of a [`ReceiverQuery`].
@@ -1276,20 +1216,8 @@ unsafe impl<T: EventSet> HandlerParam for Sender<'_, T> {
 
     type Item<'a> = Sender<'a, T>;
 
-    fn init(world: &mut World, config: &mut Config) -> Result<Self::State, InitError> {
-        if !config
-            .event_queue_access
-            .set_if_compatible(Access::ReadWrite)
-        {
-            return Err(InitError(
-                format!(
-                    "`{}` has conflicting access with a previous handler parameter. Only one \
-                     handler parameter can send events",
-                    any::type_name::<Self>()
-                )
-                .into(),
-            ));
-        }
+    fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
+        config.set_event_queue_access(Access::ReadWrite);
 
         let state = T::new_state(world);
 

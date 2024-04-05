@@ -18,7 +18,7 @@ use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
 use crate::handler::{
-    Config, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
+    HandlerConfig, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
 };
 use crate::map::{Entry, HashMap};
 use crate::prelude::World;
@@ -529,7 +529,7 @@ unsafe impl HandlerParam for &'_ Archetypes {
 
     type Item<'a> = &'a Archetypes;
 
-    fn init(_world: &mut World, _config: &mut Config) -> Result<Self::State, InitError> {
+    fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
     }
 
@@ -676,9 +676,8 @@ impl Archetype {
 
     fn register_handler(&mut self, info: &mut HandlerInfo) {
         if info
-            .component_access()
-            .expr
-            .eval(|idx| self.column_of(idx).is_some())
+            .archetype_filter()
+            .matches_archetype(|idx| self.column_of(idx).is_some())
         {
             if self.entity_count() > 0 {
                 info.handler_mut().refresh_archetype(self);
@@ -687,10 +686,11 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
-        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) =
-            (info.targeted_event_expr(), info.received_event().index())
-        {
-            if expr.eval(|idx| self.column_of(idx).is_some()) {
+        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) = (
+            info.targeted_event_component_access(),
+            info.received_event().index(),
+        ) {
+            if expr.matches_archetype(|idx| self.column_of(idx).is_some()) {
                 if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
                     list.insert(info.ptr(), info.priority());
                 } else {
