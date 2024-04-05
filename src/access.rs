@@ -83,6 +83,12 @@ pub struct ComponentAccess {
     /// 3. Read `A`, Conflict in `B`.
     ///
     /// Since cases (2) and (3) have conflicts, we know the query is invalid.
+    ///
+    /// This vec can be viewed as the "lists of lists" needed for
+    /// [Disjunctive Normal Form][dnf], but with some necessary modifications in
+    /// order to track access conflicts.
+    ///
+    /// [dnf]: https://en.wikipedia.org/wiki/Disjunctive_normal_form
     cases: Vec<Case>,
 }
 
