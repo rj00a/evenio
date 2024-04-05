@@ -30,6 +30,7 @@ type Block = usize;
 /// Number of bits in a block.
 const BITS: usize = Block::BITS as usize;
 
+#[allow(dead_code)]
 impl<T> BitSet<T> {
     /// Create a new, empty bit set.
     pub(crate) const fn new() -> Self {
@@ -87,6 +88,7 @@ impl<T> BitSet<T> {
     }
 }
 
+#[allow(dead_code)]
 impl<T: SparseIndex> BitSet<T> {
     /// Adds a value to the set. Returns whether the value was newly inserted.
     #[track_caller]

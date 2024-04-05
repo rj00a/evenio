@@ -377,12 +377,24 @@ impl HandlerInfo {
     }
 
     /// Returns the set of untargeted events this handler sends.
-    pub fn sent_untargeted_events(&self) -> &BitSet<UntargetedEventIdx> {
+    pub fn sent_untargeted_events(
+        &self,
+    ) -> impl Iterator<Item = UntargetedEventIdx> + Clone + fmt::Debug + '_ {
+        self.sent_untargeted_events_bitset().iter()
+    }
+
+    pub(crate) fn sent_untargeted_events_bitset(&self) -> &BitSet<UntargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
 
     /// Returns the set of targeted events this handler sends.
-    pub fn sent_targeted_events(&self) -> &BitSet<TargetedEventIdx> {
+    pub fn sent_targeted_events(
+        &self,
+    ) -> impl Iterator<Item = TargetedEventIdx> + Clone + fmt::Debug + '_ {
+        self.sent_targeted_events_bitset().iter()
+    }
+
+    pub(crate) fn sent_targeted_events_bitset(&self) -> &BitSet<TargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
 
@@ -396,6 +408,7 @@ impl HandlerInfo {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
     }
 
+    /// Returns the [`ComponentAccess`] used for matching archetypes.
     pub fn archetype_filter(&self) -> &ComponentAccess {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).archetype_filter }
     }
@@ -410,6 +423,7 @@ impl HandlerInfo {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }.iter()
     }
 
+    /// Does this handler reference the given component?
     pub fn references_component(&self, idx: ComponentIdx) -> bool {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).referenced_components }.contains(idx)
     }
@@ -857,6 +871,8 @@ impl HandlerConfig {
         self.priority = priority;
     }
 
+    /// Sets the event sent by this handler. Causes an initialization error
+    /// if a different event was previously set.
     pub fn set_received_event(&mut self, event: EventId) {
         self.received_event = match self.received_event {
             ReceivedEventId::None => ReceivedEventId::Ok(event),
@@ -919,6 +935,7 @@ impl HandlerConfig {
     ///
     /// Generally, this means that there should be one [`ComponentAccess`]
     /// pushed per handler param that accesses components.
+    #[allow(clippy::doc_markdown)]
     pub fn push_component_access(&mut self, component_access: ComponentAccess) {
         self.component_accesses.push(component_access);
     }
@@ -926,6 +943,7 @@ impl HandlerConfig {
     /// Inserts a component into the set of components referenced by this
     /// handler. The set is used for cleanup when a component type is removed
     /// from the world.
+    #[allow(clippy::doc_markdown)]
     pub fn insert_referenced_components(&mut self, comp: ComponentIdx) {
         self.referenced_components.insert(comp);
     }

@@ -25,7 +25,7 @@ use crate::event::{
 };
 use crate::handler::{
     AddHandler, Handler, HandlerConfig, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList,
-    Handlers, InitError, IntoHandler, MaybeInvalidAccess, ReceivedEventId, RemoveHandler,
+    Handlers, IntoHandler, MaybeInvalidAccess, ReceivedEventId, RemoveHandler,
 };
 
 /// A container for all data in the ECS. This includes entities, components,
@@ -321,21 +321,26 @@ impl World {
             ReceivedEventId::Invalid => {
                 return Err(format!(
                     "handler {handler_name} attempted to listen for more than one event type"
-                )
-                .into())
+                ))
             }
         };
 
         let received_event_access = match config.received_event_access {
             MaybeInvalidAccess::Ok(access) => access,
             MaybeInvalidAccess::Invalid => {
-                panic!("handler {handler_name} has conflicting access to the received event")
+                return Err(format!(
+                    "handler {handler_name} has conflicting access to the received event"
+                ))
             }
         };
 
         let event_queue_access = match config.event_queue_access {
             MaybeInvalidAccess::Ok(access) => access,
-            MaybeInvalidAccess::Invalid => todo!(),
+            MaybeInvalidAccess::Invalid => {
+                return Err(format!(
+                    "handler {handler_name} has conflicting access to the event queue"
+                ));
+            }
         };
 
         let component_access_conjunction = config
@@ -354,7 +359,7 @@ impl World {
             for idx in conflicts {
                 errmsg += "- ";
                 match self.components.get_by_index(idx) {
-                    Some(info) => errmsg += info.name().as_ref(),
+                    Some(info) => errmsg += info.name(),
                     None => {
                         write!(&mut errmsg, "{idx:?}").unwrap();
                     }
@@ -749,8 +754,10 @@ impl World {
         for handler in self.handlers.iter() {
             if handler.received_event() == event
                 || match event.index() {
-                    EventIdx::Targeted(idx) => handler.sent_targeted_events().contains(idx),
-                    EventIdx::Untargeted(idx) => handler.sent_untargeted_events().contains(idx),
+                    EventIdx::Targeted(idx) => handler.sent_targeted_events_bitset().contains(idx),
+                    EventIdx::Untargeted(idx) => {
+                        handler.sent_untargeted_events_bitset().contains(idx)
+                    }
                 }
             {
                 to_remove.push(handler.id());

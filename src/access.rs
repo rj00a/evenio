@@ -42,9 +42,8 @@ impl Access {
             (Access::Read | Access::ReadWrite, Access::None) => Some(self),
             (Access::None, Access::Read | Access::ReadWrite) => Some(other),
             (Access::Read, Access::Read) => Some(Access::Read),
-            (Access::Read, Access::ReadWrite)
-            | (Access::ReadWrite, Access::Read)
-            | (Access::ReadWrite, Access::ReadWrite) => None,
+            (Access::Read | Access::ReadWrite, Access::ReadWrite)
+            | (Access::ReadWrite, Access::Read) => None,
         }
     }
 
@@ -68,7 +67,10 @@ impl Access {
     }
 }
 
-/// An expressions describing the components accessed by a query.
+/// An expression describing the components accessed by a query.
+///
+/// This is used for checking that queries don't break aliasing rules, as well
+/// as determining which archetypes are matched by a query.
 #[must_use]
 #[derive(Clone, Debug)]
 pub struct ComponentAccess {
@@ -127,6 +129,7 @@ impl ComponentAccess {
         Self { cases: vec![] }
     }
 
+    /// Create a new `ComponentAccess` which accesses a single component.
     pub fn var(idx: ComponentIdx, access: Access) -> Self {
         Self {
             cases: vec![vec![(
@@ -140,6 +143,7 @@ impl ComponentAccess {
         }
     }
 
+    /// Logically AND two access expressions together.i
     pub fn and(&self, rhs: &Self) -> Self {
         let mut cases = vec![];
 
@@ -171,7 +175,7 @@ impl ComponentAccess {
                                     ir += 1;
                                     use CaseAccess::*;
                                     let combined_access = match (left_access, right_access) {
-                                        (With, Read) | (Read, With) | (Read, Read) => Read,
+                                        (With | Read, Read) | (Read, With) => Read,
                                         (With, ReadWrite) | (ReadWrite, With) => ReadWrite,
                                         (With, With) => With,
                                         (Not, Not) => Not,
@@ -181,12 +185,10 @@ impl ComponentAccess {
                                             // the same component is impossible.
                                             continue 'next_case;
                                         }
-                                        (Conflict, With | Read | ReadWrite)
+                                        (Conflict, With | Read | ReadWrite | Conflict)
                                         | (With | Read | ReadWrite, Conflict)
-                                        | (Conflict, Conflict)
-                                        | (Read, ReadWrite)
-                                        | (ReadWrite, Read)
-                                        | (ReadWrite, ReadWrite) => Conflict,
+                                        | (Read | ReadWrite, ReadWrite)
+                                        | (ReadWrite, Read) => Conflict,
                                     };
                                     case.push((left_idx, combined_access));
                                 }
@@ -206,14 +208,18 @@ impl ComponentAccess {
         Self { cases }
     }
 
+    /// Logically OR two access expressions together.
     pub fn or(&self, rhs: &Self) -> Self {
         Self {
             cases: self.cases.iter().chain(rhs.cases.iter()).cloned().collect(),
         }
     }
 
+    /// Inverts the accesses according to De Morgan's laws.
+    ///
+    /// This that this is a lossy operation because read/write information is
+    /// lost.
     pub fn not(&self) -> Self {
-        // Apply De Morgan's laws.
         self.cases
             .iter()
             .map(|case| Self {
@@ -292,7 +298,6 @@ mod tests {
     const A: ComponentIdx = ComponentIdx(0);
     const B: ComponentIdx = ComponentIdx(1);
     const C: ComponentIdx = ComponentIdx(2);
-    const D: ComponentIdx = ComponentIdx(3);
 
     #[track_caller]
     fn check(ca: Ca, it: impl IntoIterator<Item = ComponentIdx>) {
@@ -312,10 +317,6 @@ mod tests {
 
     fn c(access: Access) -> Ca {
         Ca::var(C, access)
-    }
-
-    fn d(access: Access) -> Ca {
-        Ca::var(D, access)
     }
 
     #[test]
