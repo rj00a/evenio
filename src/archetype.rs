@@ -677,7 +677,7 @@ impl Archetype {
     fn register_handler(&mut self, info: &mut HandlerInfo) {
         if info
             .archetype_filter()
-            .eval(|idx| self.column_of(idx).is_some())
+            .matches_archetype(|idx| self.column_of(idx).is_some())
         {
             if self.entity_count() > 0 {
                 info.handler_mut().refresh_archetype(self);
@@ -686,10 +686,11 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
-        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) =
-            (info.targeted_event_filter(), info.received_event().index())
-        {
-            if expr.eval(|idx| self.column_of(idx).is_some()) {
+        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) = (
+            info.targeted_event_component_access(),
+            info.received_event().index(),
+        ) {
+            if expr.matches_archetype(|idx| self.column_of(idx).is_some()) {
                 if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
                     list.insert(info.ptr(), info.priority());
                 } else {

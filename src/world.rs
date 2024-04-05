@@ -5,10 +5,12 @@ use alloc::{vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::{self, TypeId};
 use core::cell::UnsafeCell;
+use core::fmt::Write;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 
+use crate::access::ComponentAccess;
 use crate::archetype::Archetypes;
 use crate::assert::{AssertMutable, UnwrapDebugChecked};
 use crate::component::{
@@ -22,8 +24,8 @@ use crate::event::{
     EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
 };
 use crate::handler::{
-    AddHandler, Config, Handler, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList, Handlers,
-    IntoHandler, RemoveHandler,
+    AddHandler, Handler, HandlerConfig, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList,
+    Handlers, InitError, IntoHandler, MaybeInvalidAccess, ReceivedEventId, RemoveHandler,
 };
 
 /// A container for all data in the ECS. This includes entities, components,
@@ -288,6 +290,113 @@ impl World {
         Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
+    pub(crate) fn try_add_handler<H: IntoHandler<M>, M>(
+        &mut self,
+        handler: H,
+    ) -> Result<HandlerId, String> {
+        let mut handler = handler.into_handler();
+        let mut config = HandlerConfig::default();
+
+        let type_id = handler.type_id();
+
+        if let Some(type_id) = type_id {
+            if let Some(info) = self.handlers.get_by_type_id(type_id) {
+                return Ok(info.id());
+            }
+        }
+
+        let handler_name = handler.name();
+
+        if let Err(e) = handler.init(self, &mut config) {
+            return Err(format!("initialization of {handler_name} failed: {e}"));
+        }
+
+        let received_event = match config.received_event {
+            ReceivedEventId::None => {
+                return Err(format!(
+                    "handler {handler_name} did not specify an event to receive"
+                ));
+            }
+            ReceivedEventId::Ok(event) => event,
+            ReceivedEventId::Invalid => {
+                return Err(format!(
+                    "handler {handler_name} attempted to listen for more than one event type"
+                )
+                .into())
+            }
+        };
+
+        let received_event_access = match config.received_event_access {
+            MaybeInvalidAccess::Ok(access) => access,
+            MaybeInvalidAccess::Invalid => {
+                panic!("handler {handler_name} has conflicting access to the received event")
+            }
+        };
+
+        let event_queue_access = match config.event_queue_access {
+            MaybeInvalidAccess::Ok(access) => access,
+            MaybeInvalidAccess::Invalid => todo!(),
+        };
+
+        let component_access_conjunction = config
+            .component_accesses
+            .iter()
+            .fold(ComponentAccess::new_true(), |acc, a| acc.and(a));
+
+        let conflicts = component_access_conjunction.collect_conflicts();
+
+        if !conflicts.is_empty() {
+            let mut errmsg = format!(
+                "handler {handler_name} contains conflicting component access (aliased \
+                 mutability)\nconflicting components are...\n"
+            );
+
+            for idx in conflicts {
+                errmsg += "- ";
+                match self.components.get_by_index(idx) {
+                    Some(info) => errmsg += info.name().as_ref(),
+                    None => {
+                        write!(&mut errmsg, "{idx:?}").unwrap();
+                    }
+                };
+            }
+
+            return Err(errmsg);
+        }
+
+        let component_access_disjunction = config
+            .component_accesses
+            .iter()
+            .fold(ComponentAccess::new_false(), |acc, a| acc.or(a));
+
+        let info = HandlerInfo::new(HandlerInfoInner {
+            name: handler_name,
+            id: HandlerId::NULL, // Filled in later.
+            type_id,
+            order: 0, // Filled in later.
+            received_event,
+            received_event_access,
+            targeted_event_component_access: config.targeted_event_component_access,
+            sent_untargeted_events: config.sent_untargeted_events,
+            sent_targeted_events: config.sent_targeted_events,
+            event_queue_access,
+            component_access: component_access_conjunction,
+            archetype_filter: component_access_disjunction,
+            referenced_components: config.referenced_components,
+            priority: config.priority,
+            handler,
+        });
+
+        let id = self.handlers.add(info);
+        let info = self.handlers.get_mut(id).unwrap();
+
+        self.archetypes.register_handler(info);
+
+        self.send(AddHandler(id));
+
+        Ok(id)
+    }
+
     /// Adds a new handler to the world, returns its [`HandlerId`], and sends
     /// the [`AddHandler`] event to signal its creation.
     ///
@@ -326,61 +435,10 @@ impl World {
     /// [`Handler::type_id`]: crate::handler::Handler::type_id
     #[track_caller]
     pub fn add_handler<H: IntoHandler<M>, M>(&mut self, handler: H) -> HandlerId {
-        let mut handler = handler.into_handler();
-        let mut config = Config::default();
-
-        let type_id = handler.type_id();
-
-        if let Some(type_id) = type_id {
-            if let Some(info) = self.handlers.get_by_type_id(type_id) {
-                return info.id();
-            }
+        match self.try_add_handler(handler) {
+            Ok(id) => id,
+            Err(e) => panic!("{e}"),
         }
-
-        if let Err(e) = handler.init(self, &mut config) {
-            panic!("{e}");
-        }
-
-        let Some(received_event) = config.received_event else {
-            panic!(
-                "handler `{}` did not specify an event to receive. All handlers must listen for \
-                 exactly one event type (see `Receiver`)",
-                any::type_name::<H>()
-            )
-        };
-
-        let conflicts = config.component_access.collect_conflicts();
-
-        if !conflicts.is_empty() {
-            todo!("error message")
-        }
-
-        let info = HandlerInfo::new(HandlerInfoInner {
-            name: handler.name(),
-            id: HandlerId::NULL, // Filled in later.
-            type_id,
-            order: 0, // Filled in later.
-            received_event,
-            received_event_access: config.received_event_access,
-            targeted_event_filter: config.targeted_event_filter,
-            sent_untargeted_events: config.sent_untargeted_events,
-            sent_targeted_events: config.sent_targeted_events,
-            event_queue_access: config.event_queue_access,
-            component_access: config.component_access,
-            archetype_filter: config.archetype_filter,
-            referenced_components: config.referenced_components,
-            priority: config.priority,
-            handler,
-        });
-
-        let id = self.handlers.add(info);
-        let info = self.handlers.get_mut(id).unwrap();
-
-        self.archetypes.register_handler(info);
-
-        self.send(AddHandler(id));
-
-        id
     }
 
     /// Removes a handler from the world, returns its [`HandlerInfo`], and sends
@@ -533,7 +591,7 @@ impl World {
         let mut handlers_to_remove = vec![];
 
         for handler in self.handlers.iter() {
-            if handler.referenced_components().contains(component.index()) {
+            if handler.references_component(component.index()) {
                 handlers_to_remove.push(handler.id());
             }
         }

@@ -58,9 +58,6 @@ harness = false
 name = "random_access"
 harness = false
 
-[workspace]
-members = ["blah"]
-
 #### WORKSPACE ####
 
 [workspace.package]
