@@ -1,6 +1,10 @@
 //! Data access checking.
 
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
+
+use ahash::RandomState;
 
 use crate::component::ComponentIdx;
 use crate::map::IndexSet;
@@ -259,7 +263,7 @@ impl ComponentAccess {
 
     /// Returns the set of all conflicting components.
     pub(crate) fn collect_conflicts(&self) -> IndexSet<ComponentIdx> {
-        let mut res = IndexSet::default();
+        let mut res = IndexSet::with_hasher(RandomState::new());
 
         for case in &self.cases {
             for &(idx, access) in case {
