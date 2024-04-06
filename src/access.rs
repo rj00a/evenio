@@ -280,9 +280,15 @@ impl ComponentAccess {
     where
         F: FnMut(ComponentIdx) -> bool,
     {
-        self.cases
-            .iter()
-            .any(|case| case.iter().all(|(idx, _)| f(*idx)))
+        self.cases.iter().any(|case| {
+            case.iter().all(|&(idx, access)| match access {
+                CaseAccess::With => f(idx),
+                CaseAccess::Read => f(idx),
+                CaseAccess::ReadWrite => f(idx),
+                CaseAccess::Not => !f(idx),
+                CaseAccess::Conflict => f(idx),
+            })
+        })
     }
 }
 

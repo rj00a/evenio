@@ -5,8 +5,9 @@ use alloc::collections::{BTreeMap, BTreeSet};
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec, vec::Vec};
 use core::cmp::Ordering;
+use core::ops::Index;
 use core::ptr::NonNull;
-use core::{mem, ptr, slice};
+use core::{fmt, mem, ptr, slice};
 
 use ahash::RandomState;
 use slab::Slab;
@@ -524,6 +525,19 @@ impl Archetypes {
     }
 }
 
+impl Index<ArchetypeIdx> for Archetypes {
+    type Output = Archetype;
+
+    /// Panics if the index is invalid.
+    fn index(&self, index: ArchetypeIdx) -> &Self::Output {
+        if let Some(arch) = self.get(index) {
+            arch
+        } else {
+            panic!("no such archetype with index of {index:?} exists")
+        }
+    }
+}
+
 unsafe impl HandlerParam for &'_ Archetypes {
     type State = ();
 
@@ -595,7 +609,6 @@ impl ArchetypeRow {
 /// | Entity 0  | "foo"    | 123      | true     |
 /// | Entity 1  | "bar"    | 456      | false    |
 /// | Entity 2  | "baz"    | 789      | true     |
-#[derive(Debug)]
 pub struct Archetype {
     /// The index of this archetype. Provided here for convenience.
     index: ArchetypeIdx,
@@ -790,6 +803,21 @@ impl Drop for Archetype {
 
 unsafe impl Send for Archetype {}
 unsafe impl Sync for Archetype {}
+
+impl fmt::Debug for Archetype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Archetype")
+            .field("index", &self.index)
+            .field("component_indices", &self.component_indices())
+            .field("columns", &self.columns())
+            .field("entity_ids", &self.entity_ids)
+            .field("insert_components", &self.insert_components)
+            .field("remove_components", &self.remove_components)
+            .field("refresh_listeners", &self.refresh_listeners)
+            .field("event_listeners", &self.event_listeners)
+            .finish()
+    }
+}
 
 /// All of the component data for a single component type in an [`Archetype`].
 #[derive(Debug)]

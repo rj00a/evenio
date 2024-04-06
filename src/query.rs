@@ -415,7 +415,7 @@ where
         let (ca_rhs, state_rhs) = R::init(world, config)?;
 
         Ok((
-            ca_lhs.and(&ca_rhs.not()).or(&ca_rhs.and(&ca_lhs.not())),
+            dbg!(ca_lhs.and(&ca_rhs.not()).or(&ca_rhs.and(&ca_lhs.not()))),
             (state_lhs, state_rhs),
         ))
     }
@@ -754,7 +754,7 @@ mod tests {
     struct E;
 
     /// Test for query access conflicts.
-    macro_rules! t {
+    macro_rules! check_access {
         ($name:ident, $succeed:expr, $Q:ty) => {
             #[test]
             fn $name() {
@@ -774,35 +774,159 @@ mod tests {
     #[derive(Component)]
     struct C;
 
-    t!(t00, true, &mut A);
-    t!(t01, true, (&mut A, &mut B));
-    t!(t02, false, (&mut A, &mut A));
-    t!(t03, false, (&mut A, (&mut A,)));
-    t!(t04, false, (&mut A, &A));
-    t!(t05, true, (&A, &A));
-    t!(t06, true, ());
-    t!(t07, false, (Option<&A>, &mut A));
-    t!(t08, false, (&mut A, Option<&B>, &A, Not<&B>));
-    t!(t09, true, (&mut A, Not<&A>, &A));
-    t!(t10, false, Or<&mut A, &mut A>);
-    t!(t11, true, Xor<&mut A, &mut A>);
-    t!(t12, false, Or<(&A, &B), (&mut B, &C)>);
-    t!(t13, true, (Xor<&mut A, &mut A>, &A));
-    t!(t14, true, (Option<&A>, &A, &A));
-    t!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
-    t!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
-    t!(
+    check_access!(t00, true, &mut A);
+    check_access!(t01, true, (&mut A, &mut B));
+    check_access!(t02, false, (&mut A, &mut A));
+    check_access!(t03, false, (&mut A, (&mut A,)));
+    check_access!(t04, false, (&mut A, &A));
+    check_access!(t05, true, (&A, &A));
+    check_access!(t06, true, ());
+    check_access!(t07, false, (Option<&A>, &mut A));
+    check_access!(t08, false, (&mut A, Option<&B>, &A, Not<&B>));
+    check_access!(t09, true, (&mut A, Not<&A>, &A));
+    check_access!(t10, false, Or<&mut A, &mut A>);
+    check_access!(t11, true, Xor<&mut A, &mut A>);
+    check_access!(t12, false, Or<(&A, &B), (&mut B, &C)>);
+    check_access!(t13, true, (Xor<&mut A, &mut A>, &A));
+    check_access!(t14, true, (Option<&A>, &A, &A));
+    check_access!(t15, false, (Xor<(&A, &B), (&B, &C)>, &mut B));
+    check_access!(t16, true, (Xor<(&A, &B), (&B, &C)>, &B));
+    check_access!(
         t17,
         true,
         Or<Or<(&mut A, With<&B>), (&A, Not<&B>)>, (&A, Not<&B>)>
     );
-    t!(
+    check_access!(
         t18,
         true,
         (((&mut A, With<&B>), (&A, Not<&B>)), (&A, Not<&B>))
     );
-    t!(t19, true, (&mut A, &A, Not<&A>));
-    t!(t20, true, (Not<&A>, &mut A, &A));
+    check_access!(t19, true, (&mut A, &A, Not<&A>));
+    check_access!(t20, true, (Not<&A>, &mut A, &A));
+
+    macro_rules! check_matching {
+        (
+            name = $name:ident,
+            query = $query:ty,
+            matches = [$(($($matched_comp:ident),*)),*],
+            ignores = [$(($($ignored_comp:ident),*)),*],
+        ) => {
+            #[test]
+            fn $name() {
+                let mut world = World::new();
+                #[allow(unused_mut)]
+                let mut matching = crate::map::IndexSet::<EntityId>::default();
+
+                $(
+                    let e = world.spawn();
+                    matching.insert(e);
+                    $(
+                        world.insert(e, $matched_comp);
+                    )*
+                )*
+
+                $(
+                    #[allow(unused_variables)]
+                    let e = world.spawn();
+                    $(
+                        world.insert(e, $ignored_comp);
+                    )*
+                )*
+
+                #[derive(Component)]
+                struct Matching(crate::map::IndexSet<EntityId>);
+
+                let matching_entity = world.spawn();
+                world.insert(matching_entity, Matching(matching));
+
+                world.add_handler(move |_: Receiver<E>, f: Fetcher<(EntityId, $query)>, matching: Single<&mut Matching>| {
+                    for (e, _) in f {
+                        if e != matching_entity && !matching.0.0.shift_remove(&e) {
+                            panic!("matched entity unexpectedly {e:?}");
+                        }
+                    }
+                });
+
+                world.send(E);
+
+                let matching = &world.get::<Matching>(matching_entity).unwrap().0;
+
+                if !matching.is_empty() {
+                    panic!("entities not matched: {matching:?}");
+                }
+            }
+        }
+    }
+
+    check_matching! {
+        name = matching_ref,
+        query = &A,
+        matches = [(A), (A, B), (A, B, C)],
+        ignores = [(), (B), (C), (B, C)],
+    }
+
+    check_matching! {
+        name = matching_with,
+        query = With<&A>,
+        matches = [(A), (A, B), (A, B, C)],
+        ignores = [(), (B), (C), (B, C)],
+    }
+
+    check_matching! {
+        name = matching_and,
+        query = (&A, &mut B),
+        matches = [(A, B), (A, B, C)],
+        ignores = [(), (A), (B), (A, C), (B, C)],
+    }
+
+    check_matching! {
+        name = matching_or,
+        query = Or<&A, &B>,
+        matches = [(A), (B), (A, B), (A, B, C), (B, C)],
+        ignores = [(), (C)],
+    }
+
+    check_matching! {
+        name = matching_xor,
+        query = Xor<&A, &mut B>,
+        matches = [(A), (B), (A, C), (B, C)],
+        ignores = [(), (A, B), (A, B, C)],
+    }
+
+    check_matching! {
+        name = matching_option,
+        query = Option<&A>,
+        matches = [(), (A), (A, B), (A, B, C)],
+        ignores = [],
+    }
+
+    check_matching! {
+        name = matching_entity_id,
+        query = EntityId,
+        matches = [(), (A), (A, B), (A, B, C)],
+        ignores = [],
+    }
+
+    check_matching! {
+        name = matching_not,
+        query = Not<&A>,
+        matches = [(), (B), (B, C)],
+        ignores = [(A), (A, B), (A, B, C)],
+    }
+
+    check_matching! {
+        name = matching_and_not,
+        query = (&mut A, Not<&B>),
+        matches = [(A), (A, C)],
+        ignores = [(), (A, B), (B, C), (A, B, C)],
+    }
+
+    check_matching! {
+        name = matching_phantom_data,
+        query = PhantomData<()>,
+        matches = [(), (A), (A, B), (A, B, C)],
+        ignores = [],
+    }
 
     #[test]
     #[allow(dead_code)]
