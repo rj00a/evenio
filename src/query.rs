@@ -415,7 +415,7 @@ where
         let (ca_rhs, state_rhs) = R::init(world, config)?;
 
         Ok((
-            dbg!(ca_lhs.and(&ca_rhs.not()).or(&ca_rhs.and(&ca_lhs.not()))),
+            ca_lhs.and(&ca_rhs.not()).or(&ca_rhs.and(&ca_lhs.not())),
             (state_lhs, state_rhs),
         ))
     }
