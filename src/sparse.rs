@@ -14,7 +14,7 @@
 ///
 /// This trait is `unsafe` because unsafe code may depend on implementations'
 /// correctness.
-pub unsafe trait SparseIndex: Copy + Clone {
+pub(crate) unsafe trait SparseIndex: Copy + Clone {
     /// The maximum supported value.
     const MAX: Self;
 

@@ -27,7 +27,7 @@ mod layout_util;
 mod map;
 pub mod query;
 mod slot_map;
-pub mod sparse;
+mod sparse;
 mod sparse_map;
 #[cfg(doc)]
 pub mod tutorial;
