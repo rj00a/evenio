@@ -823,6 +823,27 @@ mod tests {
     }
 
     #[test]
+    fn fetch_many_mut() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, C1(123));
+        let e2 = world.spawn();
+        world.insert(e2, C1(456));
+        let e3 = world.spawn();
+        world.insert(e3, C1(789));
+
+        world.add_handler(move |_: Receiver<E1>, mut f: Fetcher<&mut C1>| {
+            assert_eq!(
+                f.get_many_mut([e1, e2, e3]),
+                Ok([&mut C1(123), &mut C1(456), &mut C1(789)])
+            );
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
     fn fetch_many_mut_drop() {
         static COUNT: AtomicUsize = AtomicUsize::new(0);
 
