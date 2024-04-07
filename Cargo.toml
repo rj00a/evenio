@@ -16,7 +16,7 @@ rayon = ["dep:rayon"]
 [dependencies]
 ahash = { version = "0.8.7", default-features = false }
 bumpalo = "3.14.0"
-evenio_macros = { path = "evenio_macros", version = "0.4.2" }
+evenio_macros = { path = "evenio_macros", version = "0.5.0" }
 hashbrown = { version = "0.14.3", default-features = false, features = [
     "inline-more",
 ] }
@@ -62,7 +62,7 @@ harness = false
 
 [workspace.package]
 edition = "2021"
-version = "0.4.2"
+version = "0.5.0"
 license = "MIT"
 repository = "https://github.com/rj00a/evenio"
 

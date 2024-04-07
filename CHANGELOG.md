@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 0.5.0 - 2024-04-07
 
 - Redesign component access checking. Complex queries will now pass the component access checker in more cases.
 - Improve diagnostics for component access errors.
