@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn sparse_map_insert_max() {
+    fn insert_max() {
         let mut map = SparseMap::<u8, char>::new();
         map.insert(u8::MAX, 'f');
     }

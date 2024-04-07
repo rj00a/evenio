@@ -1,6 +1,7 @@
 //! Accessing components on entities.
 
 use core::iter::FusedIterator;
+use core::mem::{self, MaybeUninit};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -37,14 +38,11 @@ impl<Q: Query> FetcherState<Q> {
     }
 
     #[inline]
-    pub(crate) unsafe fn get(
+    pub(crate) unsafe fn get_unchecked(
         &self,
         entities: &Entities,
         entity: EntityId,
-    ) -> Result<Q::Item<'_>, GetError>
-    where
-        Q: ReadOnlyQuery,
-    {
+    ) -> Result<Q::Item<'_>, GetError> {
         let Some(loc) = entities.get(entity) else {
             return Err(GetError::NoSuchEntity);
         };
@@ -60,26 +58,41 @@ impl<Q: Query> FetcherState<Q> {
     }
 
     #[inline]
-    pub(crate) unsafe fn get_mut(
+    pub(crate) unsafe fn get_many_mut<const N: usize>(
         &mut self,
         entities: &Entities,
-        entity: EntityId,
-    ) -> Result<Q::Item<'_>, GetError> {
-        let Some(loc) = entities.get(entity) else {
-            return Err(GetError::NoSuchEntity);
-        };
+        array: [EntityId; N],
+    ) -> Result<[Q::Item<'_>; N], GetManyMutError> {
+        // Check for overlapping entity ids.
+        for i in 0..N {
+            for j in 0..i {
+                if array[i] == array[j] {
+                    return Err(GetManyMutError::AliasedMutability);
+                }
+            }
+        }
 
-        // Eliminate a panicking branch.
-        assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
+        let mut res: [MaybeUninit<Q::Item<'_>>; N] = [(); N].map(|()| MaybeUninit::uninit());
 
-        // TODO: Resize the sparse array so that all valid archetype indices are in
-        // bounds, and then `assume` it. That would eliminate a bounds check?
+        for i in 0..N {
+            match self.get_unchecked(entities, array[i]) {
+                Ok(item) => res[i] = MaybeUninit::new(item),
+                Err(e) => {
+                    if mem::needs_drop::<Q::Item<'_>>() {
+                        for item in res.iter_mut().take(i) {
+                            item.assume_init_drop();
+                        }
+                    }
 
-        let Some(state) = self.map.get_mut(loc.archetype) else {
-            return Err(GetError::QueryDoesNotMatch);
-        };
+                    return Err(e.into());
+                }
+            }
+        }
 
-        Ok(Q::get(state, loc.row))
+        Ok(mem::transmute_copy::<
+            [MaybeUninit<Q::Item<'_>>; N],
+            [Q::Item<'_>; N],
+        >(&res))
     }
 
     #[inline]
@@ -90,8 +103,6 @@ impl<Q: Query> FetcherState<Q> {
             .expect_debug_checked("invalid entity location");
         Q::get(state, loc.row)
     }
-
-    // TODO: get_many_mut
 
     #[inline]
     pub(crate) unsafe fn iter<'a>(&'a self, archetypes: &'a Archetypes) -> Iter<'a, Q>
@@ -207,7 +218,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     where
         Q: ReadOnlyQuery,
     {
-        unsafe { self.state.get(self.world.entities(), entity) }
+        unsafe { self.state.get_unchecked(self.world.entities(), entity) }
     }
 
     /// Returns the query item for the given entity.
@@ -216,7 +227,28 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     /// [`GetError`] is returned.
     #[inline]
     pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
-        unsafe { self.state.get_mut(self.world.entities(), entity) }
+        unsafe { self.state.get_unchecked(self.world.entities(), entity) }
+    }
+
+    /// Returns the query items for the given array of entities.
+    ///
+    /// An error of type [`GetManyMutError`] is returned in the following
+    /// scenarios:
+    /// 1. [`AliasedMutability`] if the given array contains any duplicate
+    ///    [`EntityId`]s.
+    /// 2. [`NoSuchEntity`] if any of the entities do not exist.
+    /// 3. [`QueryDoesNotMatch`] if any of the entities do not match the
+    ///    [`Query`] of this fetcher.
+    ///
+    /// [`AliasedMutability`]: GetManyMutError::AliasedMutability
+    /// [`NoSuchEntity`]: GetManyMutError::NoSuchEntity
+    /// [`QueryDoesNotMatch`]: GetManyMutError::QueryDoesNotMatch
+    #[inline]
+    pub fn get_many_mut<const N: usize>(
+        &mut self,
+        entities: [EntityId; N],
+    ) -> Result<[Q::Item<'_>; N], GetManyMutError> {
+        unsafe { self.state.get_many_mut(self.world.entities(), entities) }
     }
 
     /// Returns an iterator over all entities matching the read-only query.
@@ -273,22 +305,21 @@ impl<'a, Q: Query> fmt::Debug for Fetcher<'a, Q> {
 }
 
 /// An error returned when a random-access entity lookup fails.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// See [`Fetcher::get`] and [`Fetcher::get_mut`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum GetError {
     /// Entity does not exist.
     NoSuchEntity,
     /// Entity does not match the query.
     QueryDoesNotMatch,
-    /// Entity was requested mutably more than once.
-    AliasedMutability,
 }
 
 impl fmt::Display for GetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GetError::NoSuchEntity => write!(f, "entity does not exist"),
-            GetError::QueryDoesNotMatch => write!(f, "entity does not match the query"),
-            GetError::AliasedMutability => write!(f, "entity was requested mutably more than once"),
+            Self::NoSuchEntity => write!(f, "entity does not exist"),
+            Self::QueryDoesNotMatch => write!(f, "entity does not match the query"),
         }
     }
 }
@@ -296,6 +327,40 @@ impl fmt::Display for GetError {
 #[cfg(feature = "std")]
 #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 impl std::error::Error for GetError {}
+
+/// An error returned by [`Fetcher::get_many_mut`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum GetManyMutError {
+    /// Entity was requested mutably more than once.
+    AliasedMutability,
+    /// Entity does not exist.
+    NoSuchEntity,
+    /// Entity does not match the query.
+    QueryDoesNotMatch,
+}
+
+impl fmt::Display for GetManyMutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoSuchEntity => write!(f, "entity does not exist"),
+            Self::QueryDoesNotMatch => write!(f, "entity does not match the query"),
+            Self::AliasedMutability => write!(f, "entity was requested mutably more than once"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+impl std::error::Error for GetManyMutError {}
+
+impl From<GetError> for GetManyMutError {
+    fn from(value: GetError) -> Self {
+        match value {
+            GetError::NoSuchEntity => GetManyMutError::NoSuchEntity,
+            GetError::QueryDoesNotMatch => GetManyMutError::QueryDoesNotMatch,
+        }
+    }
+}
 
 unsafe impl<Q> HandlerParam for Fetcher<'_, Q>
 where
@@ -698,7 +763,9 @@ mod rayon_impl {
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeSet;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
+    use super::*;
     use crate::prelude::*;
 
     #[derive(Event)]
@@ -753,6 +820,58 @@ mod tests {
         });
 
         world.send(E3);
+    }
+
+    #[test]
+    fn fetch_many_mut() {
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, C1(123));
+        let e2 = world.spawn();
+        world.insert(e2, C1(456));
+        let e3 = world.spawn();
+        world.insert(e3, C1(789));
+
+        world.add_handler(move |_: Receiver<E1>, mut f: Fetcher<&mut C1>| {
+            assert_eq!(
+                f.get_many_mut([e1, e2, e3]),
+                Ok([&mut C1(123), &mut C1(456), &mut C1(789)])
+            );
+        });
+
+        world.send(E1);
+    }
+
+    #[test]
+    fn fetch_many_mut_drop() {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Query, PartialEq, Debug)]
+        struct CustomQuery;
+
+        impl Drop for CustomQuery {
+            fn drop(&mut self) {
+                COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        let e2 = world.spawn();
+        let e3 = world.spawn();
+
+        world.add_handler(move |_: Receiver<E1>, mut f: Fetcher<CustomQuery>| {
+            assert_eq!(
+                f.get_many_mut([e1, e2, EntityId::NULL, e3]),
+                Err(GetManyMutError::NoSuchEntity)
+            );
+        });
+
+        world.send(E1);
+
+        assert_eq!(COUNT.load(Ordering::SeqCst), 2);
     }
 
     #[test]

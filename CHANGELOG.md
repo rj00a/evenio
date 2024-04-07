@@ -5,7 +5,9 @@
 - Redesign component access checking. Complex queries will now pass the component access checker in more cases.
 - Improve diagnostics for component access errors.
 - Redesign `Config` interface to hide implementation details. (Now named `HandlerConfig`).
-- Removed `bit_set` module from public API.
+- Removed `bit_set` and `sparse` modules from public API.
+- Added `Fetcher::get_many_mut`.
+- Removed `AliasedMutability` variant from `GetError` and added `GetManyMutError`.
 
 ## 0.4.2 - 2024-03-24
 
