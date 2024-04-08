@@ -644,7 +644,7 @@ impl<Q> Eq for Has<Q> {}
 
 impl<Q> PartialOrd for Has<Q> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }
 
