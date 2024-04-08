@@ -2,6 +2,7 @@
 
 use core::iter::FusedIterator;
 use core::mem::{self, MaybeUninit};
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -461,6 +462,20 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
     }
 }
 
+impl<'a, Q: Query> Deref for Single<'a, Q> {
+    type Target = Q::Item<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a, Q: Query> DerefMut for Single<'a, Q> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Like [`Single`], but contains a `Result` instead of panicking on error.
 ///
 /// This is useful if you need to explicitly handle the situation where the
@@ -503,6 +518,20 @@ unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
 
     fn remove_archetype(state: &mut Self::State, arch: &Archetype) {
         state.remove_archetype(arch)
+    }
+}
+
+impl<'a, Q: Query> Deref for TrySingle<'a, Q> {
+    type Target = Result<Q::Item<'a>, SingleError>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a, Q: Query> DerefMut for TrySingle<'a, Q> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

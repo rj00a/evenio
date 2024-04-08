@@ -1,7 +1,10 @@
 //! Type-level DSL for retrieving data from entities.
 
+use core::cmp::Ordering;
 use core::fmt;
+use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
 use evenio_macros::all_tuples;
@@ -584,7 +587,7 @@ unsafe impl<Q: Query> Query for With<Q> {
 
 unsafe impl<Q: Query> ReadOnlyQuery for With<Q> {}
 
-/// A [`Query`] which returns a boolean indicating whether the query `Q`
+/// A [`Query`] which contains a boolean indicating whether the query `Q`
 /// matches.
 ///
 /// Like [`With`], `Has` does not provide access to the data returned by `Q`.
@@ -631,6 +634,46 @@ impl<Q> fmt::Debug for Has<Q> {
     }
 }
 
+impl<Q> PartialEq for Has<Q> {
+    fn eq(&self, other: &Self) -> bool {
+        self.has == other.has
+    }
+}
+
+impl<Q> Eq for Has<Q> {}
+
+impl<Q> PartialOrd for Has<Q> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+impl<Q> Ord for Has<Q> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.has.cmp(&other.has)
+    }
+}
+
+impl<Q> Hash for Has<Q> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.has.hash(state);
+    }
+}
+
+impl<Q> Deref for Has<Q> {
+    type Target = bool;
+
+    fn deref(&self) -> &Self::Target {
+        &self.has
+    }
+}
+
+impl<Q> DerefMut for Has<Q> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.has
+    }
+}
+
 unsafe impl<Q: Query> Query for Has<Q> {
     type Item<'a> = Self;
 
@@ -662,7 +705,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
 
 unsafe impl<Q: Query> ReadOnlyQuery for Has<Q> {}
 
-/// Returns the `EntityId` of the matched entity.
+/// Returns the [`EntityId`] of the matched entity.
 unsafe impl Query for EntityId {
     type Item<'a> = Self;
 
