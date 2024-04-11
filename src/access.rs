@@ -147,7 +147,7 @@ impl ComponentAccess {
         }
     }
 
-    /// Logically AND two access expressions together.i
+    /// Logically AND two access expressions together.
     pub fn and(&self, rhs: &Self) -> Self {
         let mut cases = vec![];
 
