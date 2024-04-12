@@ -288,21 +288,21 @@ unsafe impl HandlerParam for &'_ Events {
 ///
 /// # Safety
 ///
-/// This trait is `unsafe` to implement because unsafe code relies on the
-/// implementations of [`This`] and [`target`] being correct to avoid undefined
-/// behavior. Note that implementations produced by the derive macro are always
-/// safe.
+/// This trait is `unsafe` to implement because unsafe code relies on correct
+/// implementations of [`This`] and [`target`] to avoid undefined behavior. Note
+/// that implementations produced by the derive macro are always safe.
 ///
 /// [`This`]: Self::This
 /// [`target`]: Self::target
 pub unsafe trait Event: Send + Sync {
-    /// The type of `Self` with the lifetime of `'a`.
+    /// The type of `Self`, but with lifetimes modified to outlive `'a`.
     ///
     /// # Safety
     ///
     /// This type _must_ correspond to the type of `Self`. In particular, it
-    /// must be safe to transmute between `Self` and `This<'a>`. Additionally,
-    /// the [`TypeId`] of `Self` must match that of `This<'static>`.
+    /// must be safe to transmute between `Self` and `This<'a>` (assuming `'a`
+    /// is correct). Additionally, the [`TypeId`] of `Self` must match that
+    /// of `This<'static>`.
     type This<'a>: 'a;
 
     /// If this event is considered "targeted" or "untargeted".
