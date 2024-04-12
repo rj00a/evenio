@@ -39,7 +39,7 @@ pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
                 }
 
                 where_clause.predicates.push(
-                    parse_quote!(#ty: for<'__a> ::evenio::handler::HandlerParam<Item<'__a> = #replaced_ty>),
+                    parse_quote!(#ty: for<'__a> ::evenio::handler::HandlerParam<This<'__a> = #replaced_ty>),
                 );
             }
 
@@ -108,9 +108,9 @@ pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let mut item: Type = parse_quote!(#name #ty_generics);
+    let mut this: Type = parse_quote!(#name #ty_generics);
     for life in &lifetimes {
-        replace_lifetime(&mut item, &life.lifetime.ident, &parse_quote!(__a));
+        replace_lifetime(&mut this, &life.lifetime.ident, &parse_quote!(__a));
     }
 
     Ok(quote! {
@@ -118,7 +118,7 @@ pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
         unsafe impl #impl_generics ::evenio::handler::HandlerParam for #name #ty_generics #where_clause {
             type State = <#tuple_ty as ::evenio::handler::HandlerParam>::State;
 
-            type Item<'__a> = #item;
+            type This<'__a> = #this;
 
             fn init(
                 world: &mut ::evenio::world::World,
@@ -134,7 +134,7 @@ pub(crate) fn derive_handler_param(input: TokenStream) -> Result<TokenStream> {
                 event_ptr: ::evenio::event::EventPtr<'__a>,
                 target_location: ::evenio::entity::EntityLocation,
                 world: ::evenio::world::UnsafeWorldCell<'__a>,
-            ) -> Self::Item<'__a> {
+            ) -> Self::This<'__a> {
                 #get_body
             }
 

@@ -92,9 +92,13 @@ impl World {
     /// got event: 123
     /// ```
     pub fn send<E: Event>(&mut self, event: E) {
-        self.send_many(|mut s| s.send(event))
+        let idx = self.add_event::<E>().index().as_u32();
+        unsafe { self.event_queue.push_front(event, idx) };
+
+        self.flush_event_queue();
     }
 
+    /*
     /// Enqueue an arbitrary number of events and send them all at once.
     ///
     /// The closure `f` is passed a [`Sender`] used to add events to a queue.
@@ -133,6 +137,7 @@ impl World {
 
         res
     }
+    */
 
     /// Creates a new entity, returns its [`EntityId`], and sends the [`Spawn`]
     /// event to signal its creation.
@@ -151,7 +156,16 @@ impl World {
     /// assert!(world.entities().contains(id));
     /// ```
     pub fn spawn(&mut self) -> EntityId {
-        self.send_many(|mut s| s.spawn())
+        let id = self.reserved_entities.reserve(&self.entities);
+
+        unsafe {
+            self.event_queue
+                .push_front(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
+        }
+
+        self.send(Spawn(id));
+
+        id
     }
 
     /// Sends the [`Insert`] event.
@@ -656,9 +670,9 @@ impl World {
     pub fn add_event<E: Event>(&mut self) -> EventId {
         let desc = EventDescriptor {
             name: any::type_name::<E>().into(),
-            type_id: Some(TypeId::of::<E>()),
+            type_id: Some(TypeId::of::<E::This<'static>>()),
             is_targeted: E::IS_TARGETED,
-            kind: unsafe { E::init(self) },
+            kind: E::init(self),
             layout: Layout::new::<E>(),
             drop: drop_fn_of::<E>(),
             is_immutable: E::IS_IMMUTABLE,
@@ -1057,6 +1071,7 @@ impl Drop for World {
     }
 }
 
+/*
 /// Used for queueing events. Passed to the closure given in [`send_many`].
 ///
 /// [`send_many`]: World::send_many
@@ -1065,9 +1080,9 @@ pub struct Sender<'a> {
     world: &'a mut World,
 }
 
-impl Sender<'_> {
+impl<'a> Sender<'a> {
     /// Enqueue an event.
-    pub fn send<E: Event>(&mut self, event: E) {
+    pub fn send<E: Event + 'a>(&mut self, event: E) {
         let idx = self.world.add_event::<E>().index().as_u32();
         unsafe { self.world.event_queue.push_front(event, idx) };
     }
@@ -1100,6 +1115,7 @@ impl Sender<'_> {
         self.send(Despawn(entity))
     }
 }
+*/
 
 /// Reference to a [`World`] where all methods take `&self` and aliasing rules
 /// are not checked. It is the caller's responsibility to ensure that

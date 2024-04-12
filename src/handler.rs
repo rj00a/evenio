@@ -226,7 +226,7 @@ impl Index<TypeId> for Handlers {
 unsafe impl HandlerParam for &'_ Handlers {
     type State = ();
 
-    type Item<'a> = &'a Handlers;
+    type This<'a> = &'a Handlers;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
@@ -238,7 +238,7 @@ unsafe impl HandlerParam for &'_ Handlers {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         world.handlers()
     }
 
@@ -1026,9 +1026,9 @@ pub unsafe trait HandlerParam {
     /// Persistent data stored in the handler.
     type State: Send + Sync + 'static;
 
-    /// The type produced by this handler param. This is expected to be the type
+    /// The type produced by this handler param. This must be the type
     /// of `Self` but with the lifetime of `'a`.
-    type Item<'a>;
+    type This<'a>;
 
     /// Initializes the handler using the input [`World`] and [`HandlerConfig`].
     ///
@@ -1052,7 +1052,7 @@ pub unsafe trait HandlerParam {
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a>;
+    ) -> Self::This<'a>;
 
     /// Refresh an archetype for this handler param. Called whenever
     /// [`Handler::refresh_archetype`] is called.
@@ -1066,7 +1066,7 @@ pub unsafe trait HandlerParam {
 unsafe impl<T> HandlerParam for PhantomData<T> {
     type State = ();
 
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
@@ -1078,7 +1078,7 @@ unsafe impl<T> HandlerParam for PhantomData<T> {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         Self
     }
 
@@ -1093,7 +1093,7 @@ macro_rules! impl_handler_param_tuple {
         unsafe impl<$($P: HandlerParam),*> HandlerParam for ($($P,)*) {
             type State = ($($P::State,)*);
 
-            type Item<'a> = ($($P::Item<'a>,)*);
+            type This<'a> = ($($P::This<'a>,)*);
 
             #[inline]
             fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
@@ -1111,7 +1111,7 @@ macro_rules! impl_handler_param_tuple {
                 event_ptr: EventPtr<'a>,
                 target_location: EntityLocation,
                 world: UnsafeWorldCell<'a>,
-            ) -> Self::Item<'a> {
+            ) -> Self::This<'a> {
                 (
                     $(
                         $P::get($s, info, event_ptr, target_location, world),
@@ -1239,20 +1239,20 @@ pub trait HandlerParamFunction<Marker>: Send + Sync + 'static {
     type Param: HandlerParam;
 
     /// Call the function.
-    fn run(&mut self, param: <Self::Param as HandlerParam>::Item<'_>);
+    fn run(&mut self, param: <Self::Param as HandlerParam>::This<'_>);
 }
 
 macro_rules! impl_handler_param_function {
     ($(($P:ident, $p:ident)),*) => {
         impl<F, $($P: HandlerParam),*> HandlerParamFunction<fn($($P),*)> for F
         where
-            F: FnMut($($P),*) + FnMut($($P::Item<'_>),*) + Send + Sync + 'static,
+            F: FnMut($($P),*) + FnMut($($P::This<'_>),*) + Send + Sync + 'static,
         {
             type Param = ($($P,)*);
 
             fn run(
                 &mut self,
-                ($($p,)*): <Self::Param as HandlerParam>::Item<'_>
+                ($($p,)*): <Self::Param as HandlerParam>::This<'_>
             ) {
                 (self)($($p),*)
             }
@@ -1313,7 +1313,7 @@ pub struct Local<'a, T> {
 unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
     type State = Exclusive<T>;
 
-    type Item<'a> = Local<'a, T>;
+    type This<'a> = Local<'a, T>;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(Exclusive::new(T::default()))
@@ -1325,7 +1325,7 @@ unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         Local {
             state: state.get_mut(),
         }
@@ -1360,7 +1360,7 @@ impl<T: fmt::Display> fmt::Display for Local<'_, T> {
 unsafe impl HandlerParam for &'_ HandlerInfo {
     type State = ();
 
-    type Item<'a> = &'a HandlerInfo;
+    type This<'a> = &'a HandlerInfo;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
@@ -1372,7 +1372,7 @@ unsafe impl HandlerParam for &'_ HandlerInfo {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         info
     }
 
@@ -1386,7 +1386,7 @@ unsafe impl HandlerParam for &'_ HandlerInfo {
 unsafe impl<P: HandlerParam> HandlerParam for std::sync::Mutex<P> {
     type State = P::State;
 
-    type Item<'a> = std::sync::Mutex<P::Item<'a>>;
+    type This<'a> = std::sync::Mutex<P::This<'a>>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         P::init(world, config)
@@ -1398,7 +1398,7 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::Mutex<P> {
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         std::sync::Mutex::new(P::get(state, info, event_ptr, target_location, world))
     }
 
@@ -1416,7 +1416,7 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::Mutex<P> {
 unsafe impl<P: HandlerParam> HandlerParam for std::sync::RwLock<P> {
     type State = P::State;
 
-    type Item<'a> = std::sync::RwLock<P::Item<'a>>;
+    type This<'a> = std::sync::RwLock<P::This<'a>>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         P::init(world, config)
@@ -1428,7 +1428,7 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::RwLock<P> {
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         std::sync::RwLock::new(P::get(state, info, event_ptr, target_location, world))
     }
 

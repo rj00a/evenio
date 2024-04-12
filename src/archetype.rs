@@ -541,7 +541,7 @@ impl Index<ArchetypeIdx> for Archetypes {
 unsafe impl HandlerParam for &'_ Archetypes {
     type State = ();
 
-    type Item<'a> = &'a Archetypes;
+    type This<'a> = &'a Archetypes;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
@@ -553,7 +553,7 @@ unsafe impl HandlerParam for &'_ Archetypes {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         world.archetypes()
     }
 
