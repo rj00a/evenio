@@ -1689,4 +1689,27 @@ mod tests {
 
         assert_eq!(world.entities().len(), 0);
     }
+
+    #[test]
+    fn send_borrowed() {
+        let mut buf = [1, 2, 3];
+
+        #[derive(Event, Debug)]
+        struct A<'a>(&'a mut [i32]);
+
+        impl Drop for A<'_> {
+            fn drop(&mut self) {
+                for item in self.0.iter_mut() {
+                    *item *= 2;
+                    println!("{item}");
+                }
+            }
+        }
+
+        let mut world = World::new();
+
+        world.add_handler(|r: Receiver<A>| println!("{r:?}"));
+
+        world.send(A(&mut buf));
+    }
 }

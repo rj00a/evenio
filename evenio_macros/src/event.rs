@@ -11,7 +11,7 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
         .generics
         .make_where_clause()
         .predicates
-        .push(parse_quote!(Self: Send + Sync + 'static));
+        .push(parse_quote!(Self: Send + Sync));
 
     let mut target_field = None;
 
