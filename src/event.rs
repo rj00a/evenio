@@ -1606,35 +1606,6 @@ mod tests {
         );
     }
 
-    /*
-    #[test]
-    fn event_order_send_many() {
-        let mut world = World::new();
-
-        #[derive(Event)]
-        struct E(i32);
-
-        #[derive(Component)]
-        struct Result(Vec<i32>);
-
-        world.add_handler(|r: Receiver<E>, res: Single<&mut Result>| {
-            res.0 .0.push(r.event.0);
-        });
-
-        let e = world.spawn();
-        world.insert(e, Result(vec![]));
-
-        world.send_many(|mut s| {
-            s.send(E(1));
-            s.send(E(2));
-            s.send(E(3));
-        });
-
-        let Result(values) = world.get_mut::<Result>(e).unwrap();
-        assert_eq!(values, &[1, 2, 3]);
-    }
-    */
-
     #[test]
     fn change_event_target() {
         let mut world = World::new();

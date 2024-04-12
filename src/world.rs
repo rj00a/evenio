@@ -98,47 +98,6 @@ impl World {
         self.flush_event_queue();
     }
 
-    /*
-    /// Enqueue an arbitrary number of events and send them all at once.
-    ///
-    /// The closure `f` is passed a [`Sender`] used to add events to a queue.
-    /// Once the closure returns, all enqueued events are broadcasted as
-    /// described by [`send`].
-    ///
-    /// [`send`]: World::send
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use evenio::prelude::*;
-    /// #
-    /// # #[derive(Event)]
-    /// # struct A;
-    /// #
-    /// # #[derive(Event)]
-    /// # struct B;
-    /// #
-    /// # let mut world = World::new();
-    /// #
-    /// world.send_many(|mut sender| {
-    ///     sender.send(A);
-    ///     sender.send(B);
-    /// });
-    /// ```
-    pub fn send_many<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(Sender) -> R,
-    {
-        let event_count = self.event_queue.len();
-        let res = f(Sender { world: self });
-        unsafe { self.event_queue.reverse_from(event_count) };
-
-        self.flush_event_queue();
-
-        res
-    }
-    */
-
     /// Creates a new entity, returns its [`EntityId`], and sends the [`Spawn`]
     /// event to signal its creation.
     ///
@@ -1088,52 +1047,6 @@ impl Default for World {
         Self::new()
     }
 }
-
-/*
-/// Used for queueing events. Passed to the closure given in [`send_many`].
-///
-/// [`send_many`]: World::send_many
-#[derive(Debug)]
-pub struct Sender<'a> {
-    world: &'a mut World,
-}
-
-impl<'a> Sender<'a> {
-    /// Enqueue an event.
-    pub fn send<E: Event + 'a>(&mut self, event: E) {
-        let idx = self.world.add_event::<E>().index().as_u32();
-        unsafe { self.world.event_queue.push_front(event, idx) };
-    }
-
-    /// Enqueue the spawning of an entity and [`Spawn`] event. Returns the
-    /// [`EntityId`] of the entity that will be spawned.
-    pub fn spawn(&mut self) -> EntityId {
-        let id = self.world.reserved_entities.reserve(&self.world.entities);
-        unsafe {
-            self.world
-                .event_queue
-                .push_front(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
-        }
-        self.send(Spawn(id));
-        id
-    }
-
-    /// Enqueue an [`Insert`] event.
-    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
-        self.send(Insert::new(entity, component))
-    }
-
-    /// Enqueue a [`Remove`] event.
-    pub fn remove<C: Component>(&mut self, entity: EntityId) {
-        self.send(Remove::<C>::new(entity))
-    }
-
-    /// Enqueue a [`Despawn`] event.
-    pub fn despawn(&mut self, entity: EntityId) {
-        self.send(Despawn(entity))
-    }
-}
-*/
 
 /// Reference to a [`World`] where all methods take `&self` and aliasing rules
 /// are not checked. It is the caller's responsibility to ensure that
