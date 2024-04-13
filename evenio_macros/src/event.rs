@@ -1,8 +1,8 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
-use syn::{parse2, parse_quote, Data, DeriveInput, LitInt, Result};
+use syn::{parse2, parse_quote, Data, DeriveInput, LitInt, Result, Type};
 
-use crate::util::parse_attr_immutable;
+use crate::util::{parse_attr_immutable, replace_lifetime};
 
 pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
     let mut input = parse2::<DeriveInput>(input)?;
@@ -11,7 +11,7 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
         .generics
         .make_where_clause()
         .predicates
-        .push(parse_quote!(Self: Send + Sync + 'static));
+        .push(parse_quote!(Self: Send + Sync));
 
     let mut target_field = None;
 
@@ -89,9 +89,18 @@ pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
+    let mut this: Type = parse_quote!(#name #ty_generics);
+
+    let new_lifetime_ident = parse_quote!(__a);
+    for life in input.generics.lifetimes() {
+        replace_lifetime(&mut this, &life.lifetime.ident, &new_lifetime_ident);
+    }
+
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::evenio::event::Event for #name #ty_generics #where_clause {
+        unsafe impl #impl_generics ::evenio::event::Event for #name #ty_generics #where_clause {
+            type This<'__a> = #this;
+
             const IS_TARGETED: bool = #is_targeted;
             const IS_IMMUTABLE: bool = #is_immutable;
 

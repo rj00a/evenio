@@ -108,7 +108,7 @@ impl Index<EntityIdx> for Entities {
 unsafe impl HandlerParam for &'_ Entities {
     type State = ();
 
-    type Item<'a> = &'a Entities;
+    type This<'a> = &'a Entities;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         Ok(())
@@ -120,7 +120,7 @@ unsafe impl HandlerParam for &'_ Entities {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         world.entities()
     }
 

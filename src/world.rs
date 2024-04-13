@@ -92,46 +92,10 @@ impl World {
     /// got event: 123
     /// ```
     pub fn send<E: Event>(&mut self, event: E) {
-        self.send_many(|mut s| s.send(event))
-    }
-
-    /// Enqueue an arbitrary number of events and send them all at once.
-    ///
-    /// The closure `f` is passed a [`Sender`] used to add events to a queue.
-    /// Once the closure returns, all enqueued events are broadcasted as
-    /// described by [`send`].
-    ///
-    /// [`send`]: World::send
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use evenio::prelude::*;
-    /// #
-    /// # #[derive(Event)]
-    /// # struct A;
-    /// #
-    /// # #[derive(Event)]
-    /// # struct B;
-    /// #
-    /// # let mut world = World::new();
-    /// #
-    /// world.send_many(|mut sender| {
-    ///     sender.send(A);
-    ///     sender.send(B);
-    /// });
-    /// ```
-    pub fn send_many<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(Sender) -> R,
-    {
-        let event_count = self.event_queue.len();
-        let res = f(Sender { world: self });
-        unsafe { self.event_queue.reverse_from(event_count) };
+        let idx = self.add_event::<E>().index().as_u32();
+        unsafe { self.event_queue.push_front(event, idx) };
 
         self.flush_event_queue();
-
-        res
     }
 
     /// Creates a new entity, returns its [`EntityId`], and sends the [`Spawn`]
@@ -151,7 +115,16 @@ impl World {
     /// assert!(world.entities().contains(id));
     /// ```
     pub fn spawn(&mut self) -> EntityId {
-        self.send_many(|mut s| s.spawn())
+        let id = self.reserved_entities.reserve(&self.entities);
+
+        unsafe {
+            self.event_queue
+                .push_front(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
+        }
+
+        self.send(Spawn(id));
+
+        id
     }
 
     /// Sends the [`Insert`] event.
@@ -656,9 +629,9 @@ impl World {
     pub fn add_event<E: Event>(&mut self) -> EventId {
         let desc = EventDescriptor {
             name: any::type_name::<E>().into(),
-            type_id: Some(TypeId::of::<E>()),
+            type_id: Some(TypeId::of::<E::This<'static>>()),
             is_targeted: E::IS_TARGETED,
-            kind: unsafe { E::init(self) },
+            kind: E::init(self),
             layout: Layout::new::<E>(),
             drop: drop_fn_of::<E>(),
             is_immutable: E::IS_IMMUTABLE,
@@ -826,16 +799,14 @@ impl World {
             };
             let event_kind = event_info.kind();
 
-            // In case `Handler::run` unwinds, we need to drop the event we're holding on
-            // the stack. The other events in the event queue will be handled by
-            // `World`'s destructor.
-            struct EventDropper {
+            struct EventDropper<'a> {
                 event: NonNull<u8>,
                 drop: DropFn,
                 ownership_flag: bool,
+                world: &'a mut World,
             }
 
-            impl EventDropper {
+            impl EventDropper<'_> {
                 /// Extracts the event pointer and drop fn without running
                 /// the destructor.
                 #[inline]
@@ -846,41 +817,79 @@ impl World {
 
                     (event, drop)
                 }
+
+                /// Drops the held event.
+                #[inline]
+                unsafe fn unpack_drop_event(self) {
+                    if let (event, Some(drop)) = self.unpack() {
+                        drop(event);
+                    }
+                }
             }
 
-            impl Drop for EventDropper {
+            impl Drop for EventDropper<'_> {
+                #[cold]
                 fn drop(&mut self) {
+                    // In case `Handler::run` unwinds, we need to drop the event we're holding on
+                    // the stack as well as the events still the in the event queue.
+
+                    #[cfg(feature = "std")]
+                    debug_assert!(std::thread::panicking());
+
+                    // Drop the held event.
                     if !self.ownership_flag {
                         if let Some(drop) = self.drop {
                             unsafe { drop(self.event) };
                         }
                     }
+
+                    // Drop all events remaining in the event queue.
+                    // This should be done here instead of the World's destructor because events
+                    // could contain borrowed data.
+                    for item in self.world.event_queue.iter() {
+                        let info = unsafe {
+                            self.world
+                                .events
+                                .get_by_index(item.meta.event_idx())
+                                .unwrap_debug_checked()
+                        };
+
+                        if let Some(drop) = info.drop() {
+                            unsafe { drop(item.event) };
+                        }
+                    }
+
+                    self.world.event_queue.clear();
                 }
             }
 
-            let mut event = EventDropper {
+            let mut ctx = EventDropper {
                 event: item.event,
                 drop: event_info.drop(),
                 ownership_flag: false,
+                world: self,
             };
 
             let (handler_list, target_location) = match event_meta {
                 EventMeta::Untargeted { idx } => (
                     unsafe {
-                        self.handlers
+                        ctx.world
+                            .handlers
                             .get_untargeted_list(idx)
                             .unwrap_debug_checked()
                     },
                     EntityLocation::NULL,
                 ),
                 EventMeta::Targeted { idx, target } => {
-                    let Some(location) = self.entities.get(target) else {
+                    let Some(location) = ctx.world.entities.get(target) else {
                         // Entity doesn't exist. Skip the event.
+                        unsafe { ctx.unpack_drop_event() };
                         continue;
                     };
 
                     let arch = unsafe {
-                        self.archetypes
+                        ctx.world
+                            .archetypes
                             .get(location.archetype)
                             .unwrap_debug_checked()
                     };
@@ -895,24 +904,23 @@ impl World {
 
             let handlers: *const [_] = handler_list.handlers();
 
-            let events_before = self.event_queue.len();
+            let events_before = ctx.world.event_queue.len();
 
             for mut info_ptr in unsafe { (*handlers).iter().copied() } {
                 let info = unsafe { info_ptr.as_info_mut() };
 
                 let handler: *mut dyn Handler = info.handler_mut();
 
-                let event_ptr =
-                    EventPtr::new(event.event, NonNull::from(&mut event.ownership_flag));
+                let event_ptr = EventPtr::new(ctx.event, NonNull::from(&mut ctx.ownership_flag));
 
-                let world_cell = self.unsafe_cell_mut();
+                let world_cell = ctx.world.unsafe_cell_mut();
 
                 unsafe { (*handler).run(info, event_ptr, target_location, world_cell) };
 
                 // Did the handler take ownership of the event?
-                if event.ownership_flag {
+                if ctx.ownership_flag {
                     // Don't drop event since we don't own it anymore.
-                    event.unpack();
+                    ctx.unpack();
 
                     // Reverse pushed events so they're handled in FIFO order.
                     unsafe { self.event_queue.reverse_from(events_before) };
@@ -922,52 +930,53 @@ impl World {
             }
 
             // Reverse pushed events so they're handled in FIFO order.
-            unsafe { self.event_queue.reverse_from(events_before) };
+            unsafe { ctx.world.event_queue.reverse_from(events_before) };
 
             match event_kind {
                 EventKind::Normal => {
                     // Ordinary event. Run drop fn.
-                    if let (ptr, Some(drop)) = event.unpack() {
-                        unsafe { drop(ptr) };
-                    }
+                    unsafe { ctx.unpack_drop_event() };
                 }
                 EventKind::Insert {
                     component_idx,
                     component_offset,
                 } => {
-                    let entity_id = unsafe { *event.event.as_ptr().cast::<EntityId>() };
+                    let entity_id = unsafe { *ctx.event.as_ptr().cast::<EntityId>() };
 
-                    if let Some(loc) = self.entities.get(entity_id) {
+                    if let Some(loc) = ctx.world.entities.get(entity_id) {
                         let dst = unsafe {
-                            self.archetypes.traverse_insert(
+                            ctx.world.archetypes.traverse_insert(
                                 loc.archetype,
                                 component_idx,
-                                &mut self.components,
-                                &mut self.handlers,
+                                &mut ctx.world.components,
+                                &mut ctx.world.handlers,
                             )
                         };
 
                         let component_ptr =
-                            unsafe { event.event.as_ptr().add(component_offset as usize) }
+                            unsafe { ctx.event.as_ptr().add(component_offset as usize) }
                                 .cast_const();
 
                         unsafe {
-                            self.archetypes.move_entity(
+                            ctx.world.archetypes.move_entity(
                                 loc,
                                 dst,
                                 [(component_idx, component_ptr)],
-                                &mut self.entities,
+                                &mut ctx.world.entities,
                             )
                         };
 
                         // Inserted component is owned by the archetype now. We wait to unpack
                         // in case one of the above functions panics.
-                        event.unpack();
+                        ctx.unpack();
+                    } else {
+                        // Target entity doesn't exist. Drop the event.
+                        unsafe { ctx.unpack_drop_event() };
                     }
                 }
                 EventKind::Remove { component_idx } => {
                     // `Remove` doesn't need drop.
-                    let (event, _) = event.unpack();
+                    let (event, _) = ctx.unpack();
 
                     // SAFETY: `Remove` is `repr(transparent)` with the first field being the
                     // `EntityId`, so we can safely reinterpret this pointer.
@@ -991,7 +1000,7 @@ impl World {
                 }
                 EventKind::SpawnQueued => {
                     // `SpawnQueued` doesn't need drop.
-                    let _ = event.unpack();
+                    let _ = ctx.unpack();
 
                     // Spawn one entity from the reserved entity queue.
                     self.reserved_entities
@@ -999,7 +1008,7 @@ impl World {
                 }
                 EventKind::Despawn => {
                     // `Despawn` doesn't need drop.
-                    let (event, _) = event.unpack();
+                    let (event, _) = ctx.unpack();
 
                     let entity_id = unsafe { *event.as_ptr().cast::<Despawn>() }.0;
 
@@ -1036,68 +1045,6 @@ impl World {
 impl Default for World {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for World {
-    fn drop(&mut self) {
-        // Drop in-flight events still in the event queue. This can happen if a panic
-        // occurs.
-        for item in self.event_queue.iter() {
-            let info = unsafe {
-                self.events
-                    .get_by_index(item.meta.event_idx())
-                    .unwrap_debug_checked()
-            };
-
-            if let Some(drop) = info.drop() {
-                unsafe { drop(item.event) };
-            }
-        }
-    }
-}
-
-/// Used for queueing events. Passed to the closure given in [`send_many`].
-///
-/// [`send_many`]: World::send_many
-#[derive(Debug)]
-pub struct Sender<'a> {
-    world: &'a mut World,
-}
-
-impl Sender<'_> {
-    /// Enqueue an event.
-    pub fn send<E: Event>(&mut self, event: E) {
-        let idx = self.world.add_event::<E>().index().as_u32();
-        unsafe { self.world.event_queue.push_front(event, idx) };
-    }
-
-    /// Enqueue the spawning of an entity and [`Spawn`] event. Returns the
-    /// [`EntityId`] of the entity that will be spawned.
-    pub fn spawn(&mut self) -> EntityId {
-        let id = self.world.reserved_entities.reserve(&self.world.entities);
-        unsafe {
-            self.world
-                .event_queue
-                .push_front(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
-        }
-        self.send(Spawn(id));
-        id
-    }
-
-    /// Enqueue an [`Insert`] event.
-    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
-        self.send(Insert::new(entity, component))
-    }
-
-    /// Enqueue a [`Remove`] event.
-    pub fn remove<C: Component>(&mut self, entity: EntityId) {
-        self.send(Remove::<C>::new(entity))
-    }
-
-    /// Enqueue a [`Despawn`] event.
-    pub fn despawn(&mut self, entity: EntityId) {
-        self.send(Despawn(entity))
     }
 }
 
@@ -1194,29 +1141,11 @@ mod tests {
         #[derive(Event)]
         struct A(Arc<()>);
 
-        impl Drop for A {
-            fn drop(&mut self) {
-                eprintln!("calling A destructor");
-            }
-        }
-
         #[derive(Event)]
         struct B(Arc<()>);
 
-        impl Drop for B {
-            fn drop(&mut self) {
-                eprintln!("calling B destructor");
-            }
-        }
-
         #[derive(Event)]
         struct C(Arc<()>);
-
-        impl Drop for C {
-            fn drop(&mut self) {
-                eprintln!("calling C destructor");
-            }
-        }
 
         let mut world = World::new();
 
@@ -1255,21 +1184,9 @@ mod tests {
         #[derive(Event)]
         struct B(Arc<()>);
 
-        impl Drop for B {
-            fn drop(&mut self) {
-                eprintln!("calling B destructor");
-            }
-        }
-
         #[allow(dead_code)]
         #[derive(Event)]
         struct C(Arc<()>);
-
-        impl Drop for C {
-            fn drop(&mut self) {
-                eprintln!("calling C destructor");
-            }
-        }
 
         let mut world = World::new();
 

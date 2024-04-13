@@ -369,7 +369,7 @@ where
 {
     type State = FetcherState<Q>;
 
-    type Item<'a> = Fetcher<'a, Q>;
+    type This<'a> = Fetcher<'a, Q>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -381,7 +381,7 @@ where
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         Fetcher { state, world }
     }
 
@@ -428,7 +428,7 @@ pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
 unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
     type State = FetcherState<Q>;
 
-    type Item<'a> = Single<'a, Q>;
+    type This<'a> = Single<'a, Q>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -441,7 +441,7 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
         event_ptr: EventPtr<'a>,
         target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         match TrySingle::get(state, info, event_ptr, target_location, world) {
             TrySingle(Ok(item)) => Single(item),
             TrySingle(Err(e)) => {
@@ -486,7 +486,7 @@ pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
 unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
     type State = FetcherState<Q>;
 
-    type Item<'a> = TrySingle<'a, Q>;
+    type This<'a> = TrySingle<'a, Q>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -498,7 +498,7 @@ unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
         _event_ptr: EventPtr<'a>,
         _target_location: EntityLocation,
         world: UnsafeWorldCell<'a>,
-    ) -> Self::Item<'a> {
+    ) -> Self::This<'a> {
         let mut it = state.iter_mut(world.archetypes());
 
         let Some(item) = it.next() else {
