@@ -178,8 +178,8 @@ fn iter_mandelbrot_bevy<const PARALLEL: bool>(bencher: Bencher, iters: usize) {
 fn mandelbrot(x: u16, y: u16, iters: usize) -> bool {
     let scale = 2.;
 
-    let cr = x as f64 / (IMAGE_SIZE - 1) as f64 * scale - scale / 2.;
-    let ci = y as f64 / (IMAGE_SIZE - 1) as f64 * scale - scale / 2.;
+    let cr = f64::from(x) / f64::from(IMAGE_SIZE - 1) * scale - scale / 2.;
+    let ci = f64::from(y) / f64::from(IMAGE_SIZE - 1) * scale - scale / 2.;
 
     let mut zr = cr;
     let mut zi = ci;
@@ -197,7 +197,7 @@ fn mandelbrot(x: u16, y: u16, iters: usize) -> bool {
 
 #[allow(unused)]
 fn make_mandel_pgm(iters: usize) -> std::io::Result<()> {
-    let mut pgm = format!("P2 {0} {0} 1\n", IMAGE_SIZE);
+    let mut pgm = format!("P2 {IMAGE_SIZE} {IMAGE_SIZE} 1\n");
 
     for y in 0..IMAGE_SIZE {
         for x in 0..IMAGE_SIZE {
