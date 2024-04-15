@@ -26,8 +26,8 @@ slab = "0.4.9"
 
 [dev-dependencies]
 ahash = "0.8.7"
-bevy_ecs = { version = "0.13.0", features = ["multi-threaded"] }
-bevy_tasks = "0.13.0"
+bevy_ecs = { version = "0.13.2", features = ["multi-threaded"] }
+bevy_tasks = "0.13.2"
 divan = "0.1.11"
 rand = "0.8.5"
 
