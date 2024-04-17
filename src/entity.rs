@@ -234,9 +234,6 @@ impl ReservedEntities {
 
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Arc;
-    use std::sync::Mutex;
-
     use crate::entity::Entities;
     use crate::prelude::*;
 
