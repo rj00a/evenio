@@ -255,6 +255,33 @@ mod tests {
     }
 
     #[test]
+    fn spawn_despawn_queued() {
+        let mut world = World::new();
+
+        #[derive(Event)]
+        struct E1;
+
+        #[derive(Event)]
+        struct E2 {
+            a: EntityId,
+            b: EntityId,
+        }
+
+        world.add_handler(|_: Receiver<E1>, mut s: Sender<(Despawn, E2)>| {
+            let a = s.spawn();
+            let b = s.spawn();
+            s.despawn(b);
+            s.send(E2 { a, b });
+        });
+
+        world.add_handler(|r: Receiver<E2>, mut s: Sender<()>| {
+            let c = s.spawn();
+            assert_ne!(r.event.a, c);
+            assert_ne!(r.event.b, c);
+        });
+    }
+
+    #[test]
     fn spawn_event_entity_exists() {
         let mut world = World::new();
 
