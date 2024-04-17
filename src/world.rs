@@ -1002,9 +1002,9 @@ impl World {
                     // `SpawnQueued` doesn't need drop.
                     let _ = ctx.unpack();
 
-                    // Spawn one entity from the reserved entity queue.
+                    // Spawn all entities from the reserved entity queue.
                     self.reserved_entities
-                        .spawn_one(&mut self.entities, |id| self.archetypes.spawn(id));
+                        .spawn_all(&mut self.entities, |id| self.archetypes.spawn(id));
                 }
                 EventKind::Despawn => {
                     // `Despawn` doesn't need drop.
