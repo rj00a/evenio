@@ -219,9 +219,9 @@ impl ComponentAccess {
         }
     }
 
-    /// Inverts the accesses according to De Morgan's laws.
+    /// Negate the accesses according to De Morgan's laws.
     ///
-    /// This that this is a lossy operation because read/write information is
+    /// Note that this is a lossy operation because read/write information is
     /// lost.
     pub fn not(&self) -> Self {
         self.cases
@@ -292,8 +292,8 @@ impl ComponentAccess {
     }
 }
 
-/// Equivalent to [`Self::new_false`].
 impl Default for ComponentAccess {
+    /// Equivalent to [`Self::new_false`].
     fn default() -> Self {
         Self::new_false()
     }
