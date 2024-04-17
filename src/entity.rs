@@ -213,17 +213,17 @@ impl ReservedEntities {
         }
     }
 
-    pub(crate) fn spawn_one(
+    pub(crate) fn spawn_all(
         &mut self,
         entities: &mut Entities,
-        f: impl FnOnce(EntityId) -> EntityLocation,
+        mut f: impl FnMut(EntityId) -> EntityLocation,
     ) {
-        if self.count > 0 {
-            entities.add_with(f);
-
-            self.count -= 1;
-            self.iter = entities.locs.next_key_iter();
+        for _ in 0..self.count {
+            entities.add_with(&mut f);
         }
+
+        self.iter = entities.locs.next_key_iter();
+        self.count = 0;
     }
 
     pub(crate) fn refresh(&mut self, entities: &Entities) {
@@ -255,38 +255,6 @@ mod tests {
         assert_ne!(e1, e2);
         world.despawn(e2);
         assert!(!world.entities().contains(e2));
-    }
-
-    #[test]
-    fn spawn_queued() {
-        let mut world = World::new();
-
-        #[derive(Event)]
-        struct E1;
-
-        #[derive(Event)]
-        struct E2;
-
-        let entities = Arc::new(Mutex::new((EntityId::NULL, EntityId::NULL)));
-
-        let entities_1 = entities.clone();
-        let entities_2 = entities.clone();
-
-        world.add_handler(move |_: Receiver<E1>, mut s: Sender<(Spawn, E2)>| {
-            let e1 = s.spawn();
-            s.send(E2);
-            let e2 = s.spawn();
-            *entities_1.lock().unwrap() = (e1, e2);
-        });
-
-        world.add_handler(move |_: Receiver<E2>, entities: &Entities| {
-            let (e1, e2) = *entities_2.lock().unwrap();
-
-            assert!(entities.contains(e1));
-            assert!(!entities.contains(e2));
-        });
-
-        world.send(E1);
     }
 
     #[test]
