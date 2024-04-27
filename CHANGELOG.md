@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed `Send + Sync` requirements from all data in the `World`, including components, handlers, and events. `World` is now `!Send + !Sync`.
 - Added `Deref` and `DerefMut` impls for `Single`, `TrySingle`, `Has<Q>`.
 - Allow sending events with borrowed data in `World::send`.
 - Removed `'static` bound from `Event`. `Event` is now an `unsafe` trait to implement.
