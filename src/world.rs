@@ -39,6 +39,8 @@ pub struct World {
     archetypes: Archetypes,
     events: Events,
     event_queue: EventQueue,
+    /// So the world doesn't accidentally implement `Send` or `Sync`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl World {
@@ -60,6 +62,7 @@ impl World {
             archetypes: Archetypes::new(),
             events: Events::new(),
             event_queue: EventQueue::new(),
+            _marker: PhantomData,
         }
     }
 
