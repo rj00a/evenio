@@ -20,7 +20,6 @@ pub mod component;
 pub mod drop;
 pub mod entity;
 pub mod event;
-pub mod exclusive;
 pub mod fetch;
 pub mod handler;
 mod layout_util;

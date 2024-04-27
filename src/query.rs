@@ -68,7 +68,7 @@ pub unsafe trait Query {
     /// Per-archetype state.
     type ArchState: Send + Sync + fmt::Debug + 'static;
     /// Cached data for fetch initialization.
-    type State: Send + Sync + fmt::Debug + 'static;
+    type State: fmt::Debug + 'static;
 
     /// Initialize the query. Returns an expression describing the components
     /// accessed by the query and a new instance of [`Self::State`].
@@ -723,9 +723,9 @@ unsafe impl Query for EntityId {
     fn new_state(_world: &mut World) -> Self::State {}
 
     fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
-        Some(ColumnPtr(unsafe {
-            NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked()
-        }))
+        Some(unsafe {
+            ColumnPtr(NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked())
+        })
     }
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
@@ -765,7 +765,6 @@ unsafe impl<T: ?Sized> ReadOnlyQuery for PhantomData<T> {}
 
 /// Transparent wrapper around a [`NonNull`]. This implements [`Send`] and
 /// [`Sync`] unconditionally.
-#[doc(hidden)]
 #[repr(transparent)]
 pub struct ColumnPtr<T>(pub NonNull<T>);
 
@@ -784,7 +783,7 @@ impl<T> fmt::Debug for ColumnPtr<T> {
 }
 
 // SAFETY: `ColumnPtr` is just a wrapper around a pointer, so these impls are
-// safe on their own.
+// safe in isolation.
 unsafe impl<T> Send for ColumnPtr<T> {}
 unsafe impl<T> Sync for ColumnPtr<T> {}
 

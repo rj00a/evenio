@@ -801,6 +801,8 @@ impl Drop for Archetype {
     }
 }
 
+// SAFETY: The safe API of `Archetype` is thread safe, since `unsafe` is
+// required to actually read or write the column data.
 unsafe impl Send for Archetype {}
 unsafe impl Sync for Archetype {}
 
@@ -834,7 +836,8 @@ impl Column {
     }
 }
 
-// SAFETY: Components are guaranteed `Send` and `Sync`.
+// SAFETY: The safe API of `Column` is thread safe, since `unsafe` is
+// required to actually read or write the column data.
 unsafe impl Send for Column {}
 unsafe impl Sync for Column {}
 

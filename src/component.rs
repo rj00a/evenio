@@ -277,8 +277,8 @@ impl ComponentInfo {
 /// # Deriving
 ///
 /// The `Component` trait can be implemented automatically by using the
-/// associated derive macro. However, the type must still satisfy the `Send +
-/// Sync + 'static` bound to do so.
+/// associated derive macro. However, the type must still satisfy the `'static`
+/// bound to do so.
 ///
 /// ```
 /// use evenio::prelude::*;
@@ -312,7 +312,7 @@ impl ComponentInfo {
 /// #[component(immutable)] // Override the default mutability.
 /// struct FooCounter(i32);
 /// ```
-pub trait Component: Send + Sync + 'static {
+pub trait Component: 'static {
     /// Whether or not this component is immutable.
     ///
     /// Immutable components disallow mutable references, which can be used to

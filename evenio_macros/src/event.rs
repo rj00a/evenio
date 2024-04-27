@@ -5,13 +5,7 @@ use syn::{parse2, parse_quote, Data, DeriveInput, LitInt, Result, Type};
 use crate::util::{parse_attr_immutable, replace_lifetime};
 
 pub(crate) fn derive_event(input: TokenStream) -> Result<TokenStream> {
-    let mut input = parse2::<DeriveInput>(input)?;
-
-    input
-        .generics
-        .make_where_clause()
-        .predicates
-        .push(parse_quote!(Self: Send + Sync));
+    let input = parse2::<DeriveInput>(input)?;
 
     let mut target_field = None;
 
