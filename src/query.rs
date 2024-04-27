@@ -66,9 +66,9 @@ pub unsafe trait Query {
     /// `Self`, but with a modified lifetime.
     type Item<'a>;
     /// Per-archetype state.
-    type ArchState: Send + Sync + fmt::Debug + 'static;
+    type ArchState: fmt::Debug + 'static;
     /// Cached data for fetch initialization.
-    type State: Send + Sync + fmt::Debug + 'static;
+    type State: fmt::Debug + 'static;
 
     /// Initialize the query. Returns an expression describing the components
     /// accessed by the query and a new instance of [`Self::State`].
@@ -111,7 +111,7 @@ pub unsafe trait ReadOnlyQuery: Query {}
 unsafe impl<C: Component> Query for &'_ C {
     type Item<'a> = &'a C;
 
-    type ArchState = ColumnPtr<C>;
+    type ArchState = NonNull<C>;
 
     type State = ComponentIdx;
 
@@ -131,11 +131,11 @@ unsafe impl<C: Component> Query for &'_ C {
     }
 
     fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
-        arch.column_of(*state).map(|c| ColumnPtr(c.data().cast()))
+        arch.column_of(*state).map(|c| c.data().cast())
     }
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        &*state.0.as_ptr().cast_const().add(row.0 as usize)
+        &*state.as_ptr().cast_const().add(row.0 as usize)
     }
 }
 
@@ -144,7 +144,7 @@ unsafe impl<C: Component> ReadOnlyQuery for &'_ C {}
 unsafe impl<C: Component> Query for &'_ mut C {
     type Item<'a> = &'a mut C;
 
-    type ArchState = ColumnPtr<C>;
+    type ArchState = NonNull<C>;
 
     type State = ComponentIdx;
 
@@ -170,7 +170,7 @@ unsafe impl<C: Component> Query for &'_ mut C {
     }
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        &mut *state.0.as_ptr().add(row.0 as usize)
+        &mut *state.as_ptr().add(row.0 as usize)
     }
 }
 
@@ -709,7 +709,7 @@ unsafe impl<Q: Query> ReadOnlyQuery for Has<Q> {}
 unsafe impl Query for EntityId {
     type Item<'a> = Self;
 
-    type ArchState = ColumnPtr<EntityId>;
+    type ArchState = NonNull<EntityId>;
 
     type State = ();
 
@@ -723,13 +723,11 @@ unsafe impl Query for EntityId {
     fn new_state(_world: &mut World) -> Self::State {}
 
     fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
-        Some(ColumnPtr(unsafe {
-            NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked()
-        }))
+        Some(unsafe { NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked() })
     }
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
-        *state.0.as_ptr().add(row.0 as usize)
+        *state.as_ptr().add(row.0 as usize)
     }
 }
 
@@ -762,31 +760,6 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
 }
 
 unsafe impl<T: ?Sized> ReadOnlyQuery for PhantomData<T> {}
-
-/// Transparent wrapper around a [`NonNull`]. This implements [`Send`] and
-/// [`Sync`] unconditionally.
-#[doc(hidden)]
-#[repr(transparent)]
-pub struct ColumnPtr<T>(pub NonNull<T>);
-
-impl<T> Clone for ColumnPtr<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for ColumnPtr<T> {}
-
-impl<T> fmt::Debug for ColumnPtr<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("ColumnPtr").field(&self.0).finish()
-    }
-}
-
-// SAFETY: `ColumnPtr` is just a wrapper around a pointer, so these impls are
-// safe on their own.
-unsafe impl<T> Send for ColumnPtr<T> {}
-unsafe impl<T> Sync for ColumnPtr<T> {}
 
 #[cfg(test)]
 mod tests {

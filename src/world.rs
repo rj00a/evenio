@@ -1123,14 +1123,9 @@ impl<'a> UnsafeWorldCell<'a> {
     }
 }
 
-// SAFETY: `&World` and `&mut World` are `Send`.
-unsafe impl Send for UnsafeWorldCell<'_> {}
-// SAFETY: `&World` and `&mut World` are `Sync`.
-unsafe impl Sync for UnsafeWorldCell<'_> {}
-
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Arc;
+    use alloc::rc::Rc;
     use core::panic::{RefUnwindSafe, UnwindSafe};
     use std::panic;
 
@@ -1139,13 +1134,13 @@ mod tests {
     #[test]
     fn world_drops_events() {
         #[derive(Event)]
-        struct A(Arc<()>);
+        struct A(Rc<()>);
 
         #[derive(Event)]
-        struct B(Arc<()>);
+        struct B(Rc<()>);
 
         #[derive(Event)]
-        struct C(Arc<()>);
+        struct C(Rc<()>);
 
         let mut world = World::new();
 
@@ -1159,21 +1154,21 @@ mod tests {
             s.send(C(r.event.0.clone()));
         });
 
-        world.add_handler(|r: Receiver<C>| println!("got C {:?}", Arc::as_ptr(&r.event.0)));
+        world.add_handler(|r: Receiver<C>| println!("got C {:?}", Rc::as_ptr(&r.event.0)));
 
-        let arc = Arc::new(());
+        let rc = Rc::new(());
 
-        world.send(A(arc.clone()));
+        world.send(A(rc.clone()));
 
         drop(world);
 
-        assert_eq!(Arc::strong_count(&arc), 1);
+        assert_eq!(Rc::strong_count(&rc), 1);
     }
 
     #[test]
     fn world_drops_events_on_panic() {
         #[derive(Event)]
-        struct A(Arc<()>);
+        struct A(Rc<()>);
 
         impl Drop for A {
             fn drop(&mut self) {
@@ -1182,11 +1177,11 @@ mod tests {
         }
 
         #[derive(Event)]
-        struct B(Arc<()>);
+        struct B(Rc<()>);
 
         #[allow(dead_code)]
         #[derive(Event)]
-        struct C(Arc<()>);
+        struct C(Rc<()>);
 
         let mut world = World::new();
 
@@ -1202,22 +1197,20 @@ mod tests {
 
         world.add_handler(|_: Receiver<C>| panic!("oops!"));
 
-        let arc = Arc::new(());
+        let arc = Rc::new(());
         let arc_cloned = arc.clone();
 
         let res = panic::catch_unwind(move || world.send(A(arc_cloned)));
 
         assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
-        assert_eq!(Arc::strong_count(&arc), 1);
+        assert_eq!(Rc::strong_count(&arc), 1);
     }
 
     /// Asserts that `World` has the expected auto trait implementations.
     fn _assert_auto_trait_impls()
     where
-        World: Send + Sync + UnwindSafe + RefUnwindSafe,
-        for<'a> &'a World: Send + Sync,
-        for<'a> &'a mut World: Send + Sync,
+        World: UnwindSafe + RefUnwindSafe,
     {
     }
 }

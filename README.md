@@ -14,10 +14,8 @@ The control flow of the entire program is then defined by the flow of events bet
 - Targeted events enable handlers to efficiently filter events based on queries.
 - Component types, event types, and handlers are identified with generational indices, allowing them to be added and removed dynamically.
 - Execute queries in parallel with [Rayon].
-- Core of the library does not depend on Rust's type system.
+- World data has no `Send` or `Sync` requirements.
 - `no_std` support.
-
-Features such as inter-handler parallelism and event batching are planned but not yet implemented.
 
 > **For a full step-by-step introduction, please read the [tutorial book 📚](https://docs.rs/evenio/latest/evenio/tutorial/).**
 

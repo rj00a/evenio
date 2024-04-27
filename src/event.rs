@@ -250,8 +250,7 @@ unsafe impl HandlerParam for &'_ Events {
 /// # Deriving
 ///
 /// The `Event` trait is automatically implementable by using the associated
-/// derive macro. The type must still satisfy the `Send + Sync + 'static` bound
-/// to do so.
+/// derive macro.
 ///
 /// ```
 /// use evenio::prelude::*;
@@ -294,7 +293,7 @@ unsafe impl HandlerParam for &'_ Events {
 ///
 /// [`This`]: Self::This
 /// [`target`]: Self::target
-pub unsafe trait Event: Send + Sync {
+pub unsafe trait Event {
     /// The type of `Self`, but with lifetimes modified to outlive `'a`.
     ///
     /// # Safety
@@ -689,10 +688,6 @@ impl EventQueue {
     }
 }
 
-// SAFETY: The bump allocator is only accessed behind an exclusive reference to
-// the event queue.
-unsafe impl Sync for EventQueue {}
-
 impl UnwindSafe for EventQueue {}
 impl RefUnwindSafe for EventQueue {}
 
@@ -703,10 +698,6 @@ pub(crate) struct EventQueueItem {
     /// has been transferred and no destructor needs to run.
     pub(crate) event: NonNull<u8>,
 }
-
-// SAFETY: Events are always Send + Sync.
-unsafe impl Send for EventQueueItem {}
-unsafe impl Sync for EventQueueItem {}
 
 /// Metadata for an event in the event queue.
 #[derive(Clone, Copy, Debug)]
@@ -1306,7 +1297,7 @@ where
 /// being correct.
 pub unsafe trait EventSet {
     /// The set of event indices.
-    type EventIndices: Send + Sync + 'static;
+    type EventIndices: 'static;
 
     /// Creates the set of event indices.
     fn new_state(world: &mut World) -> Self::EventIndices;

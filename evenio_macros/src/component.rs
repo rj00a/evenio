@@ -11,7 +11,7 @@ pub(crate) fn derive_component(input: TokenStream) -> Result<TokenStream> {
         .generics
         .make_where_clause()
         .predicates
-        .push(parse_quote!(Self: Send + Sync + 'static));
+        .push(parse_quote!(Self: 'static));
 
     let is_immutable = parse_attr_immutable("component", &input.attrs)?;
 

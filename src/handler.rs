@@ -24,7 +24,6 @@ use crate::bit_set::BitSet;
 use crate::component::ComponentIdx;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
-use crate::exclusive::Exclusive;
 use crate::map::TypeIdMap;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -183,9 +182,6 @@ impl Handlers {
             .map(|ptr| unsafe { ptr.as_info_mut() })
     }
 }
-
-unsafe impl Send for Handlers {}
-unsafe impl Sync for Handlers {}
 
 impl Index<HandlerId> for Handlers {
     type Output = HandlerInfo;
@@ -763,7 +759,7 @@ impl<H: Handler> Handler for LowPriority<H> {
 /// handlers are added to a world using the [`World::add_handler`] method.
 ///
 /// For more information about handlers, see the [tutorial](crate::tutorial).
-pub trait Handler: Send + Sync + 'static {
+pub trait Handler: 'static {
     /// Returns the [`TypeId`] which uniquely identifies this handler, or `None`
     /// if there is none.
     ///
@@ -1024,7 +1020,7 @@ impl Default for MaybeInvalidAccess {
 /// data accessed by [`HandlerParam::get`].
 pub unsafe trait HandlerParam {
     /// Persistent data stored in the handler.
-    type State: Send + Sync + 'static;
+    type State: 'static;
 
     /// The type produced by this handler param. This must be the type
     /// of `Self` but with the lifetime of `'a`.
@@ -1234,7 +1230,7 @@ where
 }
 
 /// Trait for functions whose parameters are [`HandlerParam`]s.
-pub trait HandlerParamFunction<Marker>: Send + Sync + 'static {
+pub trait HandlerParamFunction<Marker>: 'static {
     /// The handler params used by this function, combined into a single type.
     type Param: HandlerParam;
 
@@ -1246,7 +1242,7 @@ macro_rules! impl_handler_param_function {
     ($(($P:ident, $p:ident)),*) => {
         impl<F, $($P: HandlerParam),*> HandlerParamFunction<fn($($P),*)> for F
         where
-            F: FnMut($($P),*) + FnMut($($P::This<'_>),*) + Send + Sync + 'static,
+            F: FnMut($($P),*) + FnMut($($P::This<'_>),*) + 'static,
         {
             type Param = ($($P,)*);
 
@@ -1310,13 +1306,13 @@ pub struct Local<'a, T> {
     state: &'a mut T,
 }
 
-unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
-    type State = Exclusive<T>;
+unsafe impl<T: Default + 'static> HandlerParam for Local<'_, T> {
+    type State = T;
 
     type This<'a> = Local<'a, T>;
 
     fn init(_world: &mut World, _config: &mut HandlerConfig) -> Result<Self::State, InitError> {
-        Ok(Exclusive::new(T::default()))
+        Ok(T::default())
     }
 
     unsafe fn get<'a>(
@@ -1326,9 +1322,7 @@ unsafe impl<T: Default + Send + 'static> HandlerParam for Local<'_, T> {
         _target_location: EntityLocation,
         _world: UnsafeWorldCell<'a>,
     ) -> Self::This<'a> {
-        Local {
-            state: state.get_mut(),
-        }
+        Local { state }
     }
 
     fn refresh_archetype(_state: &mut Self::State, _arch: &Archetype) {}
