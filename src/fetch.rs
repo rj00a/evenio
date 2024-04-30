@@ -1134,9 +1134,9 @@ mod tests {
 
     fn _assert_auto_trait_impls()
     where
-        for<'a> Fetcher<'a, ()>: Send + Sync,
-        for<'a, 'b> Fetcher<'a, &'b C1>: Send + Sync,
-        for<'a, 'b, 'c> Fetcher<'a, (&'b C1, &'c mut C2)>: Send + Sync,
+        Fetcher<'static, ()>: Send + Sync,
+        Fetcher<'static, &'static C1>: Send + Sync,
+        Fetcher<'static, (&'static C1, &'static mut C2)>: Send + Sync,
     {
     }
 }
