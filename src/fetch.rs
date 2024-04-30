@@ -3,6 +3,7 @@
 use core::iter::FusedIterator;
 use core::mem::{self, MaybeUninit};
 use core::ops::{Deref, DerefMut};
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -188,6 +189,20 @@ impl<Q: Query> FetcherState<Q> {
     pub(crate) fn remove_archetype(&mut self, arch: &Archetype) {
         self.map.remove(arch.index());
     }
+}
+
+unsafe impl<'a, Q> Send for Fetcher<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: Send,
+{
+}
+
+unsafe impl<'a, Q> Sync for Fetcher<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: Sync,
+{
 }
 
 impl<Q: Query> fmt::Debug for FetcherState<Q> {
@@ -679,6 +694,20 @@ unsafe impl<'a, Q> Sync for Iter<'a, Q>
 where
     Q: Query,
     Q::Item<'a>: Sync,
+{
+}
+
+impl<'a, Q> UnwindSafe for Iter<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: UnwindSafe,
+{
+}
+
+impl<'a, Q> RefUnwindSafe for Iter<'a, Q>
+where
+    Q: Query,
+    Q::Item<'a>: RefUnwindSafe,
 {
 }
 
