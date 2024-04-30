@@ -6,6 +6,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::{boxed::Box, vec, vec::Vec};
 use core::cmp::Ordering;
 use core::ops::Index;
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::NonNull;
 use core::{fmt, mem, ptr, slice};
 
@@ -806,6 +807,10 @@ impl Drop for Archetype {
 unsafe impl Send for Archetype {}
 unsafe impl Sync for Archetype {}
 
+// Similar logic as above follows for these impls.
+impl UnwindSafe for Archetype {}
+impl RefUnwindSafe for Archetype {}
+
 impl fmt::Debug for Archetype {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Archetype")
@@ -840,6 +845,10 @@ impl Column {
 // required to actually read or write the column data.
 unsafe impl Send for Column {}
 unsafe impl Sync for Column {}
+
+// Similar logic as above follows for these impls.
+impl UnwindSafe for Column {}
+impl RefUnwindSafe for Column {}
 
 #[cfg(test)]
 mod tests {

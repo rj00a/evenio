@@ -9,7 +9,6 @@ use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut, Index};
-use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::ptr::NonNull;
 use core::{any, fmt};
 
@@ -320,9 +319,6 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     // aliasing.
     pub(crate) handler: H,
 }
-
-impl<H: ?Sized> UnwindSafe for HandlerInfoInner<H> {}
-impl<H: ?Sized> RefUnwindSafe for HandlerInfoInner<H> {}
 
 impl HandlerInfo {
     pub(crate) fn new<H: Handler>(inner: HandlerInfoInner<H>) -> Self {

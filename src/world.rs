@@ -4,7 +4,6 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::{self, TypeId};
-use core::cell::UnsafeCell;
 use core::fmt::Write;
 use core::marker::PhantomData;
 use core::mem;
@@ -1057,7 +1056,7 @@ impl Default for World {
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {
     world: NonNull<World>,
-    _marker: PhantomData<(&'a World, &'a UnsafeCell<World>)>,
+    _marker: PhantomData<&'a World>,
 }
 
 impl<'a> UnsafeWorldCell<'a> {
@@ -1129,7 +1128,7 @@ impl<'a> UnsafeWorldCell<'a> {
 #[cfg(test)]
 mod tests {
     use alloc::rc::Rc;
-    use core::panic::{RefUnwindSafe, UnwindSafe};
+    use core::panic::AssertUnwindSafe;
     use std::panic;
 
     use crate::prelude::*;
@@ -1203,17 +1202,12 @@ mod tests {
         let arc = Rc::new(());
         let arc_cloned = arc.clone();
 
+        let mut world = AssertUnwindSafe(world);
+
         let res = panic::catch_unwind(move || world.send(A(arc_cloned)));
 
         assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
         assert_eq!(Rc::strong_count(&arc), 1);
-    }
-
-    /// Asserts that `World` has the expected auto trait implementations.
-    fn _assert_auto_trait_impls()
-    where
-        World: UnwindSafe + RefUnwindSafe,
-    {
     }
 }
