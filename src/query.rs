@@ -1,5 +1,6 @@
 //! Type-level DSL for retrieving data from entities.
 
+use core::cell::{SyncUnsafeCell, UnsafeCell};
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
@@ -171,6 +172,74 @@ unsafe impl<C: Component> Query for &'_ mut C {
 
     unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
         &mut *state.0.as_ptr().add(row.0 as usize)
+    }
+}
+
+unsafe impl<C: Component> ReadOnlyQuery for &'_ UnsafeCell<C> {}
+
+unsafe impl<C: Component> Query for &'_ UnsafeCell<C> {
+    type Item<'a> = &'a UnsafeCell<C>;
+    type ArchState = ColumnPtr<C>;
+    type State = ComponentIdx;
+
+    fn init(
+        world: &mut World,
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let () = AssertMutable::<C>::COMPONENT;
+
+        let idx = Self::new_state(world);
+        let ca = ComponentAccess::var(idx, Access::ReadWrite);
+        config.referenced_components.insert(idx);
+
+        Ok((ca, idx))
+    }
+
+    fn new_state(world: &mut World) -> Self::State {
+        world.add_component::<C>().index()
+    }
+
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        <&C>::new_arch_state(arch, state)
+    }
+
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        let ptr = state.0.as_ptr().add(row.0 as usize);
+        &*(ptr as *const UnsafeCell<C>)
+    }
+}
+
+unsafe impl<C: Component> ReadOnlyQuery for &'_ SyncUnsafeCell<C> {}
+
+unsafe impl<C: Component> Query for &'_ SyncUnsafeCell<C> {
+    type Item<'a> = &'a SyncUnsafeCell<C>;
+    type ArchState = ColumnPtr<C>;
+    type State = ComponentIdx;
+
+    fn init(
+        world: &mut World,
+        config: &mut HandlerConfig,
+    ) -> Result<(ComponentAccess, Self::State), InitError> {
+        let () = AssertMutable::<C>::COMPONENT;
+
+        let idx = Self::new_state(world);
+        let ca = ComponentAccess::var(idx, Access::ReadWrite);
+        config.referenced_components.insert(idx);
+
+        Ok((ca, idx))
+    }
+
+    fn new_state(world: &mut World) -> Self::State {
+        world.add_component::<C>().index()
+    }
+
+    fn new_arch_state(arch: &Archetype, state: &mut Self::State) -> Option<Self::ArchState> {
+        <&C>::new_arch_state(arch, state)
+    }
+
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+        let ptr = state.0.as_ptr().add(row.0 as usize);
+        &*(ptr as *const SyncUnsafeCell<C>)
     }
 }
 

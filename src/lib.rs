@@ -1,3 +1,4 @@
+#![feature(sync_unsafe_cell)]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![warn(clippy::std_instead_of_alloc, clippy::std_instead_of_core)]
