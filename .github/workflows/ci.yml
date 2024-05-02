@@ -19,7 +19,7 @@ jobs:
       - name: Setup Rust toolchain and cache
         uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
         with:
-          toolchain: "nightly"
+          toolchain: "1.78.0" # MSRV
           components: "rustfmt"
 
       - name: cargo fmt
@@ -48,7 +48,7 @@ jobs:
       - name: Setup Rust toolchain and cache
         uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
         with:
-          toolchain: "nightly"
+          toolchain: "1.78.0" # MSRV
           components: "clippy"
 
       - name: Clippy
@@ -80,7 +80,7 @@ jobs:
       - name: Setup Rust toolchain and cache
         uses: actions-rust-lang/setup-rust-toolchain@v1.5.0
         with:
-          toolchain: "nightly"
+          toolchain: "1.78.0" # MSRV
           components: "miri"
 
       - name: Run tests

@@ -5,6 +5,7 @@ description = "An event-driven entity component system"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 keywords = ["game", "ecs"]
 categories = ["data-structures", "no-std", "game-development"]
 
@@ -65,6 +66,7 @@ edition = "2021"
 version = "0.5.0"
 license = "MIT"
 repository = "https://github.com/rj00a/evenio"
+rust-version = "1.78.0"
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "allow"    # Warned by `future_incompatible`.
@@ -113,7 +115,7 @@ invalid_upcast_comparisons = "warn"
 iter_filter_is_ok = "warn"
 iter_filter_is_some = "warn"
 iter_not_returning_iterator = "warn"
-iter_over_hash_type = "warn"                       # Requires justification
+iter_over_hash_type = "warn"
 iter_without_into_iter = "warn"
 large_stack_arrays = "warn"
 large_types_passed_by_value = "warn"
