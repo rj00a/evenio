@@ -764,7 +764,7 @@ mod rayon_impl {
                 .zip_eq(self.arch_indices)
                 .flat_map(|(state, &index)| {
                     let entity_count =
-                        unsafe { self.archetypes.get(index).unwrap_debug_checked() }.entity_count();
+                        unsafe { self.archetypes.get(index).unwrap_unchecked() }.entity_count();
 
                     (0..entity_count).into_par_iter().map(|row| {
                         let item: Q::Item<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
