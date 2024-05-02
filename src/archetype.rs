@@ -14,7 +14,7 @@ use ahash::RandomState;
 use slab::Slab;
 
 use crate::aliased_box::AliasedBox;
-use crate::assert::{assume_debug_checked, GetDebugChecked, UnwrapDebugChecked};
+use crate::assert::assume_unchecked;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
@@ -65,13 +65,13 @@ impl Archetypes {
     /// The empty archetype is always present, so this function is infallible.
     pub fn empty(&self) -> &Archetype {
         // SAFETY: The empty archetype is always at index 0.
-        unsafe { self.archetypes.get_debug_checked(0) }
+        unsafe { self.archetypes.get(0).unwrap_unchecked() }
     }
 
     /// Returns a mutable reference to the empty archetype.
     pub(crate) fn empty_mut(&mut self) -> &mut Archetype {
         // SAFETY: The empty archetype is always at index 0.
-        unsafe { self.archetypes.get_debug_checked_mut(0) }
+        unsafe { self.archetypes.get_mut(0).unwrap_unchecked() }
     }
 
     /// Gets a reference to the archetype identified by the given
@@ -87,7 +87,7 @@ impl Archetypes {
     /// deduplicated.
     pub fn get_by_components(&self, components: &[ComponentIdx]) -> Option<&Archetype> {
         let idx = *self.by_components.get(components)?;
-        Some(unsafe { self.get(idx).unwrap_debug_checked() })
+        Some(unsafe { self.get(idx).unwrap_unchecked() })
     }
 
     /// Spawns a new entity into the empty archetype with the given ID and
@@ -161,8 +161,7 @@ impl Archetypes {
 
             for &comp_idx in arch.component_indices() {
                 if comp_idx != removed_component_id.index() {
-                    let info =
-                        unsafe { components.get_by_index_mut(comp_idx).unwrap_debug_checked() };
+                    let info = unsafe { components.get_by_index_mut(comp_idx).unwrap_unchecked() };
                     info.member_of.swap_remove(&arch_idx);
                 }
             }
@@ -177,15 +176,21 @@ impl Archetypes {
             // Remove all references to the removed archetype.
 
             for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
-                let other_arch =
-                    unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+                let other_arch = unsafe {
+                    self.archetypes
+                        .get_mut(arch_idx.0 as usize)
+                        .unwrap_unchecked()
+                };
 
                 other_arch.remove_components.remove(&comp_idx);
             }
 
             for (comp_idx, arch_idx) in mem::take(&mut arch.remove_components) {
-                let other_arch =
-                    unsafe { self.archetypes.get_debug_checked_mut(arch_idx.0 as usize) };
+                let other_arch = unsafe {
+                    self.archetypes
+                        .get_mut(arch_idx.0 as usize)
+                        .unwrap_unchecked()
+                };
 
                 other_arch.insert_components.remove(&comp_idx);
             }
@@ -210,7 +215,8 @@ impl Archetypes {
 
         let src_arch = unsafe {
             self.archetypes
-                .get_debug_checked_mut(src_arch_idx.0 as usize)
+                .get_mut(src_arch_idx.0 as usize)
+                .unwrap_unchecked()
         };
 
         match src_arch.insert_components.entry(component_idx) {
@@ -282,7 +288,8 @@ impl Archetypes {
 
         let src_arch = unsafe {
             self.archetypes
-                .get_debug_checked_mut(src_arch_idx.0 as usize)
+                .get_mut(src_arch_idx.0 as usize)
+                .unwrap_unchecked()
         };
 
         match src_arch.remove_components.entry(component_idx) {
@@ -355,10 +362,10 @@ impl Archetypes {
             let arch = self
                 .archetypes
                 .get_mut(src.archetype.0 as usize)
-                .unwrap_debug_checked();
+                .unwrap_unchecked();
 
             for (comp_idx, comp_ptr) in new_components {
-                let col = arch.column_of_mut(comp_idx).unwrap_debug_checked();
+                let col = arch.column_of_mut(comp_idx).unwrap_unchecked();
 
                 col.data.assign(src.row.0 as usize, comp_ptr);
             }
@@ -384,15 +391,9 @@ impl Archetypes {
 
             match (src_in_bounds, dst_in_bounds) {
                 (true, true) => {
-                    let src_comp_idx = *src_arch
-                        .component_indices
-                        .as_ref()
-                        .get_debug_checked(src_idx);
+                    let src_comp_idx = *src_arch.component_indices.as_ref().get_unchecked(src_idx);
 
-                    let dst_comp_idx = *dst_arch
-                        .component_indices
-                        .as_ref()
-                        .get_debug_checked(dst_idx);
+                    let dst_comp_idx = *dst_arch.component_indices.as_ref().get_unchecked(dst_idx);
 
                     match src_comp_idx.cmp(&dst_comp_idx) {
                         Ordering::Less => {
@@ -413,14 +414,12 @@ impl Archetypes {
                         }
                         Ordering::Greater => {
                             let (component_idx, component_ptr) =
-                                new_components.next().unwrap_debug_checked();
+                                new_components.next().unwrap_unchecked();
 
                             let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
 
-                            let dst_comp_idx = *dst_arch
-                                .component_indices
-                                .as_ref()
-                                .get_debug_checked(dst_idx);
+                            let dst_comp_idx =
+                                *dst_arch.component_indices.as_ref().get_unchecked(dst_idx);
 
                             debug_assert_eq!(component_idx, dst_comp_idx);
 
@@ -440,15 +439,11 @@ impl Archetypes {
                     src_idx += 1;
                 }
                 (false, true) => {
-                    let (component_idx, component_ptr) =
-                        new_components.next().unwrap_debug_checked();
+                    let (component_idx, component_ptr) = new_components.next().unwrap_unchecked();
 
                     let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
 
-                    let dst_comp_idx = *dst_arch
-                        .component_indices
-                        .as_ref()
-                        .get_debug_checked(dst_idx);
+                    let dst_comp_idx = *dst_arch.component_indices.as_ref().get_unchecked(dst_idx);
 
                     debug_assert_eq!(component_idx, dst_comp_idx);
 
@@ -469,13 +464,13 @@ impl Archetypes {
         let entity_id = src_arch.entity_ids.swap_remove(src.row.0 as usize);
         dst_arch.entity_ids.push(entity_id);
 
-        *unsafe { entities.get_mut(entity_id).unwrap_debug_checked() } = EntityLocation {
+        *unsafe { entities.get_mut(entity_id).unwrap_unchecked() } = EntityLocation {
             archetype: dst,
             row: dst_row,
         };
 
         if let Some(&swapped_entity_id) = src_arch.entity_ids.get(src.row.0 as usize) {
-            unsafe { entities.get_mut(swapped_entity_id).unwrap_debug_checked() }.row = src.row;
+            unsafe { entities.get_mut(swapped_entity_id).unwrap_unchecked() }.row = src.row;
         }
 
         if src_arch.entity_ids.is_empty() {
@@ -500,7 +495,8 @@ impl Archetypes {
 
         let arch = unsafe {
             self.archetypes
-                .get_debug_checked_mut(loc.archetype.0 as usize)
+                .get_mut(loc.archetype.0 as usize)
+                .unwrap_unchecked()
         };
 
         for col in arch.columns_mut() {
@@ -508,14 +504,14 @@ impl Archetypes {
         }
 
         unsafe {
-            assume_debug_checked((loc.row.0 as usize) < arch.entity_ids.len());
+            assume_unchecked((loc.row.0 as usize) < arch.entity_ids.len());
         };
 
         arch.entity_ids.swap_remove(loc.row.0 as usize);
 
         if (loc.row.0 as usize) < arch.entity_ids.len() {
-            let displaced = *unsafe { arch.entity_ids.get_debug_checked(loc.row.0 as usize) };
-            unsafe { entities.get_mut(displaced).unwrap_debug_checked() }.row = loc.row;
+            let displaced = *unsafe { arch.entity_ids.get_unchecked(loc.row.0 as usize) };
+            unsafe { entities.get_mut(displaced).unwrap_unchecked() }.row = loc.row;
         }
 
         if arch.entity_count() == 0 {
@@ -659,11 +655,7 @@ impl Archetype {
             .as_ref()
             .iter()
             .map(|&idx| {
-                let info = unsafe {
-                    components
-                        .get_by_index_mut(idx)
-                        .expect_debug_checked("invalid component index")
-                };
+                let info = unsafe { components.get_by_index_mut(idx).unwrap_unchecked() };
 
                 info.member_of.insert(arch_idx);
 

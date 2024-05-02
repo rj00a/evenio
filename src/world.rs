@@ -11,7 +11,7 @@ use core::ptr::NonNull;
 
 use crate::access::ComponentAccess;
 use crate::archetype::Archetypes;
-use crate::assert::{AssertMutable, UnwrapDebugChecked};
+use crate::assert::AssertMutable;
 use crate::component::{
     AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
     RemoveComponent,
@@ -215,7 +215,7 @@ impl World {
             .id()
             .index();
 
-        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_debug_checked() };
+        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_unchecked() };
 
         let col = arch.column_of(component_idx)?;
 
@@ -258,7 +258,7 @@ impl World {
             .id()
             .index();
 
-        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_debug_checked() };
+        let arch = unsafe { self.archetypes().get(loc.archetype).unwrap_unchecked() };
 
         let col = arch.column_of(component_idx)?;
 
@@ -797,7 +797,7 @@ impl World {
             let event_info = unsafe {
                 self.events
                     .get_by_index(event_meta.event_idx())
-                    .unwrap_debug_checked()
+                    .unwrap_unchecked()
             };
             let event_kind = event_info.kind();
 
@@ -853,7 +853,7 @@ impl World {
                             self.world
                                 .events
                                 .get_by_index(item.meta.event_idx())
-                                .unwrap_debug_checked()
+                                .unwrap_unchecked()
                         };
 
                         if let Some(drop) = info.drop() {
@@ -878,7 +878,7 @@ impl World {
                         ctx.world
                             .handlers
                             .get_untargeted_list(idx)
-                            .unwrap_debug_checked()
+                            .unwrap_unchecked()
                     },
                     EntityLocation::NULL,
                 ),
@@ -893,7 +893,7 @@ impl World {
                         ctx.world
                             .archetypes
                             .get(location.archetype)
-                            .unwrap_debug_checked()
+                            .unwrap_unchecked()
                     };
 
                     static EMPTY: HandlerList = HandlerList::new();

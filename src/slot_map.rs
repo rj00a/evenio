@@ -6,8 +6,6 @@ use core::num::{NonZeroU32, NonZeroU64};
 use core::ops::{Index, IndexMut};
 use core::{fmt, mem};
 
-use crate::assert::UnwrapDebugChecked;
-
 #[derive(Clone, Debug)]
 pub(crate) struct SlotMap<T> {
     slots: Vec<Slot<T>>,
@@ -38,7 +36,7 @@ impl<T> SlotMap<T> {
             debug_assert!(slot.is_vacant());
 
             // SAFETY: Generation doesn't overflow because it's even.
-            key = unsafe { Key::new(self.next_free, slot.generation + 1).unwrap_debug_checked() };
+            key = unsafe { Key::new(self.next_free, slot.generation + 1).unwrap_unchecked() };
 
             // Get value before modifying the slot in case `f` unwinds.
             let value = f(key);

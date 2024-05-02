@@ -19,9 +19,7 @@ pub use evenio_macros::Event;
 
 use crate::access::Access;
 use crate::archetype::Archetype;
-use crate::assert::{
-    AssertMutable, AssertTargetedEvent, AssertUntargetedEvent, GetDebugChecked, UnwrapDebugChecked,
-};
+use crate::assert::{AssertMutable, AssertTargetedEvent, AssertUntargetedEvent};
 use crate::component::ComponentIdx;
 use crate::drop::DropFn;
 use crate::entity::{EntityId, EntityLocation};
@@ -138,7 +136,7 @@ impl Events {
         debug_assert_ne!(type_id, TypeId::of::<SpawnQueued>());
 
         let idx = *self.by_type_id.get(&type_id)?;
-        Some(unsafe { self.get(idx).unwrap_debug_checked() })
+        Some(unsafe { self.get(idx).unwrap_unchecked() })
     }
 
     /// Does the given event exist in the world?
@@ -664,7 +662,7 @@ impl EventQueue {
     ///
     /// `from` must be in bounds.
     pub(crate) unsafe fn reverse_from(&mut self, from: usize) {
-        self.items.get_debug_checked_mut(from..).reverse();
+        self.items.get_unchecked_mut(from..).reverse();
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> {

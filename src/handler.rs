@@ -18,7 +18,6 @@ pub use evenio_macros::HandlerParam;
 use crate::access::{Access, ComponentAccess};
 use crate::aliased_box::AliasedBox;
 use crate::archetype::Archetype;
-use crate::assert::UnwrapDebugChecked;
 use crate::bit_set::BitSet;
 use crate::component::ComponentIdx;
 use crate::entity::EntityLocation;
@@ -1193,11 +1192,8 @@ where
         target_location: EntityLocation,
         world: UnsafeWorldCell,
     ) {
-        let state = unsafe {
-            self.state
-                .as_mut()
-                .expect_debug_checked("handler must be initialized")
-        };
+        // Handler must be initialized.
+        let state = unsafe { self.state.as_mut().unwrap_unchecked() };
 
         let param =
             <F::Param as HandlerParam>::get(state, handler_info, event_ptr, target_location, world);
@@ -1205,21 +1201,15 @@ where
     }
 
     fn refresh_archetype(&mut self, arch: &Archetype) {
-        let state = unsafe {
-            self.state
-                .as_mut()
-                .expect_debug_checked("handler must be initialized")
-        };
+        // Handler must be initialized.
+        let state = unsafe { self.state.as_mut().unwrap_unchecked() };
 
         F::Param::refresh_archetype(state, arch)
     }
 
     fn remove_archetype(&mut self, arch: &Archetype) {
-        let state = unsafe {
-            self.state
-                .as_mut()
-                .expect_debug_checked("handler must be initialized")
-        };
+        // Handler must be initialized.
+        let state = unsafe { self.state.as_mut().unwrap_unchecked() };
 
         F::Param::remove_archetype(state, arch)
     }
