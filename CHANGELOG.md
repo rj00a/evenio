@@ -8,6 +8,7 @@
 - Removed `'static` bound from `Event`. `Event` is now an `unsafe` trait to implement.
 - Removed `World::send_many`.
 - Fixed bug where entities could spawn with identical entity IDs.
+- Set MSRV to 1.78.0
 
 ## 0.5.0 - 2024-04-07
 
