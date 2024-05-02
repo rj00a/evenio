@@ -102,8 +102,7 @@ impl BlobVec {
         }
 
         Some(unsafe {
-            NonNull::new(self.data.as_ptr().add(idx * self.elem_layout.size()))
-                .unwrap_unchecked()
+            NonNull::new(self.data.as_ptr().add(idx * self.elem_layout.size())).unwrap_unchecked()
         })
     }
 
