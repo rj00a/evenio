@@ -567,6 +567,12 @@ unsafe impl SparseIndex for HandlerIdx {
 ///
 /// This trait is implemented for all functions that return `()` and whose
 /// arguments are all [`HandlerParam`]s.
+#[diagnostic::on_unimplemented(
+    message = "the type `{Self}` is not a valid handler",
+    note = "it is likely that one of the handler's function parameters is not a valid \
+            `HandlerParam`",
+    note = "try removing parameters individually until `IntoHandler<_>` is implemented"
+)]
 pub trait IntoHandler<Marker>: Sized {
     /// The handler type to convert to.
     type Handler: Handler;
