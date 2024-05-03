@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 use core::{any, fmt};
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::assert::{assume_debug_checked, UnwrapDebugChecked};
+use crate::assert::assume_unchecked;
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
@@ -50,7 +50,7 @@ impl<Q: Query> FetcherState<Q> {
         };
 
         // Eliminate a branch in `SparseMap::get`.
-        assume_debug_checked(loc.archetype != ArchetypeIdx::NULL);
+        assume_unchecked(loc.archetype != ArchetypeIdx::NULL);
 
         let Some(state) = self.map.get(loc.archetype) else {
             return Err(GetError::QueryDoesNotMatch);
@@ -99,10 +99,8 @@ impl<Q: Query> FetcherState<Q> {
 
     #[inline]
     pub(crate) unsafe fn get_by_location_mut(&mut self, loc: EntityLocation) -> Q::Item<'_> {
-        let state = self
-            .map
-            .get(loc.archetype)
-            .expect_debug_checked("invalid entity location");
+        // SAFETY: Caller ensures location is valid.
+        let state = self.map.get(loc.archetype).unwrap_unchecked();
         Q::get(state, loc.row)
     }
 
@@ -123,7 +121,7 @@ impl<Q: Query> FetcherState<Q> {
         let indices = self.map.keys();
         let states = self.map.values();
 
-        assume_debug_checked(indices.len() == states.len());
+        assume_unchecked(indices.len() == states.len());
 
         if states.is_empty() {
             Iter {
@@ -138,14 +136,11 @@ impl<Q: Query> FetcherState<Q> {
             let start = states.as_ptr().cast_mut();
             let end = start.add(states.len() - 1);
             Iter {
-                state: NonNull::new(start).unwrap_debug_checked(),
-                state_last: NonNull::new(end).unwrap_debug_checked(),
-                index: NonNull::new(indices.as_ptr().cast_mut()).unwrap_debug_checked(),
+                state: NonNull::new(start).unwrap_unchecked(),
+                state_last: NonNull::new(end).unwrap_unchecked(),
+                index: NonNull::new(indices.as_ptr().cast_mut()).unwrap_unchecked(),
                 row: ArchetypeRow(0),
-                len: archetypes
-                    .get(indices[0])
-                    .unwrap_debug_checked()
-                    .entity_count(),
+                len: archetypes.get(indices[0]).unwrap_unchecked().entity_count(),
                 archetypes,
             }
         }
@@ -609,13 +604,13 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
             self.index = unsafe { NonNull::new_unchecked(self.index.as_ptr().add(1)) };
 
             let idx = unsafe { *self.index.as_ptr() };
-            let arch = unsafe { self.archetypes.get(idx).unwrap_debug_checked() };
+            let arch = unsafe { self.archetypes.get(idx).unwrap_unchecked() };
 
             self.row = ArchetypeRow(0);
             self.len = arch.entity_count();
 
             // SAFETY: Fetcher state only contains nonempty archetypes.
-            unsafe { assume_debug_checked(self.len > 0) };
+            unsafe { assume_unchecked(self.len > 0) };
         }
 
         let state = unsafe { &*self.state.as_ptr().cast_const() };
@@ -646,8 +641,7 @@ impl<Q: Query> ExactSizeIterator for Iter<'_, Q> {
         while index != index_last {
             index = unsafe { index.add(1) };
 
-            remaining +=
-                unsafe { self.archetypes.get(*index).unwrap_debug_checked() }.entity_count();
+            remaining += unsafe { self.archetypes.get(*index).unwrap_unchecked() }.entity_count();
         }
 
         remaining as usize
@@ -763,14 +757,14 @@ mod rayon_impl {
         where
             C: UnindexedConsumer<Self::Item>,
         {
-            unsafe { assume_debug_checked(self.arch_states.len() == self.arch_indices.len()) };
+            unsafe { assume_unchecked(self.arch_states.len() == self.arch_indices.len()) };
 
             self.arch_states
                 .par_iter()
                 .zip_eq(self.arch_indices)
                 .flat_map(|(state, &index)| {
                     let entity_count =
-                        unsafe { self.archetypes.get(index).unwrap_debug_checked() }.entity_count();
+                        unsafe { self.archetypes.get(index).unwrap_unchecked() }.entity_count();
 
                     (0..entity_count).into_par_iter().map(|row| {
                         let item: Q::Item<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };

@@ -3,7 +3,6 @@ use core::alloc::Layout;
 use core::ptr;
 use core::ptr::NonNull;
 
-use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::layout_util::pad_to_align;
 
@@ -103,8 +102,7 @@ impl BlobVec {
         }
 
         Some(unsafe {
-            NonNull::new(self.data.as_ptr().add(idx * self.elem_layout.size()))
-                .unwrap_debug_checked()
+            NonNull::new(self.data.as_ptr().add(idx * self.elem_layout.size())).unwrap_unchecked()
         })
     }
 
@@ -210,7 +208,7 @@ impl BlobVec {
     pub(crate) fn capacity_layout(&self) -> Layout {
         unsafe {
             Layout::from_size_align(self.elem_layout.size() * self.cap, self.elem_layout.align())
-                .unwrap_debug_checked()
+                .unwrap_unchecked()
         }
     }
 

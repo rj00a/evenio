@@ -10,7 +10,6 @@ use ahash::RandomState;
 pub use evenio_macros::Component;
 
 use crate::archetype::{Archetype, ArchetypeIdx};
-use crate::assert::UnwrapDebugChecked;
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
 use crate::event::{Event, EventId, EventPtr};
@@ -120,7 +119,7 @@ impl Components {
     /// `None` if the `TypeId` does not map to a component.
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&ComponentInfo> {
         let id = *self.by_type_id.get(&type_id)?;
-        Some(unsafe { self.get(id).unwrap_debug_checked() })
+        Some(unsafe { self.get(id).unwrap_unchecked() })
     }
 
     /// Does the given component exist in the world?

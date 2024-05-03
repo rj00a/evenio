@@ -2,7 +2,7 @@
 use alloc::{vec, vec::Vec};
 use core::mem;
 
-use crate::assert::{assume_debug_checked, GetDebugChecked};
+use crate::assert::assume_unchecked;
 use crate::sparse::SparseIndex;
 
 #[derive(Clone, Default, Debug)]
@@ -30,7 +30,7 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
         if idx >= K::MAX.index() {
             None
         } else {
-            let value = unsafe { self.dense.get_debug_checked(idx) };
+            let value = unsafe { self.dense.get_unchecked(idx) };
             Some(value)
         }
     }
@@ -47,7 +47,7 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
         if idx >= K::MAX.index() {
             None
         } else {
-            let value = unsafe { self.dense.get_debug_checked_mut(idx) };
+            let value = unsafe { self.dense.get_unchecked_mut(idx) };
             Some(value)
         }
     }
@@ -69,7 +69,7 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
 
         // SAFETY: We resized the vec so that `sparse_idx` is in bounds.
         let dense_len = self.dense.len();
-        let dense_idx = unsafe { self.sparse.get_debug_checked_mut(sparse_idx) };
+        let dense_idx = unsafe { self.sparse.get_unchecked_mut(sparse_idx) };
 
         if dense_idx.index() == K::MAX.index() {
             *dense_idx = K::from_index(dense_len);
@@ -81,7 +81,7 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
         } else {
             let idx = dense_idx.index();
             // SAFETY: Data structure ensures all non-max dense indices are in bounds.
-            let v = unsafe { self.dense.get_debug_checked_mut(idx) };
+            let v = unsafe { self.dense.get_unchecked_mut(idx) };
 
             Some(mem::replace(v, value))
         }
@@ -94,16 +94,16 @@ impl<K: SparseIndex, V> SparseMap<K, V> {
         if dense_idx == K::MAX.index() {
             None
         } else {
-            unsafe { assume_debug_checked(dense_idx < self.dense.len()) };
+            unsafe { assume_unchecked(dense_idx < self.dense.len()) };
 
             let res = self.dense.swap_remove(dense_idx);
 
-            unsafe { assume_debug_checked(dense_idx < self.indices.len()) };
+            unsafe { assume_unchecked(dense_idx < self.indices.len()) };
 
             self.indices.swap_remove(dense_idx);
 
             if let Some(&moved_index) = self.indices.get(dense_idx) {
-                *unsafe { self.sparse.get_debug_checked_mut(moved_index.index()) } =
+                *unsafe { self.sparse.get_unchecked_mut(moved_index.index()) } =
                     K::from_index(dense_idx);
             }
 

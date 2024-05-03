@@ -8,7 +8,6 @@ use core::marker::PhantomData;
 use core::ops::{BitOr, BitOrAssign, BitXor, BitXorAssign};
 use core::{any, fmt};
 
-use crate::assert::GetDebugChecked;
 use crate::sparse::SparseIndex;
 
 /// A set data structure backed by a vector of bits.
@@ -60,7 +59,7 @@ impl<T> BitSet<T> {
         }
 
         // SAFETY: Block index is in bounds due to check above.
-        unsafe { self.blocks.get_debug_checked_mut(block_idx) }
+        unsafe { self.blocks.get_unchecked_mut(block_idx) }
     }
 
     /// Returns `true` if `self` has no elements in common with `other`.

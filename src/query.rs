@@ -12,7 +12,7 @@ pub use evenio_macros::Query;
 
 use crate::access::{Access, ComponentAccess};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::assert::{AssertMutable, UnwrapDebugChecked};
+use crate::assert::AssertMutable;
 use crate::component::{Component, ComponentIdx};
 use crate::entity::EntityId;
 use crate::handler::{HandlerConfig, InitError};
@@ -724,7 +724,7 @@ unsafe impl Query for EntityId {
 
     fn new_arch_state(arch: &Archetype, (): &mut Self::State) -> Option<Self::ArchState> {
         Some(unsafe {
-            ColumnPtr(NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_debug_checked())
+            ColumnPtr(NonNull::new(arch.entity_ids().as_ptr().cast_mut()).unwrap_unchecked())
         })
     }
 
