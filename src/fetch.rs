@@ -238,12 +238,15 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     /// This is useful when you know the entity IDs are disjoint but can't prove
     /// it to the compiler.
     ///
+    /// If the entity doesn't exist or doesn't match the query, then a
+    /// [`GetError`] is returned.
+    ///
     /// # Safety
     ///
     /// You must ensure that all entities that co-occur are disjoint if they
-    /// contain any mutable references
+    /// contain any mutable references.
     pub unsafe fn get_unchecked(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
-        unsafe { self.state.get_unchecked(self.world.entities(), entity) }
+        self.state.get_unchecked(self.world.entities(), entity)
     }
 
     /// Returns the query item for the given entity.

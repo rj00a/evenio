@@ -10,6 +10,7 @@
 - Fixed bug where entities could spawn with identical entity IDs.
 - Set MSRV to 1.78.0
 - Improved diagnostics for `add_handler` compiler errors.
+- Added `Fetcher::get_unchecked`.
 
 ## 0.5.0 - 2024-04-07
 
