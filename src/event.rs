@@ -1061,7 +1061,7 @@ unsafe impl<C: Component> Event for Remove<C> {
     }
 }
 
-/// An [`Event`] which signals the creation of an entity. Contains the
+/// A [`GlobalEvent`] which signals the creation of an entity. Contains the
 /// [`EntityId`] of the new entity, which may or may not exist by the time this
 /// event is observed.
 ///

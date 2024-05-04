@@ -504,7 +504,11 @@ impl Archetypes {
             assume_unchecked((loc.row.0 as usize) < arch.entity_ids.len());
         };
 
-        arch.entity_ids.swap_remove(loc.row.0 as usize);
+        let id = arch.entity_ids.swap_remove(loc.row.0 as usize);
+
+        let removed_loc = unsafe { entities.remove(id).unwrap_unchecked() };
+
+        debug_assert_eq!(loc, removed_loc);
 
         if (loc.row.0 as usize) < arch.entity_ids.len() {
             let displaced = *unsafe { arch.entity_ids.get_unchecked(loc.row.0 as usize) };
