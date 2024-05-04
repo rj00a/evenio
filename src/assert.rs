@@ -36,20 +36,3 @@ impl<E: Event> AssertMutable<E> {
     );
 }
 
-pub(crate) struct AssertUntargetedEvent<E>(PhantomData<E>);
-
-impl<E: Event> AssertUntargetedEvent<E> {
-    pub(crate) const ASSERTION: () = assert!(
-        !E::IS_TARGETED,
-        "event is targeted (See `Event::IS_TARGETED`)"
-    );
-}
-
-pub(crate) struct AssertTargetedEvent<E>(PhantomData<E>);
-
-impl<E: Event> AssertTargetedEvent<E> {
-    pub(crate) const ASSERTION: () = assert!(
-        E::IS_TARGETED,
-        "event is untargeted (See `Event::IS_TARGETED`)"
-    );
-}

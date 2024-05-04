@@ -65,9 +65,9 @@ pub unsafe trait Query {
     /// The item returned by this query. This is usually the same type as
     /// `Self`, but with a modified lifetime.
     type Item<'a>;
-    /// Per-archetype state.
+    /// Per-archetype state, e.g. pointers to archetype columns.
     type ArchState: Send + Sync + fmt::Debug + 'static;
-    /// Cached data for fetch initialization.
+    /// Cached data for fetch initialization, e.g. component indices.
     type State: fmt::Debug + 'static;
 
     /// Initialize the query. Returns an expression describing the components
@@ -454,15 +454,11 @@ where
 {
 }
 
-/// A [`Query`] which matches if query `Q` doesn't match.
-pub struct Not<Q>(PhantomData<fn() -> Q>);
+// TODO: Make this a phantomdata-like unit struct.
 
-impl<Q> Not<Q> {
-    /// Create a new instance.
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
+/// A [`Query`] which matches if query `Q` doesn't match.
+#[ghost::phantom]
+pub struct Not<Q>;
 
 impl<Q> Clone for Not<Q> {
     fn clone(&self) -> Self {
@@ -474,7 +470,7 @@ impl<Q> Copy for Not<Q> {}
 
 impl<Q> Default for Not<Q> {
     fn default() -> Self {
-        Self(Default::default())
+        Not
     }
 }
 
@@ -512,7 +508,7 @@ unsafe impl<Q: Query> Query for Not<Q> {
     }
 
     unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
-        Not::new()
+        Not
     }
 }
 
@@ -792,7 +788,7 @@ mod tests {
     use super::*;
     use crate::prelude::*;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E;
 
     /// Test for query access conflicts.

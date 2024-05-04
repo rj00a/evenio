@@ -47,7 +47,8 @@ pub mod prelude {
     pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;
     pub use crate::event::{
-        Despawn, Event, EventId, EventMut, Insert, Receiver, ReceiverMut, Remove, Sender, Spawn,
+        Despawn, EventMut, GlobalEvent, GlobalEventId, Insert, Receiver, ReceiverMut, Remove,
+        Sender, Spawn, TargetedEvent, TargetedEventId,
     };
     pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
     pub use crate::handler::{Handler, HandlerId, HandlerParam, IntoHandler};

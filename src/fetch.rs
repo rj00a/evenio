@@ -829,13 +829,13 @@ mod tests {
     use super::*;
     use crate::prelude::*;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E1;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E2;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E3;
 
     #[derive(Component, PartialEq, Eq, Debug)]

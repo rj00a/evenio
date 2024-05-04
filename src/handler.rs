@@ -21,7 +21,7 @@ use crate::archetype::Archetype;
 use crate::bit_set::BitSet;
 use crate::component::ComponentIdx;
 use crate::entity::EntityLocation;
-use crate::event::{Event, EventId, EventIdx, EventPtr, TargetedEventIdx, UntargetedEventIdx};
+use crate::event::{EventId, EventPtr, GlobalEvent, GlobalEventIdx, TargetedEventIdx};
 use crate::map::TypeIdMap;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -46,7 +46,7 @@ pub struct Handlers {
     infos: SlotMap<HandlerInfo>,
     /// Maps untargeted event indices to the ordered list of handlers that
     /// handle the event.
-    by_untargeted_event: Vec<HandlerList>,
+    by_global_event: Vec<HandlerList>,
     by_type_id: TypeIdMap<HandlerInfoPtr>,
     /// Counts up as new handlers are added.
     insert_counter: u64,
@@ -59,7 +59,7 @@ impl Handlers {
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
-            by_untargeted_event: vec![],
+            by_global_event: vec![],
             by_type_id: Default::default(),
             insert_counter: 0,
             by_insert_order: BTreeMap::new(),
@@ -81,15 +81,15 @@ impl Handlers {
             inner.id = id;
             inner.order = self.insert_counter;
 
-            if let EventIdx::Untargeted(idx) = info.received_event().index() {
-                let idx = idx.0 as usize;
+            if let EventId::Global(id) = info.received_event() {
+                let idx = id.index().0 as usize;
 
-                if idx >= self.by_untargeted_event.len() {
-                    self.by_untargeted_event
+                if idx >= self.by_global_event.len() {
+                    self.by_global_event
                         .resize_with(idx + 1, HandlerList::default);
                 }
 
-                self.by_untargeted_event[idx].insert(ptr, info.priority())
+                self.by_global_event[idx].insert(ptr, info.priority())
             }
 
             info
@@ -108,10 +108,8 @@ impl Handlers {
     pub(crate) fn remove(&mut self, id: HandlerId) -> Option<HandlerInfo> {
         let info = self.infos.remove(id.0)?;
 
-        let received_event = info.received_event();
-
-        if received_event.is_untargeted() {
-            let list = &mut self.by_untargeted_event[received_event.index().as_u32() as usize];
+        if let EventId::Global(event_id) = info.received_event() {
+            let list = &mut self.by_global_event[event_id.index().0 as usize];
             list.remove(info.ptr());
         }
 
@@ -126,17 +124,16 @@ impl Handlers {
         Some(info)
     }
 
-    pub(crate) fn register_event(&mut self, event_idx: EventIdx) {
-        if let EventIdx::Untargeted(UntargetedEventIdx(idx)) = event_idx {
-            if idx as usize >= self.by_untargeted_event.len() {
-                self.by_untargeted_event
-                    .resize_with(idx as usize + 1, HandlerList::default);
-            }
+    pub(crate) fn register_event(&mut self, event_idx: GlobalEventIdx) {
+        let idx = event_idx.0 as usize;
+        if idx >= self.by_global_event.len() {
+            self.by_global_event
+                .resize_with(idx + 1, HandlerList::default);
         }
     }
 
-    pub(crate) fn get_untargeted_list(&self, idx: UntargetedEventIdx) -> Option<&HandlerList> {
-        self.by_untargeted_event.get(idx.0 as usize)
+    pub(crate) fn get_global_list(&self, idx: GlobalEventIdx) -> Option<&HandlerList> {
+        self.by_global_event.get(idx.0 as usize)
     }
 
     /// Gets the [`HandlerInfo`] of the given handler. Returns `None` if the ID
@@ -307,7 +304,7 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) received_event: EventId,
     pub(crate) received_event_access: Access,
     pub(crate) targeted_event_component_access: ComponentAccess,
-    pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    pub(crate) sent_untargeted_events: BitSet<GlobalEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: Access,
     pub(crate) component_access: ComponentAccess,
@@ -349,7 +346,7 @@ impl HandlerInfo {
         unsafe { (*AliasedBox::as_ptr(&self.0)).order }
     }
 
-    /// Gets the [`EventId`] of the event is handler listens for.
+    /// Gets the [`EventId`] of the event this handler listens for.
     pub fn received_event(&self) -> EventId {
         unsafe { (*AliasedBox::as_ptr(&self.0)).received_event }
     }
@@ -367,18 +364,18 @@ impl HandlerInfo {
             .then(|| unsafe { &(*AliasedBox::as_ptr(&self.0)).targeted_event_component_access })
     }
 
-    /// Returns the set of untargeted events this handler sends.
-    pub fn sent_untargeted_events(
+    /// Returns an iterator over the set of global events this handler sends.
+    pub fn sent_global_events(
         &self,
-    ) -> impl Iterator<Item = UntargetedEventIdx> + Clone + fmt::Debug + '_ {
-        self.sent_untargeted_events_bitset().iter()
+    ) -> impl Iterator<Item = GlobalEventIdx> + Clone + fmt::Debug + '_ {
+        self.sent_global_events_bitset().iter()
     }
 
-    pub(crate) fn sent_untargeted_events_bitset(&self) -> &BitSet<UntargetedEventIdx> {
+    pub(crate) fn sent_global_events_bitset(&self) -> &BitSet<GlobalEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
 
-    /// Returns the set of targeted events this handler sends.
+    /// Returns an iterator over the set of targeted events this handler sends.
     pub fn sent_targeted_events(
         &self,
     ) -> impl Iterator<Item = TargetedEventIdx> + Clone + fmt::Debug + '_ {
@@ -443,7 +440,7 @@ impl fmt::Debug for HandlerInfo {
             .field("received_event", &self.received_event())
             .field("received_event_access", &self.received_event_access())
             .field("targeted_event_component_access", &self.targeted_event_component_access())
-            .field("sent_untargeted_events", &self.sent_untargeted_events())
+            .field("sent_global_events", &self.sent_global_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
             .field("event_queue_access", &self.event_queue_access())
             .field("component_access", &self.component_access())
@@ -512,7 +509,7 @@ impl HandlerList {
         }
     }
 
-    pub(crate) fn handlers(&self) -> &[HandlerInfoPtr] {
+    pub(crate) fn slice(&self) -> &[HandlerInfoPtr] {
         &self.entries
     }
 }
@@ -850,7 +847,7 @@ pub struct HandlerConfig {
     pub(crate) received_event: ReceivedEventId,
     pub(crate) received_event_access: MaybeInvalidAccess,
     pub(crate) targeted_event_component_access: ComponentAccess,
-    pub(crate) sent_untargeted_events: BitSet<UntargetedEventIdx>,
+    pub(crate) sent_global_events: BitSet<GlobalEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
     pub(crate) event_queue_access: MaybeInvalidAccess,
     pub(crate) component_accesses: Vec<ComponentAccess>,
@@ -872,7 +869,8 @@ impl HandlerConfig {
 
     /// Sets the event sent by this handler. Causes an initialization error
     /// if a different event was previously set.
-    pub fn set_received_event(&mut self, event: EventId) {
+    pub fn set_received_event<E: Into<EventId>>(&mut self, event: E) {
+        let event = event.into();
         self.received_event = match self.received_event {
             ReceivedEventId::None => ReceivedEventId::Ok(event),
             ReceivedEventId::Ok(old_event) => {
@@ -906,15 +904,20 @@ impl HandlerConfig {
         self.targeted_event_component_access = component_access;
     }
 
-    /// Inserts an event type to the set of event types this handler is able to
+    /// Inserts a global event into the set of events this handler is able to
     /// send.
     ///
     /// Returns whether the given event was already configured to be sent.
-    pub fn insert_sent_event(&mut self, event: EventId) -> bool {
-        match event.index() {
-            EventIdx::Targeted(e) => self.sent_targeted_events.insert(e),
-            EventIdx::Untargeted(e) => self.sent_untargeted_events.insert(e),
-        }
+    pub fn insert_sent_global_event(&mut self, event: GlobalEventIdx) -> bool {
+        self.sent_global_events.insert(event)
+    }
+
+    /// Inserts a targeted event into the set of events this handler is able to
+    /// send.
+    ///
+    /// Returns whether the given event was already configured to be sent.
+    pub fn insert_sent_targeted_event(&mut self, event: GlobalEventIdx) -> bool {
+        self.sent_global_events.insert(event)
     }
 
     /// Sets the handler's access to the event queue. Produces a configuration
@@ -1429,12 +1432,12 @@ unsafe impl<P: HandlerParam> HandlerParam for std::sync::RwLock<P> {
 
 /// An event sent immediately after a new handler is added to the world.
 /// Contains the ID of the added handler.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(GlobalEvent, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddHandler(pub HandlerId);
 
 /// An event sent immediately before a handler is removed from the world.
 /// Contains the ID of the handler to be removed.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(GlobalEvent, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveHandler(pub HandlerId);
 
 #[cfg(test)]
@@ -1442,7 +1445,7 @@ mod tests {
     use evenio::prelude::*;
 
     use super::*;
-    use crate::event::Events;
+    use crate::event::GlobalEvents;
 
     #[test]
     #[allow(dead_code)]
@@ -1458,7 +1461,7 @@ mod tests {
         #[derive(HandlerParam)]
         struct ParamWithTwoLifetimes<'a, 'b> {
             foo: &'a Handlers,
-            bar: &'b Events,
+            bar: &'b GlobalEvents,
         }
 
         #[derive(HandlerParam)]
@@ -1468,7 +1471,7 @@ mod tests {
         }
 
         #[derive(HandlerParam)]
-        struct TupleStructParam<'a>(&'a Handlers, &'a Events);
+        struct TupleStructParam<'a>(&'a Handlers, &'a GlobalEvents);
 
         assert_handler_param::<UnitParam>();
         assert_handler_param::<ParamWithLifetime>();
@@ -1482,8 +1485,8 @@ mod tests {
     fn handler_run_order() {
         let mut world = World::new();
 
-        #[derive(Event)]
-        struct E(#[event(target)] EntityId);
+        #[derive(TargetedEvent)]
+        struct E;
 
         #[derive(Component)]
         struct Tracker(String);
@@ -1509,14 +1512,14 @@ mod tests {
         let e = world.spawn();
         world.insert(e, Tracker(String::new()));
 
-        world.send(E(e));
+        world.send_to(e, E);
     }
 
     #[test]
     fn handler_info_aliasing() {
         let mut world = World::new();
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct E;
 
         world.add_handler(|_: Receiver<E>, info: &HandlerInfo| {

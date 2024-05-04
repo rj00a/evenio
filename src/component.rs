@@ -12,7 +12,7 @@ pub use evenio_macros::Component;
 use crate::archetype::{Archetype, ArchetypeIdx};
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
-use crate::event::{Event, EventId, EventPtr};
+use crate::event::{EventPtr, GlobalEvent, TargetedEventId};
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, IndexSet, TypeIdMap};
 use crate::prelude::World;
@@ -202,8 +202,8 @@ pub struct ComponentInfo {
     layout: Layout,
     drop: DropFn,
     is_immutable: bool,
-    pub(crate) insert_events: BTreeSet<EventId>,
-    pub(crate) remove_events: BTreeSet<EventId>,
+    pub(crate) insert_events: BTreeSet<TargetedEventId>,
+    pub(crate) remove_events: BTreeSet<TargetedEventId>,
     /// The set of archetypes that have this component as one of its columns.
     pub(crate) member_of: IndexSet<ArchetypeIdx>,
 }
@@ -248,14 +248,14 @@ impl ComponentInfo {
     /// Gets the set of [`Insert`] events for this component.
     ///
     /// [`Insert`]: crate::event::Insert
-    pub fn insert_events(&self) -> &BTreeSet<EventId> {
+    pub fn insert_events(&self) -> &BTreeSet<TargetedEventId> {
         &self.insert_events
     }
 
     /// Gets the set of [`Remove`] components for this component.
     ///
     /// [`Remove`]: crate::event::Remove
-    pub fn remove_events(&self) -> &BTreeSet<EventId> {
+    pub fn remove_events(&self) -> &BTreeSet<TargetedEventId> {
         &self.remove_events
     }
 }
@@ -395,19 +395,19 @@ unsafe impl SparseIndex for ComponentIdx {
 
 /// An event sent immediately after a new component is added to the world.
 /// Contains the ID of the added component.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(GlobalEvent, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AddComponent(pub ComponentId);
 
 /// An event sent immediately before a component is removed from the world.
 /// Contains the ID of the component to be removed.
-#[derive(Event, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(GlobalEvent, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoveComponent(pub ComponentId);
 
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E;
 
     #[test]

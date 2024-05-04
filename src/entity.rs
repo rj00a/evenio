@@ -130,7 +130,7 @@ unsafe impl HandlerParam for &'_ Entities {
 }
 
 /// The location of an entity in an archetype.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EntityLocation {
     /// The archetype where the entity is located.
     pub archetype: ArchetypeIdx,
@@ -258,10 +258,10 @@ mod tests {
     fn spawn_despawn_queued() {
         let mut world = World::new();
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct E1;
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct E2 {
             a: EntityId,
             b: EntityId,
@@ -285,10 +285,10 @@ mod tests {
     fn spawn_event_entity_exists() {
         let mut world = World::new();
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct E;
 
-        world.add_handler(|r: Receiver<Spawn, ()>, entities: &Entities| {
+        world.add_handler(|r: Receiver<Spawn>, entities: &Entities| {
             assert!(entities.contains(r.event.0));
         });
     }
