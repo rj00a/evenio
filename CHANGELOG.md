@@ -5,10 +5,12 @@
 - Removed `Send + Sync` requirements from all data in the `World`, including components, handlers, and events. `World` is now `!Send + !Sync`.
 - Added `Deref` and `DerefMut` impls for `Single`, `TrySingle`, `Has<Q>`.
 - Allow sending events with borrowed data in `World::send`.
-- Removed `'static` bound from `Event`. `Event` is now an `unsafe` trait to implement.
+- Removed `'static` bound from `Event`. `Event` is now an `unsafe` trait to implement (but can be safely implemented with `#[derive(Event)]`).
 - Removed `World::send_many`.
 - Fixed bug where entities could spawn with identical entity IDs.
 - Set MSRV to 1.78.0
+- Improved diagnostics for `add_handler` compiler errors.
+- Added `Fetcher::get_unchecked`.
 
 ## 0.5.0 - 2024-04-07
 
