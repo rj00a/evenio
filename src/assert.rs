@@ -35,4 +35,3 @@ impl<E: Event> AssertMutable<E> {
         "event does not permit mutation through mutable references (see `Event::IS_IMMUTABLE`)."
     );
 }
-

@@ -47,7 +47,7 @@ impl TargetedEvents {
     }
 
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (TargetedEventId, bool) {
-        let info = TargetedEventInfo {
+        let mut info = TargetedEventInfo {
             id: TargetedEventId::NULL,
             name: desc.name,
             kind: desc.kind,
@@ -58,12 +58,14 @@ impl TargetedEvents {
         };
 
         let insert = || {
-            let Some(k) = self.infos.insert(info) else {
-                panic!("too many targeted events")
-            };
-            let id = TargetedEventId(k);
-            self.infos[k].id = id;
-            id
+            TargetedEventId(
+                self.infos
+                    .insert_with(|id| {
+                        info.id = TargetedEventId(id);
+                        info
+                    })
+                    .expect("too many targeted events"),
+            )
         };
 
         if let Some(type_id) = desc.type_id {
@@ -72,7 +74,7 @@ impl TargetedEvents {
                 Entry::Occupied(o) => (*o.get(), false),
             }
         } else {
-            (insert(), false)
+            (insert(), true)
         }
     }
 

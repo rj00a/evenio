@@ -46,7 +46,7 @@ impl GlobalEvents {
     }
 
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (GlobalEventId, bool) {
-        let info = GlobalEventInfo {
+        let mut info = GlobalEventInfo {
             id: GlobalEventId::NULL,
             name: desc.name,
             kind: desc.kind,
@@ -57,12 +57,14 @@ impl GlobalEvents {
         };
 
         let insert = || {
-            let Some(k) = self.infos.insert(info) else {
-                panic!("too many global events")
-            };
-            let id = GlobalEventId(k);
-            self.infos[k].id = id;
-            id
+            GlobalEventId(
+                self.infos
+                    .insert_with(|id| {
+                        info.id = GlobalEventId(id);
+                        info
+                    })
+                    .expect("too many global events"),
+            )
         };
 
         if let Some(type_id) = desc.type_id {
@@ -71,7 +73,7 @@ impl GlobalEvents {
                 Entry::Occupied(o) => (*o.get(), false),
             }
         } else {
-            (insert(), false)
+            (insert(), true)
         }
     }
 

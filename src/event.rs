@@ -944,7 +944,7 @@ unsafe impl<E: Event> EventSet for E {
                 .index()
                 .0
         } else {
-            unsafe { world.add_targeted_event_with_descriptor(desc) }
+            unsafe { world.add_global_event_with_descriptor(desc) }
                 .index()
                 .0
         }
