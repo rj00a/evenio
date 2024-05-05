@@ -53,7 +53,7 @@ fn random_access_evenio(bencher: Bencher) {
         C30 C31 C32 C33 C34 C35 C36 C37 C38 C39*/
     );
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E;
 
     world.add_handler(move |_: Receiver<E>, f: Fetcher<ComponentQuery>| {

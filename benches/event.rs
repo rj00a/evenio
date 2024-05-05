@@ -11,16 +11,16 @@ fn main() {
 fn send_many_events(bencher: Bencher) {
     let mut world = World::new();
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct A(u64);
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct B(u64);
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct C(u64);
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct D(#[allow(dead_code)] u64);
 
     world.add_handler(get_a_send_b);
