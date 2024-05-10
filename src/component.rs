@@ -15,6 +15,7 @@ use crate::entity::EntityLocation;
 use crate::event::{EventPtr, GlobalEvent, TargetedEventId};
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
 use crate::map::{Entry, IndexSet, TypeIdMap};
+use crate::mutability::{Mutability, MutabilityMarker};
 use crate::prelude::World;
 use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
@@ -58,7 +59,7 @@ impl Components {
                         type_id: desc.type_id,
                         layout: desc.layout,
                         drop: desc.drop,
-                        is_immutable: desc.is_immutable,
+                        mutability: desc.mutability,
                         insert_events: BTreeSet::new(),
                         remove_events: BTreeSet::new(),
                         member_of: IndexSet::with_hasher(RandomState::new()),
@@ -78,7 +79,7 @@ impl Components {
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
-            is_immutable: desc.is_immutable,
+            mutability: desc.mutability,
             insert_events: BTreeSet::new(),
             remove_events: BTreeSet::new(),
             member_of: IndexSet::with_hasher(RandomState::new()),
@@ -201,7 +202,7 @@ pub struct ComponentInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: DropFn,
-    is_immutable: bool,
+    mutability: Mutability,
     pub(crate) insert_events: BTreeSet<TargetedEventId>,
     pub(crate) remove_events: BTreeSet<TargetedEventId>,
     /// The set of archetypes that have this component as one of its columns.
@@ -238,11 +239,9 @@ impl ComponentInfo {
         self.drop
     }
 
-    /// Gets the [immutability] of the component.
-    ///
-    /// [immutability]: Component::IS_IMMUTABLE
-    pub fn is_immutable(&self) -> bool {
-        self.is_immutable
+    /// Gets the [`Mutability`] of the component.
+    pub fn mutability(&self) -> Mutability {
+        self.mutability
     }
 
     /// Gets the set of [`Insert`] events for this component.
@@ -312,11 +311,11 @@ impl ComponentInfo {
 /// struct FooCounter(i32);
 /// ```
 pub trait Component: 'static {
-    /// Whether or not this component is immutable.
+    /// Indicates if this event is [`Mutable`] or [`Immutable`].
     ///
     /// Immutable components disallow mutable references, which can be used to
-    /// ensure components are used in particular ways.
-    const IS_IMMUTABLE: bool = false;
+    /// ensure components are only modified via events.
+    type Mutability: MutabilityMarker;
 }
 
 /// Data needed to create a new component.
@@ -334,8 +333,8 @@ pub struct ComponentDescriptor {
     /// The [`DropFn`] of the component. This is passed a pointer to the
     /// component in order to drop it.
     pub drop: DropFn,
-    /// If this component is [immutable](Component::IS_IMMUTABLE).
-    pub is_immutable: bool,
+    /// The [mutability](Component::Mutability) of this component.
+    pub mutability: Mutability,
 }
 
 /// Lightweight identifier for a component type.

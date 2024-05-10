@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 use core::{any, fmt};
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::assert::assume_unchecked;
+use crate::assume_unchecked;
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};

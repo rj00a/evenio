@@ -7,7 +7,11 @@ use crate::util::{parse_attr_immutable, replace_lifetime};
 pub(crate) fn derive_event(input: TokenStream, is_targeted: bool) -> Result<TokenStream> {
     let input = parse2::<DeriveInput>(input)?;
 
-    let is_immutable = parse_attr_immutable("event", &input.attrs)?;
+    let mutability_type: Type = if parse_attr_immutable("event", &input.attrs)? {
+        parse_quote!(::evenio::mutability::Immutable)
+    } else {
+        parse_quote!(::evenio::mutability::Mutable)
+    };
 
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -32,7 +36,7 @@ pub(crate) fn derive_event(input: TokenStream, is_targeted: bool) -> Result<Toke
 
             type EventIdx = #event_idx_type;
 
-            const IS_IMMUTABLE: bool = #is_immutable;
+            type Mutability = #mutability_type;
         }
     })
 }

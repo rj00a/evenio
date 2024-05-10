@@ -618,7 +618,7 @@ pub trait IntoHandler<Marker>: Sized {
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct FunctionHandlerMarker;
+pub enum FunctionHandlerMarker {}
 
 impl<Marker, F> IntoHandler<(FunctionHandlerMarker, Marker)> for F
 where

@@ -2,7 +2,7 @@
 use alloc::{vec, vec::Vec};
 use core::mem;
 
-use crate::assert::assume_unchecked;
+use crate::assume_unchecked;
 use crate::sparse::SparseIndex;
 
 #[derive(Clone, Default, Debug)]

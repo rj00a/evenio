@@ -13,7 +13,6 @@ extern crate self as evenio;
 pub mod access;
 mod aliased_box;
 pub mod archetype;
-mod assert;
 mod bit_set;
 mod blob_vec;
 pub mod component;
@@ -25,6 +24,7 @@ pub mod handler;
 mod ignore;
 mod layout_util;
 mod map;
+pub mod mutability;
 pub mod query;
 mod slot_map;
 mod sparse;
@@ -55,4 +55,17 @@ pub mod prelude {
     pub use crate::handler::{Handler, HandlerId, HandlerParam, IntoHandler};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::world::World;
+}
+
+const _: () = assert!(
+    core::mem::size_of::<usize>() >= core::mem::size_of::<u32>(),
+    "unsupported target"
+);
+
+#[inline]
+#[track_caller]
+unsafe fn assume_unchecked(cond: bool) {
+    if !cond {
+        core::hint::unreachable_unchecked()
+    }
 }

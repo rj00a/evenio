@@ -11,7 +11,6 @@ use core::ptr::NonNull;
 
 use crate::access::ComponentAccess;
 use crate::archetype::Archetypes;
-use crate::assert::AssertMutable;
 use crate::component::{
     AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
     RemoveComponent,
@@ -28,6 +27,7 @@ use crate::handler::{
     AddHandler, Handler, HandlerConfig, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList,
     Handlers, IntoHandler, MaybeInvalidAccess, ReceivedEventId, RemoveHandler,
 };
+use crate::mutability::{Mutability, Mutable};
 
 /// A container for all data in the ECS. This includes entities, components,
 /// handlers, and events.
@@ -286,9 +286,10 @@ impl World {
     ///
     /// assert_eq!(world.get_mut::<MyComponent>(e), Some(&mut MyComponent(123)));
     /// ```
-    pub fn get_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
-        let () = AssertMutable::<C>::COMPONENT;
-
+    pub fn get_mut<C: Component<Mutability = Mutable>>(
+        &mut self,
+        entity: EntityId,
+    ) -> Option<&mut C> {
         let loc = self.entities.get(entity)?;
 
         let component_idx = self
@@ -519,7 +520,7 @@ impl World {
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
             drop: drop_fn_of::<C>(),
-            is_immutable: C::IS_IMMUTABLE,
+            mutability: Mutability::of::<C::Mutability>(),
         };
 
         unsafe { self.add_component_with_descriptor(desc) }

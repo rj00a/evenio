@@ -12,10 +12,10 @@ pub use evenio_macros::Query;
 
 use crate::access::{Access, ComponentAccess};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::assert::AssertMutable;
 use crate::component::{Component, ComponentIdx};
 use crate::entity::EntityId;
 use crate::handler::{HandlerConfig, InitError};
+use crate::mutability::Mutable;
 use crate::world::World;
 
 /// Types that can be fetched from an entity.
@@ -141,7 +141,7 @@ unsafe impl<C: Component> Query for &'_ C {
 
 unsafe impl<C: Component> ReadOnlyQuery for &'_ C {}
 
-unsafe impl<C: Component> Query for &'_ mut C {
+unsafe impl<C: Component<Mutability = Mutable>> Query for &'_ mut C {
     type Item<'a> = &'a mut C;
 
     type ArchState = ColumnPtr<C>;
@@ -152,8 +152,6 @@ unsafe impl<C: Component> Query for &'_ mut C {
         world: &mut World,
         config: &mut HandlerConfig,
     ) -> Result<(ComponentAccess, Self::State), InitError> {
-        let () = AssertMutable::<C>::COMPONENT;
-
         let idx = Self::new_state(world);
         let ca = ComponentAccess::var(idx, Access::ReadWrite);
         config.referenced_components.insert(idx);

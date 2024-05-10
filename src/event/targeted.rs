@@ -6,7 +6,7 @@ use core::ops::Index;
 pub use evenio_macros::TargetedEvent;
 
 use super::global::GlobalEvent;
-use super::{Event, EventDescriptor, EventKind, EventPtr};
+use super::{Event, EventDescriptor, EventKind, EventPtr, Mutability};
 use crate::archetype::Archetype;
 use crate::drop::DropFn;
 use crate::entity::EntityLocation;
@@ -54,7 +54,7 @@ impl TargetedEvents {
             type_id: desc.type_id,
             layout: desc.layout,
             drop: desc.drop,
-            is_immutable: desc.is_immutable,
+            mutability: desc.mutability,
         };
 
         let insert = || {
@@ -187,7 +187,7 @@ pub struct TargetedEventInfo {
     type_id: Option<TypeId>,
     layout: Layout,
     drop: DropFn,
-    is_immutable: bool,
+    mutability: Mutability,
 }
 
 impl TargetedEventInfo {
@@ -224,11 +224,11 @@ impl TargetedEventInfo {
         self.drop
     }
 
-    /// Gets the [immutability] of the event.
+    /// Gets the [mutability] of the event
     ///
-    /// [immutability]: Event::IS_IMMUTABLE
-    pub fn is_immutable(&self) -> bool {
-        self.is_immutable
+    /// [mutability]: Event::Mutability
+    pub fn mutability(&self) -> Mutability {
+        self.mutability
     }
 }
 

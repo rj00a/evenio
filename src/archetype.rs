@@ -14,7 +14,7 @@ use ahash::RandomState;
 use slab::Slab;
 
 use crate::aliased_box::AliasedBox;
-use crate::assert::assume_unchecked;
+use crate::assume_unchecked;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};

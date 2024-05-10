@@ -21,12 +21,12 @@ pub use targeted::*;
 
 use crate::access::Access;
 use crate::archetype::Archetype;
-use crate::assert::AssertMutable;
 use crate::component::ComponentIdx;
 use crate::drop::{drop_fn_of, DropFn};
 use crate::entity::{EntityId, EntityLocation};
 use crate::fetch::FetcherState;
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
+use crate::mutability::{Immutable, Mutability, MutabilityMarker, Mutable};
 use crate::prelude::Component;
 use crate::query::Query;
 use crate::world::{UnsafeWorldCell, World};
@@ -104,20 +104,12 @@ pub unsafe trait Event {
 
     type EventIdx: 'static;
 
-    // /// If this event is considered "targeted" or "untargeted".
-    // ///
-    // /// If `true`, [`target`] is expected to successfully return the target of
-    // /// the event. Otherwise, the result of [`target`] is unspecified.
-    // ///
-    // /// [`target`]: Event::target
-    // const IS_TARGETED: bool;
-
-    /// Whether or not this event is considered immutable.
+    /// Indicates if this event is [`Mutable`] or [`Immutable`].
     ///
     /// Immutable events disallow mutable references to the event and ownership
     /// transfer via [`EventMut::take`]. This is useful for ensuring events
-    /// are not altered during their lifespan.
-    const IS_IMMUTABLE: bool;
+    /// are not altered during their lifespan.    
+    type Mutability: MutabilityMarker;
 
     /// Gets the [`EventKind`] of this event and performs any necessary
     /// initialization work.
@@ -179,8 +171,8 @@ pub struct EventDescriptor {
     /// The [`DropFn`] of the event. This is passed a pointer to the
     /// event in order to drop it.
     pub drop: DropFn,
-    /// If this event is [immutable](Event::IS_IMMUTABLE).
-    pub is_immutable: bool,
+    /// The [mutability](Event::Mutability) of this event.
+    pub mutability: Mutability,
 }
 
 impl EventDescriptor {
@@ -191,7 +183,7 @@ impl EventDescriptor {
             kind: E::init(world),
             layout: Layout::new::<E>(),
             drop: drop_fn_of::<E>(),
-            is_immutable: E::IS_IMMUTABLE,
+            mutability: Mutability::of::<E::Mutability>(),
         }
     }
 }
@@ -595,14 +587,15 @@ pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQu
     pub query: Q::Item<'a>,
 }
 
-unsafe impl<E: GlobalEvent> HandlerParam for ReceiverMut<'_, E> {
+unsafe impl<E> HandlerParam for ReceiverMut<'_, E>
+where
+    E: GlobalEvent + Event<Mutability = Mutable>,
+{
     type State = ();
 
     type This<'a> = ReceiverMut<'a, E>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
-        let () = AssertMutable::<E>::EVENT; // TODO: Remove this.
-
         let event_id = world.add_global_event::<E>();
 
         config.set_received_event(event_id);
@@ -641,14 +634,16 @@ where
     }
 }
 
-unsafe impl<E: TargetedEvent, Q: Query + 'static> HandlerParam for ReceiverMut<'_, E, Q> {
+unsafe impl<E, Q> HandlerParam for ReceiverMut<'_, E, Q>
+where
+    E: TargetedEvent + Event<Mutability = Mutable>,
+    Q: Query + 'static,
+{
     type State = FetcherState<Q>;
 
     type This<'a> = ReceiverMut<'a, E, Q>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
-        let () = AssertMutable::<E>::EVENT; // TODO: Remove this.
-
         let event_id = world.add_targeted_event::<E>();
 
         let (ca, state) = Q::init(world, config)?;
@@ -702,7 +697,7 @@ where
 
 /// Indicates the absence of a [`ReceiverQuery`].
 #[derive(Clone, Copy, Debug)]
-pub struct NullReceiverQuery;
+pub enum NullReceiverQuery {}
 
 /// Targeted event queries used in [`Receiver`] and [`ReceiverMut`]. This trait
 /// is implemented for all types which implement [`Query`].
@@ -1019,7 +1014,7 @@ unsafe impl<C: Component> Event for Insert<C> {
 
     type EventIdx = TargetedEventIdx;
 
-    const IS_IMMUTABLE: bool = false;
+    type Mutability = Mutable;
 
     fn init(world: &mut World) -> EventKind {
         EventKind::Insert {
@@ -1103,7 +1098,7 @@ unsafe impl<C: Component> Event for Remove<C> {
 
     type EventIdx = TargetedEventIdx;
 
-    const IS_IMMUTABLE: bool = false;
+    type Mutability = Mutable;
 
     fn init(world: &mut World) -> EventKind {
         EventKind::Remove {
@@ -1127,7 +1122,7 @@ unsafe impl Event for Spawn {
 
     type EventIdx = GlobalEventIdx;
 
-    const IS_IMMUTABLE: bool = true;
+    type Mutability = Immutable;
 
     fn init(_world: &mut World) -> EventKind {
         EventKind::Spawn
@@ -1168,7 +1163,7 @@ unsafe impl Event for Despawn {
 
     type EventIdx = TargetedEventIdx;
 
-    const IS_IMMUTABLE: bool = false;
+    type Mutability = Mutable;
 
     fn init(_world: &mut World) -> EventKind {
         EventKind::Despawn
