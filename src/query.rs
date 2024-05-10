@@ -461,7 +461,7 @@ where
 pub enum Not<Q: ?Sized> {
     // Don't use these variants directly. They are implementation details.
     #[doc(hidden)]
-    __Ignore(crate::private::Ignore<Q>),
+    __Ignore(crate::ignore::Ignore<Q>),
     #[doc(hidden)]
     __Value,
 }

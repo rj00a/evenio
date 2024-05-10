@@ -196,17 +196,22 @@ impl EventDescriptor {
     }
 }
 
+/// An enum of either [`GlobalEventId`] or [`TargetedEventId`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum EventId {
+    /// A global event.
     Global(GlobalEventId),
+    /// A targeted event.
     Targeted(TargetedEventId),
 }
 
 impl EventId {
+    /// Is this a [`EventId::Global`] event?
     pub const fn is_global(self) -> bool {
         matches!(self, Self::Global(_))
     }
 
+    /// Is this a [`EventId::Targeted`] event?
     pub const fn is_targeted(self) -> bool {
         matches!(self, Self::Targeted(_))
     }
@@ -1061,7 +1066,7 @@ impl<C> DerefMut for Insert<C> {
 /// ```
 pub enum Remove<C: ?Sized> {
     #[doc(hidden)]
-    __Ignore(crate::private::Ignore<C>),
+    __Ignore(crate::ignore::Ignore<C>),
     #[doc(hidden)]
     __Value,
 }
