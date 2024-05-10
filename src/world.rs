@@ -69,17 +69,20 @@ impl World {
         }
     }
 
-    /// Broadcast a global event to all handlers in this world.
+    /// Broadcast a global event to all handlers in this world. All handlers
+    /// which listen for this event
     ///
     /// Any events sent by handlers will also broadcast. This process continues
     /// recursively until all events have finished broadcasting.
+    ///
+    /// See also [`World::send_to`] to send a [`TargetedEvent`].
     ///
     /// # Examples
     ///
     /// ```
     /// use evenio::prelude::*;
     ///
-    /// #[derive(Event)]
+    /// #[derive(GlobalEvent)]
     /// struct MyEvent(i32);
     ///
     /// fn my_handler(r: Receiver<MyEvent>) {
@@ -105,6 +108,34 @@ impl World {
         self.flush_event_queue();
     }
 
+    /// Broadcast a targeted event to all handlers in this world.
+    ///
+    /// Any events sent by handlers will also broadcast. This process continues
+    /// recursively until all events have finished broadcasting.
+    ///
+    /// See also [`World::send`] to send a [`GlobalEvent`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent(i32);
+    ///
+    /// fn my_handler(r: Receiver<MyEvent, EntityId>) {
+    ///     println!("target of received event is {:?}", r.query);
+    /// }
+    ///
+    /// let mut world = World::new();
+    ///
+    /// world.add_handler(my_handler);
+    ///
+    /// let target = world.spawn();
+    ///
+    /// // Send my event to `target` entity.
+    /// world.send_to(target, MyEvent(123));
+    /// ```
     pub fn send_to<E: TargetedEvent>(&mut self, target: EntityId, event: E) {
         let idx = self.add_targeted_event::<E>().index();
 
@@ -620,48 +651,73 @@ impl World {
         Some(info)
     }
 
-    // /// Adds the event `E` to the world, returns its [`EventId`], and sends the
-    // /// [`AddEvent`] event to signal its creation.
-    // ///
-    // /// If the event already exists, then the [`EventId`] of the existing event
-    // /// is returned and no event is sent.
-    // ///
-    // /// # Examples
-    // ///
-    // /// ```
-    // /// use evenio::prelude::*;
-    // ///
-    // /// #[derive(Event)]
-    // /// struct MyEvent;
-    // ///
-    // /// let mut world = World::new();
-    // /// let id = world.add_event::<MyEvent>();
-    // ///
-    // /// assert_eq!(id, world.add_event::<MyEvent>());
-    // /// ```
-    // pub fn add_event<E: Event>(&mut self) -> EventId {
-    //     let desc = EventDescriptor {
-    //         name: any::type_name::<E>().into(),
-    //         type_id: Some(TypeId::of::<E::This<'static>>()),
-    //         kind: E::init(self),
-    //         layout: Layout::new::<E>(),
-    //         drop: drop_fn_of::<E>(),
-    //         is_immutable: E::IS_IMMUTABLE,
-    //     };
-
-    //     unsafe { self.add_event_with_descriptor(desc) }
-    // }
-
+    /// Adds the global event `E` to the world, returns its [`GlobalEventId`],
+    /// and sends the [`AddGlobalEvent`] event to signal its creation.
+    ///
+    /// If the event already exists, then the [`GlobalEventId`] of the existing
+    /// event is returned and no event is sent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(GlobalEvent)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_global_event::<MyEvent>();
+    ///
+    /// assert_eq!(id, world.add_global_event::<MyEvent>());
+    /// ```
     pub fn add_global_event<E: GlobalEvent>(&mut self) -> GlobalEventId {
         let desc = EventDescriptor::new::<E>(self);
         unsafe { self.add_global_event_with_descriptor(desc) }
     }
 
+    /// Adds the targeted event `E` to the world, returns its
+    /// [`TargetedEventId`], and sends the [`AddTargetedEvent`] event to
+    /// signal its creation.
+    ///
+    /// If the event already exists, then the [`TargetedEventId`] of the
+    /// existing event is returned and no event is sent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_targeted_event::<MyEvent>();
+    ///
+    /// assert_eq!(id, world.add_targeted_event::<MyEvent>());
+    /// ```
     pub fn add_targeted_event<E: TargetedEvent>(&mut self) -> TargetedEventId {
         let desc = EventDescriptor::new::<E>(self);
         unsafe { self.add_targeted_event_with_descriptor(desc) }
     }
 
+    /// Adds a global event described by a given [`EventDescriptor`].
+    ///
+    /// Like [`add_global_event`], an [`AddGlobalEvent`] event is sent if the
+    /// event is newly added. If the [`TypeId`] of the event matches an
+    /// existing global event, then the existing event's [`GlobalEventId`] is
+    /// returned and no event is sent.
+    ///
+    /// # Safety
+    ///
+    /// - If the event is given a [`TypeId`], then the `layout` and `drop`
+    ///   function must be compatible with the Rust type identified by the type
+    ///   ID.
+    /// - Drop function must be safe to call with a pointer to the event as
+    ///   described by [`DropFn`]'s documentation.
+    /// - The event's kind must be correct for the descriptor. See [`EventKind`]
+    ///   for more information.
+    ///
+    /// [`add_global_event`]: World::add_global_event
     pub unsafe fn add_global_event_with_descriptor(
         &mut self,
         desc: EventDescriptor,
@@ -676,6 +732,24 @@ impl World {
         id
     }
 
+    /// Adds a targeted event described by a given [`EventDescriptor`].
+    ///
+    /// Like [`add_targeted_event`], an [`AddTargetedEvent`] event is sent if
+    /// the event is newly added. If the [`TypeId`] of the event matches an
+    /// existing targeted event, then the existing event's [`GlobalEventId`] is
+    /// returned and no event is sent.
+    ///
+    /// # Safety
+    ///
+    /// - If the event is given a [`TypeId`], then the `layout` and `drop`
+    ///   function must be compatible with the Rust type identified by the type
+    ///   ID.
+    /// - Drop function must be safe to call with a pointer to the event as
+    ///   described by [`DropFn`]'s documentation.
+    /// - The event's kind must be correct for the descriptor. See [`EventKind`]
+    ///   for more information.
+    ///
+    /// [`add_targeted_event`]: World::add_targeted_event
     pub unsafe fn add_targeted_event_with_descriptor(
         &mut self,
         desc: EventDescriptor,
@@ -707,63 +781,13 @@ impl World {
         id
     }
 
-    /*
-    /// Adds an event described by a given [`EventDescriptor`].
+    /// Removes a global event from the world and returns its
+    /// [`GlobalEventInfo`]. If the event ID is invalid, then `None` is
+    /// returned and the function has no effect.
     ///
-    /// Like [`add_event`], an [`AddEvent`] event is sent if the
-    /// event is newly added. If the [`TypeId`] of the event matches an
-    /// existing event, then the existing event's [`EventId`] is
-    /// returned and no event is sent.
-    ///
-    /// # Safety
-    ///
-    /// - If the event is given a [`TypeId`], then the `layout` and `drop`
-    ///   function must be compatible with the Rust type identified by the type
-    ///   ID.
-    /// - Drop function must be safe to call with a pointer to the event as
-    ///   described by [`DropFn`]'s documentation.
-    /// - The event's kind must be correct for the descriptor. See
-    ///   [`EventKind`]'s documentation for more information.
-    ///
-    /// [`add_event`]: World::add_event
-    pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
-        let kind = desc.kind;
-
-        let (id, is_new) = self.events.add(desc);
-
-        if is_new {
-            self.handlers.register_event(id.index());
-
-            match kind {
-                EventKind::Normal => {}
-                EventKind::Insert { component_idx, .. } => {
-                    if let Some(info) = self.components.get_by_index_mut(component_idx) {
-                        info.insert_events.insert(id);
-                    }
-                }
-                EventKind::Remove { component_idx } => {
-                    if let Some(info) = self.components.get_by_index_mut(component_idx) {
-                        info.remove_events.insert(id);
-                    }
-                }
-                EventKind::SpawnQueued => {}
-                EventKind::Despawn => {}
-            }
-
-            self.send(AddEvent(id));
-        }
-
-        id
-    }
-    */
-
-    /*
-    /// Removes an event from the world and returns its [`EventInfo`]. If
-    /// the `event` ID is invalid, then `None` is returned and the function
-    /// has no effect.
-    ///
-    /// Removing an event has the following effects in the order listed:
-    /// 1. The [`RemoveEvent`] event is sent.
+    /// Removing an event has the following additional effects in the order
+    /// listed:
+    /// 1. The [`RemoveTargetedEvent`] event is sent.
     /// 2. All handlers that send or receive the event are removed.
     ///
     /// # Examples
@@ -771,29 +795,16 @@ impl World {
     /// ```
     /// use evenio::prelude::*;
     ///
-    /// #[derive(Event)]
+    /// #[derive(GlobalEvent)]
     /// struct MyEvent;
     ///
     /// let mut world = World::new();
     ///
-    /// let id = world.add_event::<MyEvent>();
-    /// world.remove_event(id);
+    /// let id = world.add_global_event::<MyEvent>();
+    /// world.remove_global_event(id);
     ///
-    /// assert!(!world.events().contains(id));
+    /// assert!(!world.global_events().contains(id));
     /// ```
-    pub fn remove_event(&mut self, event: EventId) -> Option<EventInfo> {
-        assert!(self.event_queue.is_empty());
-
-        if !self.events.contains(event) || event == EventId::SPAWN_QUEUED {
-            return None;
-        }
-
-        // Send event before removing anything.
-        self.send(RemoveEvent(event));
-
-        Some(info)
-    }*/
-
     pub fn remove_global_event(&mut self, event: GlobalEventId) -> Option<GlobalEventInfo> {
         assert!(self.event_queue.is_empty());
 
@@ -822,6 +833,30 @@ impl World {
         Some(self.global_events.remove(event).unwrap())
     }
 
+    /// Removes a targeted event from the world and returns its
+    /// [`TargetedEventInfo`]. If the event ID is invalid, then `None` is
+    /// returned and the function has no effect.
+    ///
+    /// Removing an event has the following additional effects in the order
+    /// listed:
+    /// 1. The [`RemoveTargetedEvent`] event is sent.
+    /// 2. All handlers that send or receive the event are removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let id = world.add_targeted_event::<MyEvent>();
+    /// world.remove_targeted_event(id);
+    ///
+    /// assert!(!world.targeted_events().contains(id));
+    /// ```
     pub fn remove_targeted_event(&mut self, event: TargetedEventId) -> Option<TargetedEventInfo> {
         assert!(self.event_queue.is_empty());
 

@@ -55,3 +55,42 @@ pub mod prelude {
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::world::World;
 }
+
+mod private {
+    use core::panic::{RefUnwindSafe, UnwindSafe};
+
+    #[derive(Copy, Clone)]
+    enum Void {}
+
+    #[allow(missing_debug_implementations)]
+    #[repr(packed)]
+    pub struct Ignore<T: ?Sized>([*const T; 0], Void);
+
+    impl<T: ?Sized> Copy for Ignore<T> {}
+
+    impl<T: ?Sized> Clone for Ignore<T> {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    // SAFETY: `Ignore` does not actually contain a `T`.
+    unsafe impl<T: ?Sized> Send for Ignore<T> {}
+
+    // SAFETY: `Ignore` does not actually contain a `T`.
+    unsafe impl<T: ?Sized> Sync for Ignore<T> {}
+
+    impl<T: ?Sized> UnwindSafe for Ignore<T> {}
+
+    impl<T: ?Sized> RefUnwindSafe for Ignore<T> {}
+
+    #[test]
+    fn enum_with_ignored_variant_is_zero_sized() {
+        enum Test {
+            _A,
+            _B(Ignore<u64>),
+        }
+
+        assert_eq!(core::mem::size_of::<Test>(), 0);
+    }
+}

@@ -454,29 +454,42 @@ where
 {
 }
 
-// TODO: Make this a phantomdata-like unit struct.
-
 /// A [`Query`] which matches if query `Q` doesn't match.
-#[ghost::phantom]
-pub struct Not<Q>;
+///
+/// This type behaves like a unit struct. Use `Not::<Q>` to create an
+/// instance of this type.
+pub enum Not<Q: ?Sized> {
+    // Don't use these variants directly. They are implementation details.
+    #[doc(hidden)]
+    __Ignore(crate::private::Ignore<Q>),
+    #[doc(hidden)]
+    __Value,
+}
 
-impl<Q> Clone for Not<Q> {
+mod not_value {
+    #[doc(hidden)]
+    pub use super::Not::__Value as Not;
+}
+
+pub use not_value::*;
+
+impl<Q: ?Sized> Clone for Not<Q> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Q> Copy for Not<Q> {}
+impl<Q: ?Sized> Copy for Not<Q> {}
 
-impl<Q> Default for Not<Q> {
+impl<Q: ?Sized> Default for Not<Q> {
     fn default() -> Self {
         Not
     }
 }
 
-impl<Q> fmt::Debug for Not<Q> {
+impl<Q: ?Sized> fmt::Debug for Not<Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Not").finish()
+        f.debug_struct("Not").finish()
     }
 }
 

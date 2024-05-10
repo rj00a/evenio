@@ -752,7 +752,7 @@ impl<H: Handler> Handler for LowPriority<H> {
     }
 }
 
-/// An [`Event`] handler function that can be added to a [`World`].
+/// A callback function that listens for events.
 ///
 /// handlers are added to a world using the [`World::add_handler`] method.
 ///

@@ -999,8 +999,8 @@ macro_rules! impl_event_set_tuple {
 
 all_tuples!(impl_event_set_tuple, 0, 15, E, e);
 
-/// An [`Event`] which adds component `C` on an entity when sent. If the entity
-/// already has the component, then the component is replaced.
+/// A [`TargetedEvent`] which adds component `C` on an entity when sent. If the
+/// entity already has the component, then the component is replaced.
 ///
 /// Any handler which listens for `Insert<C>` will run before the component is
 /// inserted. `Insert<C>` has no effect if the target entity does not exist or
@@ -1043,9 +1043,55 @@ impl<C> DerefMut for Insert<C> {
 /// Any handler which listens for `Remove<C>` will run before the component is
 /// removed. `Remove<C>` has no effect if the target entity does not exist or
 /// the event is consumed before it finishes broadcasting.
-#[ghost::phantom]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Remove<C>;
+///
+/// This type behaves like a unit struct. Use `Remove::<C>` to instantiate the
+/// type.
+///
+/// # Examples
+///
+/// ```
+/// # use evenio::prelude::*;
+/// #
+/// # #[derive(Component)]
+/// # struct C;
+/// #
+/// # fn _f(world: &mut World, target: EntityId) {
+/// world.send_to(target, Remove::<C>);
+/// # }
+/// ```
+pub enum Remove<C: ?Sized> {
+    #[doc(hidden)]
+    __Ignore(crate::private::Ignore<C>),
+    #[doc(hidden)]
+    __Value,
+}
+
+mod remove_value {
+    #[doc(hidden)]
+    pub use super::Remove::__Value as Remove;
+}
+
+pub use remove_value::*;
+
+impl<C: ?Sized> Copy for Remove<C> {}
+
+impl<C: ?Sized> Clone for Remove<C> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C: ?Sized> Default for Remove<C> {
+    fn default() -> Self {
+        Remove
+    }
+}
+
+impl<C: ?Sized> fmt::Debug for Remove<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Remove").finish()
+    }
+}
 
 unsafe impl<C: Component> Event for Remove<C> {
     type This<'a> = Remove<C>;
