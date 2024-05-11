@@ -30,7 +30,7 @@ use crate::world::UnsafeWorldCell;
 /// # use evenio::prelude::*;
 /// # use evenio::component::Components;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, components: &Components| {});

@@ -15,22 +15,41 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
 
+/// An event which has no target entity.
+///
+/// This trait is automatically implemented for all types which implement
+/// `Event<EventIdx = GlobalEventIdx>`. Use the derive macro to create the
+/// appropriate implementation of [`Event`].
+///
+/// Note that this trait is intended to be mutually exclusive with
+/// [`TargetedEvent`](super::TargetedEvent).
+///
+/// # Deriving
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(GlobalEvent)]
+/// struct MyEvent {
+///     example_data: i32,
+/// }
+/// ```
 pub trait GlobalEvent: Event<EventIdx = GlobalEventIdx> {}
 impl<E: Event<EventIdx = GlobalEventIdx>> GlobalEvent for E {}
 
-/// Stores metadata for all [`Event`]s in the world.
+/// Stores metadata for all [`GlobalEvent`]s in the world.
 ///
-/// This can be obtained in a handler by using the `&Events` handler
+/// This can be obtained in a handler by using the `&GlobalEvents` handler
 /// parameter.
 ///
 /// ```
 /// # use evenio::prelude::*;
-/// # use evenio::event::Events;
+/// # use evenio::event::GlobalEvents;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
-/// world.add_handler(|_: Receiver<E>, events: &Events| {});
+/// world.add_handler(|_: Receiver<E>, events: &GlobalEvents| {});
 #[derive(Debug)]
 pub struct GlobalEvents {
     infos: SlotMap<GlobalEventInfo>,
@@ -178,6 +197,7 @@ unsafe impl HandlerParam for &'_ GlobalEvents {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
+/// Contains all the metadata for an added [`GlobalEvent`].
 #[derive(Debug)]
 pub struct GlobalEventInfo {
     name: Cow<'static, str>,

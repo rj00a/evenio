@@ -16,6 +16,25 @@ use crate::slot_map::{Key, SlotMap};
 use crate::sparse::SparseIndex;
 use crate::world::{UnsafeWorldCell, World};
 
+/// An event which is directed at a particular entity.
+///
+/// This trait is automatically implemented for all types which implement
+/// `Event<EventIdx = TargetedEventIdx>`. Use the derive macro to create the
+/// appropriate implementation of [`Event`].
+///
+/// Note that this trait is intended to be mutually exclusive with
+/// [`GlobalEvent`].
+///
+/// # Deriving
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// #[derive(TargetedEvent)]
+/// struct MyEvent {
+///     example_data: i32,
+/// }
+/// ```
 pub trait TargetedEvent: Event<EventIdx = TargetedEventIdx> {}
 impl<E: Event<EventIdx = TargetedEventIdx>> TargetedEvent for E {}
 
@@ -28,7 +47,7 @@ impl<E: Event<EventIdx = TargetedEventIdx>> TargetedEvent for E {}
 /// # use evenio::prelude::*;
 /// # use evenio::event::Events;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, events: &Events| {});
@@ -179,6 +198,7 @@ unsafe impl HandlerParam for &'_ TargetedEvents {
     fn remove_archetype(_state: &mut Self::State, _arch: &Archetype) {}
 }
 
+/// Contains all the metadata for an added [`TargetedEvent`].
 #[derive(Debug)]
 pub struct TargetedEventInfo {
     name: Cow<'static, str>,

@@ -18,7 +18,7 @@ use crate::world::UnsafeWorldCell;
 /// # use evenio::prelude::*;
 /// # use evenio::entity::Entities;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, entities: &Entities| {});

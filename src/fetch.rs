@@ -430,7 +430,7 @@ where
 /// # Examples
 ///
 /// ```
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// use evenio::prelude::*;
 ///
 /// #[derive(Component)]

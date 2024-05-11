@@ -31,66 +31,20 @@ use crate::prelude::Component;
 use crate::query::Query;
 use crate::world::{UnsafeWorldCell, World};
 
-/// Messages which event handlers listen for.
+/// Messages which event handlers listen for. This is the base trait of
+/// [`GlobalEvent`] and [`TargetedEvent`].
 ///
 /// To send and receive events within handlers, see [`Sender`] and
 /// [`Receiver`].
 ///
-/// # Targeted vs. Untargeted
-///
-/// Targeted events are directed at a particular entity, while untargeted events
-/// may not be. For instance, the standard [`Despawn`] event is targeted because
-/// it contains the [`EntityId`] of the entity it is intended to affect.
-///
-/// Targeted events allow handlers to efficiently filter out events whose target
-/// does not match a particular query.
-///
-/// # Deriving
-///
-/// The `Event` trait is automatically implementable by using the associated
-/// derive macro. Deriving via the macro is always safe.
-///
-/// ```
-/// use evenio::prelude::*;
-///
-/// #[derive(Event)]
-/// #[event(immutable)] // Overrides the default mutability.
-/// struct MyEvent {
-///     #[event(target)]
-///     // Sets the entity returned by `target()`. If absent, the event is untargeted.
-///     entity: EntityId,
-/// }
-///
-/// // Also works on tuple structs, enums, and unions.
-/// // However, `#[event(target)]` is unavailable for non-struct types.
-///
-/// #[derive(Event)]
-/// struct TupleStruct(i32, #[event(target)] EntityId);
-///
-/// #[derive(Event)]
-/// enum Enum {
-///     Foo(i32),
-///     Bar(f32),
-/// }
-///
-/// #[derive(Event)]
-/// union Union {
-///     foo: i32,
-///     bar: f32,
-/// }
-///
-/// #[derive(Event)]
-/// struct EmptyEvent;
-/// ```
-///
 /// # Safety
 ///
 /// This trait is `unsafe` to implement because unsafe code relies on correct
-/// implementations of [`This`] and [`target`] to avoid undefined behavior. Note
-/// that implementations produced by the derive macro are always safe.
+/// implementations of [`This`] and [`init`] to avoid undefined behavior. Note
+/// that implementations produced by the derive macros are always safe.
 ///
 /// [`This`]: Self::This
-/// [`target`]: Self::target
+/// [`init`]: Self::init
 pub unsafe trait Event {
     /// The type of `Self`, but with lifetimes modified to outlive `'a`.
     ///
@@ -102,7 +56,9 @@ pub unsafe trait Event {
     /// of `This<'static>`.
     type This<'a>: 'a;
 
-    type EventIdx: 'static;
+    /// Either [`GlobalEventIdx`] or [`TargetedEventIdx`]. This indicates if the
+    /// event is global or targeted.
+    type EventIdx: EventIdxMarker;
 
     /// Indicates if this event is [`Mutable`] or [`Immutable`].
     ///
@@ -219,6 +175,23 @@ impl From<TargetedEventId> for EventId {
     fn from(value: TargetedEventId) -> Self {
         Self::Targeted(value)
     }
+}
+
+/// Sealed marker trait implemented for [`GlobalEventIdx`] and
+/// [`TargetedEventIdx`].
+pub trait EventIdxMarker: Send + Sync + 'static + event_idx_marker::Sealed {}
+
+impl EventIdxMarker for GlobalEventIdx {}
+
+impl EventIdxMarker for TargetedEventIdx {}
+
+mod event_idx_marker {
+    use super::*;
+
+    pub trait Sealed {}
+
+    impl Sealed for GlobalEventIdx {}
+    impl Sealed for TargetedEventIdx {}
 }
 
 #[derive(Debug)]
@@ -374,15 +347,15 @@ impl<'a, E: Event> EventMut<'a, E> {
         }
     }
 
-    /// Takes ownership of the event. Any other handlers listening for this
-    /// event will not run.
+    /// Takes ownership of the event. Any handlers expected to run after the
+    /// current handler will not run.
     ///
     /// # Examples
     ///
     /// ```rust
     /// # use evenio::prelude::*;
     /// # let mut world = World::new();
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct E;
     /// #
     /// # let mut world = World::new();
@@ -452,7 +425,7 @@ where
 /// ```
 /// use evenio::prelude::*;
 ///
-/// #[derive(Event)]
+/// #[derive(GlobalEvent)]
 /// struct E;
 ///
 /// let mut world = World::new();
@@ -466,7 +439,7 @@ pub struct Receiver<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery
     /// A reference to the received event.
     pub event: &'a E::This<'a>,
     /// The result of the query. This field is meaningless if `E` is not a
-    /// targeted event.
+    /// [`TargetedEvent`].
     pub query: Q::Item<'a>,
 }
 
@@ -703,7 +676,7 @@ pub enum NullReceiverQuery {}
 /// is implemented for all types which implement [`Query`].
 ///
 /// This trait is sealed and cannot be implemented for types outside this crate.
-pub trait ReceiverQuery: private::Sealed {
+pub trait ReceiverQuery: null_receiver_query::Sealed {
     /// The item produced by the query.
     type Item<'a>;
 }
@@ -716,7 +689,7 @@ impl<Q: Query> ReceiverQuery for Q {
     type Item<'a> = Q::Item<'a>;
 }
 
-mod private {
+mod null_receiver_query {
     use super::*;
 
     pub trait Sealed {}
@@ -737,20 +710,20 @@ pub struct Sender<'a, T: EventSet> {
 }
 
 impl<T: EventSet> Sender<'_, T> {
-    /// Add an untargeted [`Event`] to the queue of events to send. The queue is
-    /// flushed once the handler returns.
+    /// Add a [`GlobalEvent`] to the queue of events to send.
+    ///
+    /// The queue is flushed once all handlers for the current event have run.
     ///
     /// # Panics
     ///
     /// - Panics if `E` is not in the [`EventSet`] of this sender.
-    /// - Panics at compile-time if `E` is [targeted](Event::IS_TARGETED).
     #[track_caller]
     pub fn send<E: GlobalEvent + 'static>(&mut self, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
         let event_idx = T::find_index::<E>(self.state).unwrap_or_else(|| {
             panic!(
-                "event `{}` is not in the `EventSet` of this `Sender`",
+                "global event `{}` is not in the `EventSet` of this `Sender`",
                 any::type_name::<E>()
             )
         });
@@ -758,13 +731,16 @@ impl<T: EventSet> Sender<'_, T> {
         unsafe { self.world.send_global(event, GlobalEventIdx(event_idx)) }
     }
 
+    /// Add a [`TargetedEvent`] to the queue of events to send.
+    ///
+    /// The queue is flushed once all handlers for the current event have run.
     #[track_caller]
-    pub fn send_to<E: Event + 'static>(&mut self, target: EntityId, event: E) {
+    pub fn send_to<E: TargetedEvent + 'static>(&mut self, target: EntityId, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
         let event_idx = T::find_index::<E>(self.state).unwrap_or_else(|| {
             panic!(
-                "event `{}` is not in the `EventSet` of this `Sender`",
+                "targeted event `{}` is not in the `EventSet` of this `Sender`",
                 any::type_name::<E>()
             )
         });
@@ -775,12 +751,14 @@ impl<T: EventSet> Sender<'_, T> {
         }
     }
 
-    /// Queues an entity to be spawned, returns its [`EntityId`], and queues the
-    /// [`Spawn`] event. The returned `EntityId` is not used by any previous
-    /// entities in the [`World`].
+    /// Queue the creation of a new entity.
     ///
-    /// The entity will not exist in the world until the `Spawn` event has
-    /// started broadcasting.
+    /// This returns the [`EntityId`] of the to-be-spawned entity and queues the
+    /// [`Spawn`] event. Note that the returned `EntityId` may not be valid
+    /// until after the `Spawn` event has finished broadcasting.
+    ///
+    /// The new entity will be spawned without any components attached, and the
+    /// returned `EntityId` will not have been used by any previous entities.
     ///
     /// # Panics
     ///
@@ -798,24 +776,18 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// ```
     /// # use evenio::prelude::*;
-    /// # let mut world = World::new();
-    /// # #[derive(Event)]
-    /// # struct E;
-    /// # #[derive(Component)]
-    /// # struct C;
-    /// # world.add_handler(|_: Receiver<E>, mut sender: Sender<Insert<C>>| {
-    /// #     let entity = EntityId::NULL;
-    /// #     let component = C;
-    /// sender.send(Insert::new(entity, component));
-    /// # });
+    /// # #[derive(Component)] struct C;
+    /// # fn _f(sender: &mut Sender<Insert<C>>, target: EntityId, component: C) {
+    /// sender.send_to(target, Insert(component));
+    /// # }
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if `Insert<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
-        self.send_to(entity, Insert(component))
+    pub fn insert<C: Component>(&mut self, target: EntityId, component: C) {
+        self.send_to(target, Insert(component))
     }
 
     /// Queue a [`Remove`] event.
@@ -824,21 +796,18 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// ```
     /// # use evenio::prelude::*;
-    /// # let mut world = World::new();
-    /// # let entity = world.spawn();
-    /// # #[derive(Event)] struct E;
     /// # #[derive(Component)] struct C;
-    /// # world.add_handler(move |_: Receiver<E>, mut sender: Sender<Remove<C>>| {
-    /// sender.send(Remove::<C>::new(entity));
-    /// # });
+    /// # fn _f(sender: &mut Sender<Remove<C>>, target: EntityId) {
+    /// sender.send_to(target, Remove::<C>);
+    /// # }
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if `Remove<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn remove<C: Component>(&mut self, entity: EntityId) {
-        self.send_to(entity, Remove::<C>)
+    pub fn remove<C: Component>(&mut self, target: EntityId) {
+        self.send_to(target, Remove::<C>)
     }
 
     /// Queue a [`Despawn`] event.
@@ -847,20 +816,17 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// ```
     /// # use evenio::prelude::*;
-    /// # let mut world = World::new();
-    /// # let entity = world.spawn();
-    /// # #[derive(Event)] struct E;
-    /// # world.add_handler(move |_: Receiver<E>, mut sender: Sender<Despawn>| {
-    /// sender.send(Despawn(entity));
-    /// # });
+    /// # fn _f(sender: &mut Sender<Despawn>, target: EntityId) {
+    /// sender.send_to(target, Despawn);
+    /// # }
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if `Despawn` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn despawn(&mut self, entity: EntityId) {
-        self.send_to(entity, Despawn)
+    pub fn despawn(&mut self, target: EntityId) {
+        self.send_to(target, Despawn)
     }
 }
 
@@ -875,11 +841,10 @@ unsafe impl<T: EventSet> HandlerParam for Sender<'_, T> {
         let state = T::new_indices(world);
 
         T::for_each_index(&state, |is_targeted, idx| {
-            // TODO: config.insert_sent_event
             if is_targeted {
-                config.sent_targeted_events.insert(TargetedEventIdx(idx));
+                config.insert_sent_targeted_event(TargetedEventIdx(idx));
             } else {
-                config.sent_global_events.insert(GlobalEventIdx(idx));
+                config.insert_sent_global_event(GlobalEventIdx(idx));
             }
         });
 
@@ -1037,8 +1002,8 @@ impl<C> DerefMut for Insert<C> {
     }
 }
 
-/// An [`Event`] which removes component `C` from an entity when sent. The
-/// component is dropped and cannot be recovered.
+/// A [`TargetedEvent`] which removes component `C` from an entity when sent.
+/// The component is dropped and cannot be recovered.
 ///
 /// Any handler which listens for `Remove<C>` will run before the component is
 /// removed. `Remove<C>` has no effect if the target entity does not exist or
@@ -1059,10 +1024,13 @@ impl<C> DerefMut for Insert<C> {
 /// world.send_to(target, Remove::<C>);
 /// # }
 /// ```
+#[derive(Default)]
 pub enum Remove<C: ?Sized> {
+    // Don't use these variants directly. They are implementation details.
     #[doc(hidden)]
     __Ignore(crate::ignore::Ignore<C>),
     #[doc(hidden)]
+    #[default]
     __Value,
 }
 
@@ -1078,12 +1046,6 @@ impl<C: ?Sized> Copy for Remove<C> {}
 impl<C: ?Sized> Clone for Remove<C> {
     fn clone(&self) -> Self {
         *self
-    }
-}
-
-impl<C: ?Sized> Default for Remove<C> {
-    fn default() -> Self {
-        Remove
     }
 }
 

@@ -37,7 +37,7 @@ use crate::world::UnsafeWorldCell;
 /// # use evenio::prelude::*;
 /// # use evenio::archetype::Archetypes;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, archetypes: &Archetypes| {});

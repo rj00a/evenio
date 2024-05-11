@@ -36,7 +36,7 @@ use crate::world::{UnsafeWorldCell, World};
 /// # use evenio::prelude::*;
 /// # use evenio::handler::Handlers;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, handlers: &Handlers| {});
@@ -596,7 +596,7 @@ pub trait IntoHandler<Marker>: Sized {
     /// #
     /// # fn my_handler(_: Receiver<E>) {}
     /// #
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct E;
     /// ```
     fn no_type_id(self) -> NoTypeId<Self::Handler> {
@@ -916,8 +916,8 @@ impl HandlerConfig {
     /// send.
     ///
     /// Returns whether the given event was already configured to be sent.
-    pub fn insert_sent_targeted_event(&mut self, event: GlobalEventIdx) -> bool {
-        self.sent_global_events.insert(event)
+    pub fn insert_sent_targeted_event(&mut self, event: TargetedEventIdx) -> bool {
+        self.sent_targeted_events.insert(event)
     }
 
     /// Sets the handler's access to the event queue. Produces a configuration
@@ -1001,7 +1001,7 @@ impl Default for MaybeInvalidAccess {
 /// #[derive(Component)]
 /// struct C;
 ///
-/// #[derive(Event)]
+/// #[derive(GlobalEvent)]
 /// struct E;
 ///
 /// #[derive(HandlerParam)]
@@ -1263,7 +1263,7 @@ all_tuples!(impl_handler_param_function, 0, 15, P, p);
 /// use evenio::handler::Local;
 /// use evenio::prelude::*;
 ///
-/// #[derive(Event)]
+/// #[derive(GlobalEvent)]
 /// struct E;
 ///
 /// let mut world = World::new();

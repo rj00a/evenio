@@ -5,12 +5,16 @@
 - Removed `Send + Sync` requirements from all data in the `World`, including components, handlers, and events. `World` is now `!Send + !Sync`.
 - Added `Deref` and `DerefMut` impls for `Single`, `TrySingle`, `Has<Q>`.
 - Allow sending events with borrowed data in `World::send`.
-- Removed `'static` bound from `Event`. `Event` is now an `unsafe` trait to implement (but can be safely implemented with `#[derive(Event)]`).
+- Removed `'static` bound from `Event`.
+- `Event` is now split into separate `GlobalEvent` and `TargetedEvent` traits (which inherit from the base `Event` trait). Use the derive macros to safely implement them.
+- Redesigned how targeted events are represented and sent. Use `World::send_to` and `Sender::send_to`.
+- `Event::IS_IMMUTABLE` and `Component::IS_IMMUTABLE` have been replaced with marker types. See `evenio::mutability`.
 - Removed `World::send_many`.
 - Fixed bug where entities could spawn with identical entity IDs.
 - Set MSRV to 1.78.0
 - Improved diagnostics for `add_handler` compiler errors.
 - Added `Fetcher::get_unchecked`.
+- Changed some unit structs into uninhabited enums.
 
 ## 0.5.0 - 2024-04-07
 

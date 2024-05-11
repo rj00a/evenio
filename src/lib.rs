@@ -29,7 +29,6 @@ pub mod query;
 mod slot_map;
 mod sparse;
 mod sparse_map;
-#[cfg(doc)]
 pub mod tutorial;
 pub mod world;
 

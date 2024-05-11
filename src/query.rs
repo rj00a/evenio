@@ -29,7 +29,7 @@ use crate::world::World;
 /// struct to derive `Query`, all fields must also implement `Query`.
 ///
 /// ```
-/// # #[derive(Event)]
+/// # #[derive(GlobalEvent)]
 /// # struct MyEvent;
 /// use evenio::prelude::*;
 ///
@@ -456,11 +456,13 @@ where
 ///
 /// This type behaves like a unit struct. Use `Not::<Q>` to create an
 /// instance of this type.
+#[derive(Default)]
 pub enum Not<Q: ?Sized> {
     // Don't use these variants directly. They are implementation details.
     #[doc(hidden)]
     __Ignore(crate::ignore::Ignore<Q>),
     #[doc(hidden)]
+    #[default]
     __Value,
 }
 
@@ -478,12 +480,6 @@ impl<Q: ?Sized> Clone for Not<Q> {
 }
 
 impl<Q: ?Sized> Copy for Not<Q> {}
-
-impl<Q: ?Sized> Default for Not<Q> {
-    fn default() -> Self {
-        Not
-    }
-}
 
 impl<Q: ?Sized> fmt::Debug for Not<Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

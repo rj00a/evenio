@@ -148,7 +148,8 @@ impl World {
     /// event to signal its creation.
     ///
     /// The new entity is spawned without any components attached. The returned
-    /// `EntityId` is not used by any previous entities in this world.
+    /// `EntityId` will not have been used by any previous entities in this
+    /// world.
     ///
     /// # Examples
     ///
@@ -441,7 +442,7 @@ impl World {
     ///
     /// ```
     /// use evenio::prelude::*;
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct MyEvent;
     ///
     /// fn my_handler(_: Receiver<MyEvent>) {};
@@ -472,7 +473,7 @@ impl World {
     ///
     /// let mut world = World::new();
     ///
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct MyEvent;
     /// let handler_id = world.add_handler(|_: Receiver<MyEvent>| {});
     ///
@@ -572,7 +573,7 @@ impl World {
     /// # use evenio::prelude::*;
     /// # let mut world = World::new();
     /// # #[derive(Component)] struct C;
-    /// # #[derive(Event)] struct E;
+    /// # #[derive(GlobalEvent)] struct E;
     /// #
     /// let component = world.add_component::<C>();
     /// let handler = world.add_handler(|_: Receiver<E>, _: Fetcher<&C>| {});

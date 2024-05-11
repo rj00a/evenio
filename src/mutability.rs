@@ -1,3 +1,5 @@
+//! [`Mutability`] and related marker types.
+
 use core::any::TypeId;
 
 /// Marker type indicating mutability at the type level.
@@ -13,9 +15,9 @@ pub enum Immutable {}
 impl MutabilityMarker for Immutable {}
 
 /// Sealed marker trait implemented only for [`Mutable`] and [`Immutable`].
-pub trait MutabilityMarker: Send + Sync + 'static + mutability::Sealed {}
+pub trait MutabilityMarker: Send + Sync + 'static + private::Sealed {}
 
-mod mutability {
+mod private {
     pub trait Sealed {}
 
     impl Sealed for super::Mutable {}
@@ -32,20 +34,23 @@ pub enum Mutability {
 }
 
 impl Mutability {
+    /// Returns whether `M` is [`Mutable`] or [`Immutable`].
     pub fn of<M: MutabilityMarker>() -> Self {
         if TypeId::of::<M>() == TypeId::of::<Mutable>() {
             Mutability::Mutable
         } else if TypeId::of::<M>() == TypeId::of::<Immutable>() {
             Mutability::Immutable
         } else {
-            unreachable!()
+            unreachable!("mutability marker trait should be sealed")
         }
     }
 
+    /// If this enum matches [`Mutability::Mutable`].
     pub const fn is_mutable(self) -> bool {
         matches!(self, Self::Mutable)
     }
 
+    /// If this enum matches [`Mutability::Immutable`].
     pub const fn is_immutable(self) -> bool {
         matches!(self, Self::Immutable)
     }
