@@ -1,18 +1,18 @@
 # Why ECS?
 
 Entity Component System (often shortened to 'ECS') is a programming design pattern in which the structure of the application is broken up into **Entities**, **Components**, and **Systems**.
-- **Entities** are the "things" in the application, such as a player, UI widget, or scene.
+- **Entities** are the "things" in the application, such as a player, UI widget, scene, etc.
   Entities are identified with simple index-based [`EntityId`] handles.
 - **Components** represent the capabilities that an entity posesses. Entities are described as a set of components. For instance, an asteroid entity flying through space might have a `Position` and `Velocity` component to describe its flight path over time. In `evenio`, components are Rust data types.
-- **Systems** are procedures which act on all entities with certain combinations of components. A physics system might need an entity's `Position`, `Velocity`, and `Mass` components in order to calculate the object's next position. This typically means you have a list of systems that run in sequence (or partially in parallel) every frame or time step of your application.
+- **Systems** are procedures which act on all entities with certain combinations of components. A physics system might need an entity's `Position`, `Velocity`, and `Mass` components in order to calculate the object's next position. This typically means you have a list of systems that run in sequence (or parallel) every frame or time step of your application.
 
-ECS helps solve a number of problems that often arise in traditional object-oriented software designs. Different "types" of entities are able to share components, eliminating the need for inheritance. Additionally, ECS can be very efficient due to the way that components are organized in memory.
+ECS helps solve a number of problems that often arise in traditional object-oriented software designs. Different "types" of entities are able to share components, subsuming the functionality of inheritance. Additionally, ECS can be very efficient due to the way that components are organized in memory.
 
 ECS is especially useful in Rust because it can, in some sense, ergonomically sidestep Rust's aliasing rules. Concurrent entity component access is made possible so long as it conforms to Rust's aliasing XOR mutability demands.
 
 # Why `evenio`?
 
-Interactive applications are largely event driven. When the player attacks a monster, reduce its health. When an egg hits the ground, break it open. When the "play" button is clicked, start the game. Reifying events in code is a useful design tool because it gives downstream code something to hook into and subsequently change the behavior of the program.
+Interactive applications are largely event driven. When the player attacks a monster, reduce its health. When an egg hits the ground, break it open. When the "play" button is clicked, start the game. Reifying events in code is a useful design tool because it gives downstream code something to hook into and subsequently change the behavior of the program. In other words, extensibility.
 
 However, many prior Rust ECS libraries have trouble expressing the control flow that events require. Some frameworks will suggest writing events to a temporary buffer and then handling those events in a later system. This is a "pull" style of event propagation in which event consumers must reguarly poll the buffer for work. This works well in some cases, but runs into some problems:
 - Creates system ordering considerations. Consider what happens if an event is written to the buffer _after_ the event handling systems run. The event might not be handled until the next frame, or never.
@@ -83,7 +83,7 @@ world.add_handler(|| {});
 
 # Handler Ordering
 
-When multiple handlers listen for the same event, we'll need to consider the order those handlers should run when the event is sent.
+When multiple handlers listen for the same event, we'll need to consider the order those handlers should run when the event is handled.
 
 Handler order is first determined by the handler's [`HandlerPriority`]. This is a enum with three states: `High`, `Medium`, and `Low`. `Medium` is the default.
 If handlers have the same priority, then we fall back on the order the handlers were added to the `World` to decide the order.
@@ -158,7 +158,7 @@ Event is: 42
 Event is now: 52
 ```
 
-You should prefer using `Receiver` whenever possible, and only use `ReceiverMut` when mutable access to the event is needed.
+As a general rule of thumb, use `Receiver` when you can, and `ReceiverMut` when you have to.
 
 ## Event Ownership
 
@@ -318,7 +318,7 @@ struct Monster;
 
 let mut world = World::new();
 
-// Spawn two entities without any components.
+// Spawn three entities without any components.
 // `spawn()` returns a lightweight handle we can use to look up the entity later.
 let player = world.spawn();
 let monster = world.spawn();
@@ -610,7 +610,7 @@ struct MyGlobalData {
 let e = world.spawn();
 world.insert(e, MyGlobalData { foo: 123, bar: "data" });
 
-world.add_handler(|_: Receiver<E>, Single(g): Single<&MyGlobalData>| {
+world.add_handler(|_: Receiver<E>, g: Single<&MyGlobalData>| {
     println!("foo: {}, bar: {}", g.foo, g.bar);
 });
 
@@ -624,15 +624,12 @@ For global data scoped to a single handler, see [`Local`].
 # Targeted Events
 
 Events in `evenio` come in two flavors: _global_ and _targeted_.
-- Global events are not targeted at a particular entity.
-- Targeted events are directed at a particular entity.
-  For instance, the standard [`Insert`], [`Remove`], and [`Despawn`] events are targeted.
-- Untargeted events are everything else.
+- Global events will simply be received by all handlers listening for the event. Use `.send(...)` to send a global event.
+- Targeted events are directed at a particular entity. Use `.send_to(...)` to choose the entity to send the event to. Only handlers whose filter matches the target entity will receive the event.
 
-Targeted events enable handlers to efficiently ignore events whose targets do not match a given [`Query`].
+The advantage of targeted events is efficiency. Only the handlers whose chosen query matches the target entity will run. Other handlers won't event be considered.
 
-To create a targeted event using the `Event` derive macro, we mark an `EntityId` field with the `#[event(target)]` attribute.
-Events without the `#[event(target)]` attribute are untargeted.
+To crate a targeted event, use the [`TargetedEvent`] derive macro.
 
 ```rust
 # use evenio::prelude::*;
@@ -676,6 +673,8 @@ world.send_to(e, MyTargetedEvent { data: 10 });
 assert_eq!(world.get::<Health>(e).unwrap().0, 30);
 ```
 
+The special [`Insert`], [`Remove`], and [`Despawn`] events are targeted.
+
 # Immutable Components
 
 When defining a component, we have the option to mark the component as immutable.
@@ -711,6 +710,8 @@ world.get_mut::<Uuid>(e);
 ```
 
 The UUID could still be changed using the `Insert` event, so let's raise an error if the UUID would be overwritten.
+
+Note that handlers listening for an `Insert` event will run _before_ the component is inserted on the entity.
 
 ```should_panic
 # use evenio::prelude::*;
