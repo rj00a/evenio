@@ -13,7 +13,6 @@ extern crate self as evenio;
 pub mod access;
 mod aliased_box;
 pub mod archetype;
-mod assert;
 mod bit_set;
 mod blob_vec;
 pub mod component;
@@ -22,13 +21,14 @@ pub mod entity;
 pub mod event;
 pub mod fetch;
 pub mod handler;
+mod ignore;
 mod layout_util;
 mod map;
+pub mod mutability;
 pub mod query;
 mod slot_map;
 mod sparse;
 mod sparse_map;
-#[cfg(doc)]
 pub mod tutorial;
 pub mod world;
 
@@ -47,10 +47,24 @@ pub mod prelude {
     pub use crate::component::{Component, ComponentId};
     pub use crate::entity::EntityId;
     pub use crate::event::{
-        Despawn, Event, EventId, EventMut, Insert, Receiver, ReceiverMut, Remove, Sender, Spawn,
+        Despawn, EventMut, GlobalEvent, GlobalEventId, Insert, Receiver, ReceiverMut, Remove,
+        Sender, Spawn, TargetedEvent, TargetedEventId,
     };
     pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
     pub use crate::handler::{Handler, HandlerId, HandlerParam, IntoHandler};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::world::World;
+}
+
+const _: () = assert!(
+    core::mem::size_of::<usize>() >= core::mem::size_of::<u32>(),
+    "unsupported target"
+);
+
+#[inline]
+#[track_caller]
+unsafe fn assume_unchecked(cond: bool) {
+    if !cond {
+        core::hint::unreachable_unchecked()
+    }
 }

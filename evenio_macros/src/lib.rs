@@ -42,10 +42,20 @@ pub fn all_tuples(input: TokenStream) -> TokenStream {
     all_tuples::all_tuples(input)
 }
 
-/// Derive macro for `Event`. See `Event`'s documentation for more information.
-#[proc_macro_derive(Event, attributes(event))]
-pub fn derive_event(input: TokenStream) -> TokenStream {
-    event::derive_event(input.into())
+/// Derive macro for `Event`. See `Event` and `GlobalEvent`'s documentation for
+/// more information.
+#[proc_macro_derive(GlobalEvent, attributes(event))]
+pub fn derive_global_event(input: TokenStream) -> TokenStream {
+    event::derive_event(input.into(), false)
+        .unwrap_or_else(|e| e.into_compile_error())
+        .into()
+}
+
+/// Derive macro for `Event`. See `Event` and `TargetedEvent`'s documentation
+/// for more information.
+#[proc_macro_derive(TargetedEvent, attributes(event))]
+pub fn derive_targeted_event(input: TokenStream) -> TokenStream {
+    event::derive_event(input.into(), true)
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }

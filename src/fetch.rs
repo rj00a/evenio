@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 use core::{any, fmt};
 
 use crate::archetype::{Archetype, ArchetypeIdx, ArchetypeRow, Archetypes};
-use crate::assert::assume_unchecked;
+use crate::assume_unchecked;
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::EventPtr;
 use crate::handler::{HandlerConfig, HandlerInfo, HandlerParam, InitError};
@@ -213,7 +213,7 @@ impl<Q: Query> fmt::Debug for FetcherState<Q> {
 /// [`Query`].
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch05_fetching).
+/// chapter](crate::tutorial#fetching).
 pub struct Fetcher<'a, Q: Query> {
     state: &'a mut FetcherState<Q>,
     world: UnsafeWorldCell<'a>,
@@ -430,7 +430,7 @@ where
 /// # Examples
 ///
 /// ```
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// use evenio::prelude::*;
 ///
 /// #[derive(Component)]
@@ -846,13 +846,13 @@ mod tests {
     use super::*;
     use crate::prelude::*;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E1;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E2;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E3;
 
     #[derive(Component, PartialEq, Eq, Debug)]

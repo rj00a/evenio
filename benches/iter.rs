@@ -18,7 +18,7 @@ struct C2(#[allow(dead_code)] f64);
 #[derive(evenio::component::Component, bevy_ecs::component::Component)]
 struct C3(#[allow(dead_code)] f64);
 
-#[derive(evenio::event::Event)]
+#[derive(evenio::event::GlobalEvent)]
 struct E;
 
 #[cfg(feature = "rayon")]

@@ -14,11 +14,11 @@ use ahash::RandomState;
 use slab::Slab;
 
 use crate::aliased_box::AliasedBox;
-use crate::assert::assume_unchecked;
+use crate::assume_unchecked;
 use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, ComponentInfo, Components};
 use crate::entity::{Entities, EntityId, EntityLocation};
-use crate::event::{EventIdx, EventPtr, TargetedEventIdx};
+use crate::event::{EventId, EventPtr, TargetedEventIdx};
 use crate::handler::{
     HandlerConfig, HandlerInfo, HandlerInfoPtr, HandlerList, HandlerParam, Handlers, InitError,
 };
@@ -37,7 +37,7 @@ use crate::world::UnsafeWorldCell;
 /// # use evenio::prelude::*;
 /// # use evenio::archetype::Archetypes;
 /// #
-/// # #[derive(Event)] struct E;
+/// # #[derive(GlobalEvent)] struct E;
 /// #
 /// # let mut world = World::new();
 /// world.add_handler(|_: Receiver<E>, archetypes: &Archetypes| {});
@@ -134,8 +134,8 @@ impl Archetypes {
         for (_, arch) in &mut self.archetypes {
             arch.refresh_listeners.remove(&info.ptr());
 
-            if let EventIdx::Targeted(idx) = info.received_event().index() {
-                if let Some(list) = arch.event_listeners.get_mut(idx) {
+            if let EventId::Targeted(id) = info.received_event() {
+                if let Some(list) = arch.event_listeners.get_mut(id.index()) {
                     list.remove(info.ptr());
                 }
             }
@@ -488,11 +488,8 @@ impl Archetypes {
         dst_row
     }
 
-    pub(crate) fn remove_entity(&mut self, entity: EntityId, entities: &mut Entities) {
-        let Some(loc) = entities.remove(entity) else {
-            return;
-        };
-
+    /// Entity location must be valid.
+    pub(crate) unsafe fn remove_entity(&mut self, loc: EntityLocation, entities: &mut Entities) {
         let arch = unsafe {
             self.archetypes
                 .get_mut(loc.archetype.0 as usize)
@@ -507,7 +504,11 @@ impl Archetypes {
             assume_unchecked((loc.row.0 as usize) < arch.entity_ids.len());
         };
 
-        arch.entity_ids.swap_remove(loc.row.0 as usize);
+        let id = arch.entity_ids.swap_remove(loc.row.0 as usize);
+
+        let removed_loc = unsafe { entities.remove(id).unwrap_unchecked() };
+
+        debug_assert_eq!(loc, removed_loc);
 
         if (loc.row.0 as usize) < arch.entity_ids.len() {
             let displaced = *unsafe { arch.entity_ids.get_unchecked(loc.row.0 as usize) };
@@ -692,18 +693,18 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
-        if let (Some(expr), EventIdx::Targeted(targeted_event_idx)) = (
+        if let (Some(expr), EventId::Targeted(event_id)) = (
             info.targeted_event_component_access(),
-            info.received_event().index(),
+            info.received_event(),
         ) {
             if expr.matches_archetype(|idx| self.column_of(idx).is_some()) {
-                if let Some(list) = self.event_listeners.get_mut(targeted_event_idx) {
+                if let Some(list) = self.event_listeners.get_mut(event_id.index()) {
                     list.insert(info.ptr(), info.priority());
                 } else {
                     let mut list = HandlerList::new();
                     list.insert(info.ptr(), info.priority());
 
-                    self.event_listeners.insert(targeted_event_idx, list);
+                    self.event_listeners.insert(event_id.index(), list);
                 }
             }
         }
@@ -849,10 +850,10 @@ mod tests {
     #[derive(Component)]
     struct C(String);
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E1;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E2;
 
     #[test]

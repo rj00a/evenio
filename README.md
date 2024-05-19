@@ -40,7 +40,7 @@ struct Velocity {
 }
 
 // Events can carry data, but for this example we only need a unit struct.
-#[derive(Event)]
+#[derive(GlobalEvent)]
 struct Tick;
 
 pub fn main() {

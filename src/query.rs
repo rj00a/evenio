@@ -12,16 +12,16 @@ pub use evenio_macros::Query;
 
 use crate::access::{Access, ComponentAccess};
 use crate::archetype::{Archetype, ArchetypeRow};
-use crate::assert::AssertMutable;
 use crate::component::{Component, ComponentIdx};
 use crate::entity::EntityId;
 use crate::handler::{HandlerConfig, InitError};
+use crate::mutability::Mutable;
 use crate::world::World;
 
 /// Types that can be fetched from an entity.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch05_fetching).
+/// chapter](crate::tutorial#fetching).
 ///
 /// # Deriving
 ///
@@ -29,7 +29,7 @@ use crate::world::World;
 /// struct to derive `Query`, all fields must also implement `Query`.
 ///
 /// ```
-/// # #[derive(Event)]
+/// # #[derive(GlobalEvent)]
 /// # struct MyEvent;
 /// use evenio::prelude::*;
 ///
@@ -65,9 +65,9 @@ pub unsafe trait Query {
     /// The item returned by this query. This is usually the same type as
     /// `Self`, but with a modified lifetime.
     type Item<'a>;
-    /// Per-archetype state.
+    /// Per-archetype state, e.g. pointers to archetype columns.
     type ArchState: Send + Sync + fmt::Debug + 'static;
-    /// Cached data for fetch initialization.
+    /// Cached data for fetch initialization, e.g. component indices.
     type State: fmt::Debug + 'static;
 
     /// Initialize the query. Returns an expression describing the components
@@ -141,7 +141,7 @@ unsafe impl<C: Component> Query for &'_ C {
 
 unsafe impl<C: Component> ReadOnlyQuery for &'_ C {}
 
-unsafe impl<C: Component> Query for &'_ mut C {
+unsafe impl<C: Component<Mutability = Mutable>> Query for &'_ mut C {
     type Item<'a> = &'a mut C;
 
     type ArchState = ColumnPtr<C>;
@@ -152,8 +152,6 @@ unsafe impl<C: Component> Query for &'_ mut C {
         world: &mut World,
         config: &mut HandlerConfig,
     ) -> Result<(ComponentAccess, Self::State), InitError> {
-        let () = AssertMutable::<C>::COMPONENT;
-
         let idx = Self::new_state(world);
         let ca = ComponentAccess::var(idx, Access::ReadWrite);
         config.referenced_components.insert(idx);
@@ -455,32 +453,37 @@ where
 }
 
 /// A [`Query`] which matches if query `Q` doesn't match.
-pub struct Not<Q>(PhantomData<fn() -> Q>);
-
-impl<Q> Not<Q> {
-    /// Create a new instance.
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
+///
+/// This type behaves like a unit struct. Use `Not::<Q>` to create an
+/// instance of this type.
+#[derive(Default)]
+pub enum Not<Q: ?Sized> {
+    // Don't use these variants directly. They are implementation details.
+    #[doc(hidden)]
+    __Ignore(crate::ignore::Ignore<Q>),
+    #[doc(hidden)]
+    #[default]
+    __Value,
 }
 
-impl<Q> Clone for Not<Q> {
+mod not_value {
+    #[doc(hidden)]
+    pub use super::Not::__Value as Not;
+}
+
+pub use not_value::*;
+
+impl<Q: ?Sized> Clone for Not<Q> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Q> Copy for Not<Q> {}
+impl<Q: ?Sized> Copy for Not<Q> {}
 
-impl<Q> Default for Not<Q> {
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
-
-impl<Q> fmt::Debug for Not<Q> {
+impl<Q: ?Sized> fmt::Debug for Not<Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Not").finish()
+        f.debug_struct("Not").finish()
     }
 }
 
@@ -512,7 +515,7 @@ unsafe impl<Q: Query> Query for Not<Q> {
     }
 
     unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
-        Not::new()
+        Not
     }
 }
 
@@ -792,7 +795,7 @@ mod tests {
     use super::*;
     use crate::prelude::*;
 
-    #[derive(Event)]
+    #[derive(GlobalEvent)]
     struct E;
 
     /// Test for query access conflicts.

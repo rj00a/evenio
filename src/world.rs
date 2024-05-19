@@ -11,7 +11,6 @@ use core::ptr::NonNull;
 
 use crate::access::ComponentAccess;
 use crate::archetype::Archetypes;
-use crate::assert::AssertMutable;
 use crate::component::{
     AddComponent, Component, ComponentDescriptor, ComponentId, ComponentInfo, Components,
     RemoveComponent,
@@ -19,13 +18,16 @@ use crate::component::{
 use crate::drop::{drop_fn_of, DropFn};
 use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{
-    AddEvent, Despawn, Event, EventDescriptor, EventId, EventIdx, EventInfo, EventKind, EventMeta,
-    EventPtr, EventQueue, Events, Insert, Remove, RemoveEvent, Spawn, SpawnQueued,
+    AddGlobalEvent, AddTargetedEvent, Despawn, Event, EventDescriptor, EventKind, EventMeta,
+    EventPtr, EventQueue, GlobalEvent, GlobalEventId, GlobalEventIdx, GlobalEventInfo,
+    GlobalEvents, Insert, Remove, RemoveGlobalEvent, RemoveTargetedEvent, Spawn, TargetedEvent,
+    TargetedEventId, TargetedEventIdx, TargetedEventInfo, TargetedEvents,
 };
 use crate::handler::{
     AddHandler, Handler, HandlerConfig, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList,
     Handlers, IntoHandler, MaybeInvalidAccess, ReceivedEventId, RemoveHandler,
 };
+use crate::mutability::{Mutability, Mutable};
 
 /// A container for all data in the ECS. This includes entities, components,
 /// handlers, and events.
@@ -36,7 +38,8 @@ pub struct World {
     components: Components,
     handlers: Handlers,
     archetypes: Archetypes,
-    events: Events,
+    global_events: GlobalEvents,
+    targeted_events: TargetedEvents,
     event_queue: EventQueue,
     /// So the world doesn't accidentally implement `Send` or `Sync`.
     _marker: PhantomData<*const ()>,
@@ -59,23 +62,27 @@ impl World {
             components: Components::new(),
             handlers: Handlers::new(),
             archetypes: Archetypes::new(),
-            events: Events::new(),
+            global_events: GlobalEvents::new(),
+            targeted_events: TargetedEvents::new(),
             event_queue: EventQueue::new(),
             _marker: PhantomData,
         }
     }
 
-    /// Broadcast an event to all handlers in this world.
+    /// Broadcast a global event to all handlers in this world. All handlers
+    /// which listen for this event
     ///
     /// Any events sent by handlers will also broadcast. This process continues
     /// recursively until all events have finished broadcasting.
+    ///
+    /// See also [`World::send_to`] to send a [`TargetedEvent`].
     ///
     /// # Examples
     ///
     /// ```
     /// use evenio::prelude::*;
     ///
-    /// #[derive(Event)]
+    /// #[derive(GlobalEvent)]
     /// struct MyEvent(i32);
     ///
     /// fn my_handler(r: Receiver<MyEvent>) {
@@ -93,9 +100,46 @@ impl World {
     /// ```txt
     /// got event: 123
     /// ```
-    pub fn send<E: Event>(&mut self, event: E) {
-        let idx = self.add_event::<E>().index().as_u32();
-        unsafe { self.event_queue.push_front(event, idx) };
+    pub fn send<E: GlobalEvent>(&mut self, event: E) {
+        let idx = self.add_global_event::<E>().index();
+
+        unsafe { self.event_queue.push_front_global(event, idx) };
+
+        self.flush_event_queue();
+    }
+
+    /// Broadcast a targeted event to all handlers in this world.
+    ///
+    /// Any events sent by handlers will also broadcast. This process continues
+    /// recursively until all events have finished broadcasting.
+    ///
+    /// See also [`World::send`] to send a [`GlobalEvent`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent(i32);
+    ///
+    /// fn my_handler(r: Receiver<MyEvent, EntityId>) {
+    ///     println!("target of received event is {:?}", r.query);
+    /// }
+    ///
+    /// let mut world = World::new();
+    ///
+    /// world.add_handler(my_handler);
+    ///
+    /// let target = world.spawn();
+    ///
+    /// // Send my event to `target` entity.
+    /// world.send_to(target, MyEvent(123));
+    /// ```
+    pub fn send_to<E: TargetedEvent>(&mut self, target: EntityId, event: E) {
+        let idx = self.add_targeted_event::<E>().index();
+
+        unsafe { self.event_queue.push_front_targeted(target, event, idx) };
 
         self.flush_event_queue();
     }
@@ -104,7 +148,8 @@ impl World {
     /// event to signal its creation.
     ///
     /// The new entity is spawned without any components attached. The returned
-    /// `EntityId` is not used by any previous entities in this world.
+    /// `EntityId` will not have been used by any previous entities in this
+    /// world.
     ///
     /// # Examples
     ///
@@ -118,11 +163,6 @@ impl World {
     /// ```
     pub fn spawn(&mut self) -> EntityId {
         let id = self.reserved_entities.reserve(&self.entities);
-
-        unsafe {
-            self.event_queue
-                .push_front(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32())
-        }
 
         self.send(Spawn(id));
 
@@ -145,10 +185,10 @@ impl World {
     /// #
     /// # let component = C;
     /// #
-    /// world.send(Insert::new(entity, component));
+    /// world.send_to(entity, Insert(component));
     /// ```
     pub fn insert<C: Component>(&mut self, entity: EntityId, component: C) {
-        self.send(Insert::new(entity, component))
+        self.send_to(entity, Insert(component))
     }
 
     /// Sends the [`Remove`] event.
@@ -165,10 +205,10 @@ impl World {
     /// # #[derive(Component)]
     /// # struct C;
     /// #
-    /// world.send(Remove::<C>::new(entity));
+    /// world.send_to(entity, Remove::<C>);
     /// ```
     pub fn remove<C: Component>(&mut self, entity: EntityId) {
-        self.send(Remove::<C>::new(entity))
+        self.send_to(entity, Remove::<C>)
     }
 
     /// Sends the [`Despawn`] event.
@@ -182,10 +222,10 @@ impl World {
     /// #
     /// # let entity = world.spawn();
     /// #
-    /// world.send(Despawn(entity));
+    /// world.send_to(entity, Despawn);
     /// ```
     pub fn despawn(&mut self, entity: EntityId) {
-        self.send(Despawn(entity))
+        self.send_to(entity, Despawn)
     }
 
     /// Gets an immutable reference to component `C` on `entity`. Returns `None`
@@ -247,9 +287,10 @@ impl World {
     ///
     /// assert_eq!(world.get_mut::<MyComponent>(e), Some(&mut MyComponent(123)));
     /// ```
-    pub fn get_mut<C: Component>(&mut self, entity: EntityId) -> Option<&mut C> {
-        let () = AssertMutable::<C>::COMPONENT;
-
+    pub fn get_mut<C: Component<Mutability = Mutable>>(
+        &mut self,
+        entity: EntityId,
+    ) -> Option<&mut C> {
         let loc = self.entities.get(entity)?;
 
         let component_idx = self
@@ -357,7 +398,7 @@ impl World {
             received_event,
             received_event_access,
             targeted_event_component_access: config.targeted_event_component_access,
-            sent_untargeted_events: config.sent_untargeted_events,
+            sent_untargeted_events: config.sent_global_events,
             sent_targeted_events: config.sent_targeted_events,
             event_queue_access,
             component_access: component_access_conjunction,
@@ -401,7 +442,7 @@ impl World {
     ///
     /// ```
     /// use evenio::prelude::*;
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct MyEvent;
     ///
     /// fn my_handler(_: Receiver<MyEvent>) {};
@@ -432,7 +473,7 @@ impl World {
     ///
     /// let mut world = World::new();
     ///
-    /// # #[derive(Event)]
+    /// # #[derive(GlobalEvent)]
     /// # struct MyEvent;
     /// let handler_id = world.add_handler(|_: Receiver<MyEvent>| {});
     ///
@@ -480,7 +521,7 @@ impl World {
             type_id: Some(TypeId::of::<C>()),
             layout: Layout::new::<C>(),
             drop: drop_fn_of::<C>(),
-            is_immutable: C::IS_IMMUTABLE,
+            mutability: Mutability::of::<C::Mutability>(),
         };
 
         unsafe { self.add_component_with_descriptor(desc) }
@@ -532,7 +573,7 @@ impl World {
     /// # use evenio::prelude::*;
     /// # let mut world = World::new();
     /// # #[derive(Component)] struct C;
-    /// # #[derive(Event)] struct E;
+    /// # #[derive(GlobalEvent)] struct E;
     /// #
     /// let component = world.add_component::<C>();
     /// let handler = world.add_handler(|_: Receiver<E>, _: Fetcher<&C>| {});
@@ -554,13 +595,16 @@ impl World {
         // Send event first.
         self.send(RemoveComponent(component));
 
-        let despawn_idx = self.add_event::<Despawn>().index().as_u32();
+        let despawn_idx = self.add_targeted_event::<Despawn>().index();
 
         // Attempt to despawn all entities that still have this component.
         for arch in self.archetypes.iter() {
             if arch.column_of(component.index()).is_some() {
                 for &entity_id in arch.entity_ids() {
-                    unsafe { self.event_queue.push_front(Despawn(entity_id), despawn_idx) };
+                    unsafe {
+                        self.event_queue
+                            .push_front_targeted(entity_id, Despawn, despawn_idx)
+                    };
                 }
             }
         }
@@ -591,7 +635,7 @@ impl World {
             .collect::<Vec<_>>();
 
         for event in events_to_remove {
-            self.remove_event(event);
+            self.remove_targeted_event(event);
         }
 
         let mut info = self
@@ -609,44 +653,60 @@ impl World {
         Some(info)
     }
 
-    /// Adds the event `E` to the world, returns its [`EventId`], and sends the
-    /// [`AddEvent`] event to signal its creation.
+    /// Adds the global event `E` to the world, returns its [`GlobalEventId`],
+    /// and sends the [`AddGlobalEvent`] event to signal its creation.
     ///
-    /// If the event already exists, then the [`EventId`] of the existing event
-    /// is returned and no event is sent.
+    /// If the event already exists, then the [`GlobalEventId`] of the existing
+    /// event is returned and no event is sent.
     ///
     /// # Examples
     ///
     /// ```
     /// use evenio::prelude::*;
     ///
-    /// #[derive(Event)]
+    /// #[derive(GlobalEvent)]
     /// struct MyEvent;
     ///
     /// let mut world = World::new();
-    /// let id = world.add_event::<MyEvent>();
+    /// let id = world.add_global_event::<MyEvent>();
     ///
-    /// assert_eq!(id, world.add_event::<MyEvent>());
+    /// assert_eq!(id, world.add_global_event::<MyEvent>());
     /// ```
-    pub fn add_event<E: Event>(&mut self) -> EventId {
-        let desc = EventDescriptor {
-            name: any::type_name::<E>().into(),
-            type_id: Some(TypeId::of::<E::This<'static>>()),
-            is_targeted: E::IS_TARGETED,
-            kind: E::init(self),
-            layout: Layout::new::<E>(),
-            drop: drop_fn_of::<E>(),
-            is_immutable: E::IS_IMMUTABLE,
-        };
-
-        unsafe { self.add_event_with_descriptor(desc) }
+    pub fn add_global_event<E: GlobalEvent>(&mut self) -> GlobalEventId {
+        let desc = EventDescriptor::new::<E>(self);
+        unsafe { self.add_global_event_with_descriptor(desc) }
     }
 
-    /// Adds an event described by a given [`EventDescriptor`].
+    /// Adds the targeted event `E` to the world, returns its
+    /// [`TargetedEventId`], and sends the [`AddTargetedEvent`] event to
+    /// signal its creation.
     ///
-    /// Like [`add_event`], an [`AddEvent`] event is sent if the
+    /// If the event already exists, then the [`TargetedEventId`] of the
+    /// existing event is returned and no event is sent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    /// let id = world.add_targeted_event::<MyEvent>();
+    ///
+    /// assert_eq!(id, world.add_targeted_event::<MyEvent>());
+    /// ```
+    pub fn add_targeted_event<E: TargetedEvent>(&mut self) -> TargetedEventId {
+        let desc = EventDescriptor::new::<E>(self);
+        unsafe { self.add_targeted_event_with_descriptor(desc) }
+    }
+
+    /// Adds a global event described by a given [`EventDescriptor`].
+    ///
+    /// Like [`add_global_event`], an [`AddGlobalEvent`] event is sent if the
     /// event is newly added. If the [`TypeId`] of the event matches an
-    /// existing event, then the existing event's [`EventId`] is
+    /// existing global event, then the existing event's [`GlobalEventId`] is
     /// returned and no event is sent.
     ///
     /// # Safety
@@ -656,21 +716,54 @@ impl World {
     ///   ID.
     /// - Drop function must be safe to call with a pointer to the event as
     ///   described by [`DropFn`]'s documentation.
-    /// - The event's kind must be correct for the descriptor. See
-    ///   [`EventKind`]'s documentation for more information.
+    /// - The event's kind must be correct for the descriptor. See [`EventKind`]
+    ///   for more information.
     ///
-    /// [`add_event`]: World::add_event
-    pub unsafe fn add_event_with_descriptor(&mut self, desc: EventDescriptor) -> EventId {
-        let kind = desc.kind;
-
-        let (id, is_new) = self.events.add(desc);
+    /// [`add_global_event`]: World::add_global_event
+    pub unsafe fn add_global_event_with_descriptor(
+        &mut self,
+        desc: EventDescriptor,
+    ) -> GlobalEventId {
+        let (id, is_new) = self.global_events.add(desc);
 
         if is_new {
             self.handlers.register_event(id.index());
+            self.send(AddGlobalEvent(id));
+        }
 
+        id
+    }
+
+    /// Adds a targeted event described by a given [`EventDescriptor`].
+    ///
+    /// Like [`add_targeted_event`], an [`AddTargetedEvent`] event is sent if
+    /// the event is newly added. If the [`TypeId`] of the event matches an
+    /// existing targeted event, then the existing event's [`GlobalEventId`] is
+    /// returned and no event is sent.
+    ///
+    /// # Safety
+    ///
+    /// - If the event is given a [`TypeId`], then the `layout` and `drop`
+    ///   function must be compatible with the Rust type identified by the type
+    ///   ID.
+    /// - Drop function must be safe to call with a pointer to the event as
+    ///   described by [`DropFn`]'s documentation.
+    /// - The event's kind must be correct for the descriptor. See [`EventKind`]
+    ///   for more information.
+    ///
+    /// [`add_targeted_event`]: World::add_targeted_event
+    pub unsafe fn add_targeted_event_with_descriptor(
+        &mut self,
+        desc: EventDescriptor,
+    ) -> TargetedEventId {
+        let kind = desc.kind;
+
+        let (id, is_new) = self.targeted_events.add(desc);
+
+        if is_new {
             match kind {
                 EventKind::Normal => {}
-                EventKind::Insert { component_idx, .. } => {
+                EventKind::Insert { component_idx } => {
                     if let Some(info) = self.components.get_by_index_mut(component_idx) {
                         info.insert_events.insert(id);
                     }
@@ -680,22 +773,23 @@ impl World {
                         info.remove_events.insert(id);
                     }
                 }
-                EventKind::SpawnQueued => {}
+                EventKind::Spawn => {}
                 EventKind::Despawn => {}
             }
 
-            self.send(AddEvent(id));
+            self.send(AddTargetedEvent(id))
         }
 
         id
     }
 
-    /// Removes an event from the world and returns its [`EventInfo`]. If
-    /// the `event` ID is invalid, then `None` is returned and the function
-    /// has no effect.
+    /// Removes a global event from the world and returns its
+    /// [`GlobalEventInfo`]. If the event ID is invalid, then `None` is
+    /// returned and the function has no effect.
     ///
-    /// Removing an event has the following effects in the order listed:
-    /// 1. The [`RemoveEvent`] event is sent.
+    /// Removing an event has the following additional effects in the order
+    /// listed:
+    /// 1. The [`RemoveTargetedEvent`] event is sent.
     /// 2. All handlers that send or receive the event are removed.
     ///
     /// # Examples
@@ -703,37 +797,32 @@ impl World {
     /// ```
     /// use evenio::prelude::*;
     ///
-    /// #[derive(Event)]
+    /// #[derive(GlobalEvent)]
     /// struct MyEvent;
     ///
     /// let mut world = World::new();
     ///
-    /// let id = world.add_event::<MyEvent>();
-    /// world.remove_event(id);
+    /// let id = world.add_global_event::<MyEvent>();
+    /// world.remove_global_event(id);
     ///
-    /// assert!(!world.events().contains(id));
+    /// assert!(!world.global_events().contains(id));
     /// ```
-    pub fn remove_event(&mut self, event: EventId) -> Option<EventInfo> {
+    pub fn remove_global_event(&mut self, event: GlobalEventId) -> Option<GlobalEventInfo> {
         assert!(self.event_queue.is_empty());
 
-        if !self.events.contains(event) || event == EventId::SPAWN_QUEUED {
+        if !self.global_events.contains(event) {
             return None;
         }
 
         // Send event before removing anything.
-        self.send(RemoveEvent(event));
+        self.send(RemoveGlobalEvent(event));
 
         // Remove all handlers that send or receive this event.
         let mut to_remove = vec![];
 
         for handler in self.handlers.iter() {
-            if handler.received_event() == event
-                || match event.index() {
-                    EventIdx::Targeted(idx) => handler.sent_targeted_events_bitset().contains(idx),
-                    EventIdx::Untargeted(idx) => {
-                        handler.sent_untargeted_events_bitset().contains(idx)
-                    }
-                }
+            if handler.received_event() == event.into()
+                || handler.sent_global_events_bitset().contains(event.index())
             {
                 to_remove.push(handler.id());
             }
@@ -743,11 +832,65 @@ impl World {
             self.remove_handler(id);
         }
 
-        let info = self.events.remove(event).unwrap();
+        Some(self.global_events.remove(event).unwrap())
+    }
+
+    /// Removes a targeted event from the world and returns its
+    /// [`TargetedEventInfo`]. If the event ID is invalid, then `None` is
+    /// returned and the function has no effect.
+    ///
+    /// Removing an event has the following additional effects in the order
+    /// listed:
+    /// 1. The [`RemoveTargetedEvent`] event is sent.
+    /// 2. All handlers that send or receive the event are removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::prelude::*;
+    ///
+    /// #[derive(TargetedEvent)]
+    /// struct MyEvent;
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let id = world.add_targeted_event::<MyEvent>();
+    /// world.remove_targeted_event(id);
+    ///
+    /// assert!(!world.targeted_events().contains(id));
+    /// ```
+    pub fn remove_targeted_event(&mut self, event: TargetedEventId) -> Option<TargetedEventInfo> {
+        assert!(self.event_queue.is_empty());
+
+        if !self.targeted_events.contains(event) {
+            return None;
+        }
+
+        // Send event before doing anything else.
+        self.send(RemoveTargetedEvent(event));
+
+        // Remove all handlers that send or receive this event.
+        let mut to_remove = vec![];
+
+        for handler in self.handlers.iter() {
+            if handler.received_event() == event.into()
+                || handler
+                    .sent_targeted_events_bitset()
+                    .contains(event.index())
+            {
+                to_remove.push(handler.id());
+            }
+        }
+
+        for id in to_remove {
+            self.remove_handler(id);
+        }
+
+        let info = self.targeted_events.remove(event).unwrap();
 
         match info.kind() {
             EventKind::Normal => {}
-            EventKind::Insert { component_idx, .. } => {
+            EventKind::Insert { component_idx } => {
                 if let Some(info) = self.components.get_by_index_mut(component_idx) {
                     info.insert_events.remove(&event);
                 }
@@ -757,7 +900,7 @@ impl World {
                     info.remove_events.remove(&event);
                 }
             }
-            EventKind::SpawnQueued => {}
+            EventKind::Spawn => {}
             EventKind::Despawn => {}
         }
 
@@ -784,23 +927,20 @@ impl World {
         &self.archetypes
     }
 
-    /// Returns the [`Events`] for this world.
-    pub fn events(&self) -> &Events {
-        &self.events
+    /// Returns the [`GlobalEvents`] for this world.
+    pub fn global_events(&self) -> &GlobalEvents {
+        &self.global_events
+    }
+
+    /// Returns the [`TargetedEvents`] for this world.
+    pub fn targeted_events(&self) -> &TargetedEvents {
+        &self.targeted_events
     }
 
     /// Send all queued events to handlers. The event queue will be empty after
     /// this call.
     fn flush_event_queue(&mut self) {
         'next_event: while let Some(item) = self.event_queue.pop_front() {
-            let event_meta = item.meta;
-            let event_info = unsafe {
-                self.events
-                    .get_by_index(event_meta.event_idx())
-                    .unwrap_unchecked()
-            };
-            let event_kind = event_info.kind();
-
             struct EventDropper<'a> {
                 event: NonNull<u8>,
                 drop: DropFn,
@@ -808,7 +948,16 @@ impl World {
                 world: &'a mut World,
             }
 
-            impl EventDropper<'_> {
+            impl<'a> EventDropper<'a> {
+                fn new(event: NonNull<u8>, drop: DropFn, world: &'a mut World) -> Self {
+                    Self {
+                        event,
+                        drop,
+                        ownership_flag: false,
+                        world,
+                    }
+                }
+
                 /// Extracts the event pointer and drop fn without running
                 /// the destructor.
                 #[inline]
@@ -822,7 +971,7 @@ impl World {
 
                 /// Drops the held event.
                 #[inline]
-                unsafe fn unpack_drop_event(self) {
+                unsafe fn drop_event(self) {
                     if let (event, Some(drop)) = self.unpack() {
                         drop(event);
                     }
@@ -846,17 +995,27 @@ impl World {
                     }
 
                     // Drop all events remaining in the event queue.
-                    // This should be done here instead of the World's destructor because events
+                    // This must be done here instead of the World's destructor because events
                     // could contain borrowed data.
                     for item in self.world.event_queue.iter() {
-                        let info = unsafe {
-                            self.world
-                                .events
-                                .get_by_index(item.meta.event_idx())
-                                .unwrap_unchecked()
+                        let drop = match item.meta {
+                            EventMeta::Global { idx } => unsafe {
+                                self.world
+                                    .global_events
+                                    .get_by_index(idx)
+                                    .unwrap_unchecked()
+                                    .drop()
+                            },
+                            EventMeta::Targeted { idx, .. } => unsafe {
+                                self.world
+                                    .targeted_events
+                                    .get_by_index(idx)
+                                    .unwrap_unchecked()
+                                    .drop()
+                            },
                         };
 
-                        if let Some(drop) = info.drop() {
+                        if let Some(drop) = drop {
                             unsafe { drop(item.event) };
                         }
                     }
@@ -865,27 +1024,26 @@ impl World {
                 }
             }
 
-            let mut ctx = EventDropper {
-                event: item.event,
-                drop: event_info.drop(),
-                ownership_flag: false,
-                world: self,
-            };
+            let (mut ctx, event_kind, handlers, target_location) = match item.meta {
+                EventMeta::Global { idx } => {
+                    let info = unsafe { self.global_events.get_by_index(idx).unwrap_unchecked() };
+                    let kind = info.kind();
+                    let handlers: *const [_] =
+                        unsafe { self.handlers.get_global_list(idx).unwrap_unchecked() }.slice();
+                    let ctx = EventDropper::new(item.event, info.drop(), self);
 
-            let (handler_list, target_location) = match event_meta {
-                EventMeta::Untargeted { idx } => (
-                    unsafe {
-                        ctx.world
-                            .handlers
-                            .get_untargeted_list(idx)
-                            .unwrap_unchecked()
-                    },
-                    EntityLocation::NULL,
-                ),
+                    let location = EntityLocation::NULL;
+
+                    (ctx, kind, handlers, location)
+                }
                 EventMeta::Targeted { idx, target } => {
+                    let info = unsafe { self.targeted_events.get_by_index(idx).unwrap_unchecked() };
+                    let kind = info.kind();
+                    let ctx = EventDropper::new(item.event, info.drop(), self);
+
                     let Some(location) = ctx.world.entities.get(target) else {
                         // Entity doesn't exist. Skip the event.
-                        unsafe { ctx.unpack_drop_event() };
+                        unsafe { ctx.drop_event() };
                         continue;
                     };
 
@@ -898,13 +1056,11 @@ impl World {
 
                     static EMPTY: HandlerList = HandlerList::new();
 
-                    // Return an empty handler list instead of continuing in case this event is
-                    // special.
-                    (arch.handler_list_for(idx).unwrap_or(&EMPTY), location)
+                    let handlers: *const [_] = arch.handler_list_for(idx).unwrap_or(&EMPTY).slice();
+
+                    (ctx, kind, handlers, location)
                 }
             };
-
-            let handlers: *const [_] = handler_list.handlers();
 
             let events_before = ctx.world.event_queue.len();
 
@@ -937,71 +1093,56 @@ impl World {
             match event_kind {
                 EventKind::Normal => {
                     // Ordinary event. Run drop fn.
-                    unsafe { ctx.unpack_drop_event() };
+                    unsafe { ctx.drop_event() };
                 }
-                EventKind::Insert {
-                    component_idx,
-                    component_offset,
-                } => {
-                    let entity_id = unsafe { *ctx.event.as_ptr().cast::<EntityId>() };
+                EventKind::Insert { component_idx } => {
+                    debug_assert_ne!(target_location, EntityLocation::NULL);
 
-                    if let Some(loc) = ctx.world.entities.get(entity_id) {
-                        let dst = unsafe {
-                            ctx.world.archetypes.traverse_insert(
-                                loc.archetype,
-                                component_idx,
-                                &mut ctx.world.components,
-                                &mut ctx.world.handlers,
-                            )
-                        };
+                    let dst = unsafe {
+                        ctx.world.archetypes.traverse_insert(
+                            target_location.archetype,
+                            component_idx,
+                            &mut ctx.world.components,
+                            &mut ctx.world.handlers,
+                        )
+                    };
 
-                        let component_ptr =
-                            unsafe { ctx.event.as_ptr().add(component_offset as usize) }
-                                .cast_const();
+                    // `Insert<C>` is `repr(transparent)`.
+                    let component_ptr = ctx.event.as_ptr().cast_const();
 
-                        unsafe {
-                            ctx.world.archetypes.move_entity(
-                                loc,
-                                dst,
-                                [(component_idx, component_ptr)],
-                                &mut ctx.world.entities,
-                            )
-                        };
+                    unsafe {
+                        ctx.world.archetypes.move_entity(
+                            target_location,
+                            dst,
+                            [(component_idx, component_ptr)],
+                            &mut ctx.world.entities,
+                        )
+                    };
 
-                        // Inserted component is owned by the archetype now. We wait to unpack
-                        // in case one of the above functions panics.
-                        ctx.unpack();
-                    } else {
-                        // Target entity doesn't exist. Drop the event.
-                        unsafe { ctx.unpack_drop_event() };
-                    }
+                    // Inserted component is owned by the archetype now. We wait to unpack
+                    // in case one of the above functions panics.
+                    ctx.unpack();
                 }
                 EventKind::Remove { component_idx } => {
                     // `Remove` doesn't need drop.
-                    let (event, _) = ctx.unpack();
+                    let _ = ctx.unpack();
 
-                    // SAFETY: `Remove` is `repr(transparent)` with the first field being the
-                    // `EntityId`, so we can safely reinterpret this pointer.
-                    let entity_id = unsafe { *event.as_ptr().cast::<EntityId>() };
+                    let dst = unsafe {
+                        self.archetypes.traverse_remove(
+                            target_location.archetype,
+                            component_idx,
+                            &mut self.components,
+                            &mut self.handlers,
+                        )
+                    };
 
-                    if let Some(loc) = self.entities.get(entity_id) {
-                        let dst = unsafe {
-                            self.archetypes.traverse_remove(
-                                loc.archetype,
-                                component_idx,
-                                &mut self.components,
-                                &mut self.handlers,
-                            )
-                        };
-
-                        unsafe {
-                            self.archetypes
-                                .move_entity(loc, dst, [], &mut self.entities)
-                        };
-                    }
+                    unsafe {
+                        self.archetypes
+                            .move_entity(target_location, dst, [], &mut self.entities)
+                    };
                 }
-                EventKind::SpawnQueued => {
-                    // `SpawnQueued` doesn't need drop.
+                EventKind::Spawn => {
+                    // `Spawn` doesn't need drop.
                     let _ = ctx.unpack();
 
                     // Spawn all entities from the reserved entity queue.
@@ -1010,11 +1151,12 @@ impl World {
                 }
                 EventKind::Despawn => {
                     // `Despawn` doesn't need drop.
-                    let (event, _) = ctx.unpack();
+                    let _ = ctx.unpack();
 
-                    let entity_id = unsafe { *event.as_ptr().cast::<Despawn>() }.0;
-
-                    self.archetypes.remove_entity(entity_id, &mut self.entities);
+                    unsafe {
+                        self.archetypes
+                            .remove_entity(target_location, &mut self.entities)
+                    };
 
                     // Reset next key iter.
                     self.reserved_entities.refresh(&self.entities);
@@ -1065,8 +1207,27 @@ impl<'a> UnsafeWorldCell<'a> {
     /// - Must be called from within a handler.
     /// - Must have permission to access the event queue mutably.
     /// - Event index must be correct for the given event.
-    pub unsafe fn send_with_index<E: Event>(self, event: E, idx: u32) {
-        unsafe { (*self.world.as_ptr()).event_queue.push_front(event, idx) }
+    #[inline]
+    pub unsafe fn send_global<E: Event>(self, event: E, idx: GlobalEventIdx) {
+        unsafe {
+            (*self.world.as_ptr())
+                .event_queue
+                .push_front_global(event, idx)
+        }
+    }
+
+    /// # Safety
+    ///
+    /// - Must be called from within a handler.
+    /// - Must have permission to access the event queue mutably.
+    /// - Event index must be correct for the given event.
+    #[inline]
+    pub unsafe fn send_targeted<E: Event>(self, target: EntityId, event: E, idx: TargetedEventIdx) {
+        unsafe {
+            (*self.world.as_ptr())
+                .event_queue
+                .push_front_targeted(target, event, idx)
+        }
     }
 
     /// # Safety
@@ -1077,7 +1238,7 @@ impl<'a> UnsafeWorldCell<'a> {
         let entity_id = (*self.world.as_ptr())
             .reserved_entities
             .reserve(self.entities());
-        self.send_with_index(SpawnQueued, EventId::SPAWN_QUEUED.index().as_u32());
+
         entity_id
     }
 
@@ -1101,9 +1262,14 @@ impl<'a> UnsafeWorldCell<'a> {
         unsafe { &(*self.world.as_ptr()).archetypes }
     }
 
-    /// Returns the [`Events`] for this world.
-    pub fn events(self) -> &'a Events {
-        unsafe { &(*self.world.as_ptr()).events }
+    /// Returns the [`GlobalEvents`] for this world.
+    pub fn global_events(self) -> &'a GlobalEvents {
+        unsafe { &(*self.world.as_ptr()).global_events }
+    }
+
+    /// Returns the [`TargetedEvents`] for this world.
+    pub fn targeted_events(self) -> &'a TargetedEvents {
+        unsafe { &(*self.world.as_ptr()).targeted_events }
     }
 
     /// Returns an immutable reference to the underlying world.
@@ -1135,13 +1301,13 @@ mod tests {
 
     #[test]
     fn world_drops_events() {
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct A(Rc<()>);
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct B(Rc<()>);
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct C(Rc<()>);
 
         let mut world = World::new();
@@ -1169,7 +1335,7 @@ mod tests {
 
     #[test]
     fn world_drops_events_on_panic() {
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct A(Rc<()>);
 
         impl Drop for A {
@@ -1178,11 +1344,11 @@ mod tests {
             }
         }
 
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct B(Rc<()>);
 
         #[allow(dead_code)]
-        #[derive(Event)]
+        #[derive(GlobalEvent)]
         struct C(Rc<()>);
 
         let mut world = World::new();

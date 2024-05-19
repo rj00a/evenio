@@ -22,6 +22,7 @@ impl<T> SlotMap<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn insert(&mut self, value: T) -> Option<Key> {
         self.insert_with(|_| value)
     }
