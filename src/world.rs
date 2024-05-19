@@ -9,6 +9,8 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 
+use bumpalo::Bump;
+
 use crate::access::ComponentAccess;
 use crate::archetype::Archetypes;
 use crate::component::{
@@ -18,10 +20,10 @@ use crate::component::{
 use crate::drop::{drop_fn_of, DropFn};
 use crate::entity::{Entities, EntityId, EntityLocation, ReservedEntities};
 use crate::event::{
-    AddGlobalEvent, AddTargetedEvent, Despawn, Event, EventDescriptor, EventKind, EventMeta,
-    EventPtr, EventQueue, GlobalEvent, GlobalEventId, GlobalEventIdx, GlobalEventInfo,
-    GlobalEvents, Insert, Remove, RemoveGlobalEvent, RemoveTargetedEvent, Spawn, TargetedEvent,
-    TargetedEventId, TargetedEventIdx, TargetedEventInfo, TargetedEvents,
+    AddGlobalEvent, AddTargetedEvent, Despawn, EventDescriptor, EventKind, EventMeta, EventPtr,
+    EventQueueItem, GlobalEvent, GlobalEventId, GlobalEventIdx, GlobalEventInfo, GlobalEvents,
+    Insert, Remove, RemoveGlobalEvent, RemoveTargetedEvent, Spawn, TargetedEvent, TargetedEventId,
+    TargetedEventIdx, TargetedEventInfo, TargetedEvents,
 };
 use crate::handler::{
     AddHandler, Handler, HandlerConfig, HandlerId, HandlerInfo, HandlerInfoInner, HandlerList,
@@ -40,7 +42,8 @@ pub struct World {
     archetypes: Archetypes,
     global_events: GlobalEvents,
     targeted_events: TargetedEvents,
-    event_queue: EventQueue,
+    event_queue: Vec<EventQueueItem>,
+    bump: Bump,
     /// So the world doesn't accidentally implement `Send` or `Sync`.
     _marker: PhantomData<*const ()>,
 }
@@ -64,7 +67,8 @@ impl World {
             archetypes: Archetypes::new(),
             global_events: GlobalEvents::new(),
             targeted_events: TargetedEvents::new(),
-            event_queue: EventQueue::new(),
+            event_queue: vec![],
+            bump: Bump::new(),
             _marker: PhantomData,
         }
     }
@@ -103,7 +107,10 @@ impl World {
     pub fn send<E: GlobalEvent>(&mut self, event: E) {
         let idx = self.add_global_event::<E>().index();
 
-        unsafe { self.event_queue.push_front_global(event, idx) };
+        self.event_queue.push(EventQueueItem {
+            meta: EventMeta::Global { idx },
+            event: NonNull::from(self.bump.alloc(event)).cast(),
+        });
 
         self.flush_event_queue();
     }
@@ -139,7 +146,10 @@ impl World {
     pub fn send_to<E: TargetedEvent>(&mut self, target: EntityId, event: E) {
         let idx = self.add_targeted_event::<E>().index();
 
-        unsafe { self.event_queue.push_front_targeted(target, event, idx) };
+        self.event_queue.push(EventQueueItem {
+            meta: EventMeta::Targeted { target, idx },
+            event: NonNull::from(self.bump.alloc(event)).cast(),
+        });
 
         self.flush_event_queue();
     }
@@ -350,15 +360,6 @@ impl World {
             }
         };
 
-        let event_queue_access = match config.event_queue_access {
-            MaybeInvalidAccess::Ok(access) => access,
-            MaybeInvalidAccess::Invalid => {
-                return Err(format!(
-                    "handler {handler_name} has conflicting access to the event queue"
-                ));
-            }
-        };
-
         let component_access_conjunction = config
             .component_accesses
             .iter()
@@ -400,7 +401,6 @@ impl World {
             targeted_event_component_access: config.targeted_event_component_access,
             sent_untargeted_events: config.sent_global_events,
             sent_targeted_events: config.sent_targeted_events,
-            event_queue_access,
             component_access: component_access_conjunction,
             archetype_filter: component_access_disjunction,
             referenced_components: config.referenced_components,
@@ -601,10 +601,13 @@ impl World {
         for arch in self.archetypes.iter() {
             if arch.column_of(component.index()).is_some() {
                 for &entity_id in arch.entity_ids() {
-                    unsafe {
-                        self.event_queue
-                            .push_front_targeted(entity_id, Despawn, despawn_idx)
-                    };
+                    self.event_queue.push(EventQueueItem {
+                        meta: EventMeta::Targeted {
+                            idx: despawn_idx,
+                            target: entity_id,
+                        },
+                        event: NonNull::<Despawn>::dangling().cast(),
+                    });
                 }
             }
         }
@@ -940,7 +943,7 @@ impl World {
     /// Send all queued events to handlers. The event queue will be empty after
     /// this call.
     fn flush_event_queue(&mut self) {
-        'next_event: while let Some(item) = self.event_queue.pop_front() {
+        'next_event: while let Some(item) = self.event_queue.pop() {
             struct EventDropper<'a> {
                 event: NonNull<u8>,
                 drop: DropFn,
@@ -997,7 +1000,7 @@ impl World {
                     // Drop all events remaining in the event queue.
                     // This must be done here instead of the World's destructor because events
                     // could contain borrowed data.
-                    for item in self.world.event_queue.iter() {
+                    for item in &self.world.event_queue {
                         let drop = match item.meta {
                             EventMeta::Global { idx } => unsafe {
                                 self.world
@@ -1081,14 +1084,23 @@ impl World {
                     ctx.unpack();
 
                     // Reverse pushed events so they're handled in FIFO order.
-                    unsafe { self.event_queue.reverse_from(events_before) };
+                    unsafe {
+                        self.event_queue
+                            .get_unchecked_mut(events_before..)
+                            .reverse()
+                    };
 
                     continue 'next_event;
                 }
             }
 
             // Reverse pushed events so they're handled in FIFO order.
-            unsafe { ctx.world.event_queue.reverse_from(events_before) };
+            unsafe {
+                ctx.world
+                    .event_queue
+                    .get_unchecked_mut(events_before..)
+                    .reverse()
+            };
 
             match event_kind {
                 EventKind::Normal => {
@@ -1164,7 +1176,8 @@ impl World {
             }
         }
 
-        self.event_queue.clear();
+        self.bump.reset();
+        debug_assert!(self.event_queue.is_empty());
     }
 
     /// Returns a new [`UnsafeWorldCell`] with permission to _read_ all data in
@@ -1193,8 +1206,8 @@ impl Default for World {
 }
 
 /// Reference to a [`World`] where all methods take `&self` and aliasing rules
-/// are not checked. It is the caller's responsibility to ensure that
-/// Rust's aliasing rules are not violated.
+/// are not checked. It is the caller's responsibility to ensure that Rust's
+/// aliasing rules are not violated.
 #[derive(Clone, Copy, Debug)]
 pub struct UnsafeWorldCell<'a> {
     world: NonNull<World>,
@@ -1202,38 +1215,63 @@ pub struct UnsafeWorldCell<'a> {
 }
 
 impl<'a> UnsafeWorldCell<'a> {
+    /// Allocate data in the world's bump allocator.
+    ///
+    /// This operation is not thread safe.
+    ///
     /// # Safety
     ///
     /// - Must be called from within a handler.
-    /// - Must have permission to access the event queue mutably.
+    #[inline]
+    pub unsafe fn alloc_layout(self, layout: Layout) -> NonNull<u8> {
+        let bump = unsafe { &(*self.world.as_ptr()).bump };
+        bump.alloc_layout(layout)
+    }
+
+    /// Add a global event to the event queue. Ownership of the event is
+    /// transferred.
+    ///
+    /// # Safety
+    ///
+    /// - Must be called from within a handler.
+    /// - Event must outlive call to top level [`World::send`] or
+    ///   [`World::send_to`].
     /// - Event index must be correct for the given event.
     #[inline]
-    pub unsafe fn send_global<E: Event>(self, event: E, idx: GlobalEventIdx) {
-        unsafe {
-            (*self.world.as_ptr())
-                .event_queue
-                .push_front_global(event, idx)
-        }
+    pub unsafe fn queue_global(self, event: NonNull<u8>, idx: GlobalEventIdx) {
+        let event_queue = &mut (*self.world.as_ptr()).event_queue;
+
+        event_queue.push(EventQueueItem {
+            meta: EventMeta::Global { idx },
+            event,
+        });
+    }
+
+    /// Add a targeted event to the event queue. Ownership of the event is
+    /// transferred.
+    ///
+    /// # Safety
+    ///
+    /// - Must be called from within a handler.
+    /// - Must have permission to access the event queue
+    #[inline]
+    pub unsafe fn queue_targeted(
+        self,
+        target: EntityId,
+        event: NonNull<u8>,
+        idx: TargetedEventIdx,
+    ) {
+        let event_queue = &mut (*self.world.as_ptr()).event_queue;
+
+        event_queue.push(EventQueueItem {
+            meta: EventMeta::Targeted { idx, target },
+            event,
+        });
     }
 
     /// # Safety
     ///
     /// - Must be called from within a handler.
-    /// - Must have permission to access the event queue mutably.
-    /// - Event index must be correct for the given event.
-    #[inline]
-    pub unsafe fn send_targeted<E: Event>(self, target: EntityId, event: E, idx: TargetedEventIdx) {
-        unsafe {
-            (*self.world.as_ptr())
-                .event_queue
-                .push_front_targeted(target, event, idx)
-        }
-    }
-
-    /// # Safety
-    ///
-    /// - Must be called from within a handler.
-    /// - Must have permission to access the event queue mutably.
     pub unsafe fn queue_spawn(self) -> EntityId {
         let entity_id = (*self.world.as_ptr())
             .reserved_entities
@@ -1312,12 +1350,12 @@ mod tests {
 
         let mut world = World::new();
 
-        world.add_handler(|r: Receiver<A>, mut s: Sender<B>| {
+        world.add_handler(|r: Receiver<A>, s: Sender<B>| {
             s.send(B(r.event.0.clone()));
             s.send(B(r.event.0.clone()));
         });
 
-        world.add_handler(|r: Receiver<B>, mut s: Sender<C>| {
+        world.add_handler(|r: Receiver<B>, s: Sender<C>| {
             s.send(C(r.event.0.clone()));
             s.send(C(r.event.0.clone()));
         });
@@ -1353,14 +1391,14 @@ mod tests {
 
         let mut world = World::new();
 
-        world.add_handler(|r: Receiver<A>, mut s: Sender<B>| {
+        world.add_handler(|r: Receiver<A>, s: Sender<B>| {
             s.send(B(r.event.0.clone()));
             s.send(B(r.event.0.clone()));
         });
 
-        world.add_handler(|r: Receiver<B>, mut sender: Sender<C>| {
-            sender.send(C(r.event.0.clone()));
-            sender.send(C(r.event.0.clone()));
+        world.add_handler(|r: Receiver<B>, s: Sender<C>| {
+            s.send(C(r.event.0.clone()));
+            s.send(C(r.event.0.clone()));
         });
 
         world.add_handler(|_: Receiver<C>| panic!("oops!"));
@@ -1375,5 +1413,21 @@ mod tests {
         assert_eq!(*res.unwrap_err().downcast::<&str>().unwrap(), "oops!");
 
         assert_eq!(Rc::strong_count(&arc), 1);
+    }
+
+    #[test]
+    fn bump_allocator_is_reset() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct Data(#[allow(dead_code)] u64);
+
+        world.send(Data(123));
+
+        let ptr1 = world.bump.alloc(1_u8) as *const u8;
+        world.bump.reset();
+        let ptr2 = world.bump.alloc(1_u8) as *const u8;
+
+        assert_eq!(ptr1, ptr2);
     }
 }

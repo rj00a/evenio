@@ -4,17 +4,13 @@ mod global;
 mod targeted;
 
 use alloc::borrow::Cow;
-#[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
-use core::panic::{RefUnwindSafe, UnwindSafe};
-use core::ptr::NonNull;
-use core::{any, fmt};
+use core::ptr::{self, NonNull};
+use core::{any, fmt, slice, str};
 
-use bumpalo::Bump;
 use evenio_macros::all_tuples;
 pub use global::*;
 pub use targeted::*;
@@ -193,76 +189,6 @@ mod event_idx_marker {
     impl Sealed for GlobalEventIdx {}
     impl Sealed for TargetedEventIdx {}
 }
-
-#[derive(Debug)]
-pub(crate) struct EventQueue {
-    items: Vec<EventQueueItem>,
-    bump: Bump,
-}
-
-impl EventQueue {
-    pub(crate) fn new() -> Self {
-        Self {
-            items: vec![],
-            bump: Bump::new(),
-        }
-    }
-
-    pub(crate) fn pop_front(&mut self) -> Option<EventQueueItem> {
-        self.items.pop()
-    }
-
-    #[inline]
-    pub(crate) unsafe fn push_front_global<E: Event>(&mut self, event: E, idx: GlobalEventIdx) {
-        let meta = EventMeta::Global { idx };
-        let event = NonNull::from(self.bump.alloc(event)).cast::<u8>();
-        self.items.push(EventQueueItem { meta, event });
-    }
-
-    #[inline]
-    pub(crate) unsafe fn push_front_targeted<E: Event>(
-        &mut self,
-        target: EntityId,
-        event: E,
-        idx: TargetedEventIdx,
-    ) {
-        let meta = EventMeta::Targeted { idx, target };
-        let event = NonNull::from(self.bump.alloc(event)).cast::<u8>();
-        self.items.push(EventQueueItem { meta, event });
-    }
-
-    /// Reverses elements in the range `from..`.
-    ///
-    /// # Safety
-    ///
-    /// `from` must be in bounds.
-    pub(crate) unsafe fn reverse_from(&mut self, from: usize) {
-        self.items.get_unchecked_mut(from..).reverse();
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &EventQueueItem> {
-        self.items.iter()
-    }
-
-    /// Clears the event queue and resets the internal bump allocator.
-    ///
-    /// Any remaining event pointers are invalidated.
-    pub(crate) fn clear(&mut self) {
-        self.items.clear();
-        self.bump.reset();
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl UnwindSafe for EventQueue {}
-impl RefUnwindSafe for EventQueue {}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EventQueueItem {
@@ -709,7 +635,7 @@ pub struct Sender<'a, T: EventSet> {
     world: UnsafeWorldCell<'a>,
 }
 
-impl<T: EventSet> Sender<'_, T> {
+impl<'a, ES: EventSet> Sender<'a, ES> {
     /// Add a [`GlobalEvent`] to the queue of events to send.
     ///
     /// The queue is flushed once all handlers for the current event have run.
@@ -718,37 +644,45 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// - Panics if `E` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn send<E: GlobalEvent + 'static>(&mut self, event: E) {
+    pub fn send<E: GlobalEvent + 'a>(&self, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
-        let event_idx = T::find_index::<E>(self.state).unwrap_or_else(|| {
+        let event_idx = ES::find_index::<E>(self.state).unwrap_or_else(|| {
             panic!(
                 "global event `{}` is not in the `EventSet` of this `Sender`",
                 any::type_name::<E>()
             )
         });
 
-        unsafe { self.world.send_global(event, GlobalEventIdx(event_idx)) }
+        let ptr = self.alloc_layout(Layout::new::<E>());
+
+        unsafe { ptr::write::<E>(ptr.as_ptr().cast(), event) };
+
+        unsafe { self.world.queue_global(ptr, GlobalEventIdx(event_idx)) };
     }
 
     /// Add a [`TargetedEvent`] to the queue of events to send.
     ///
     /// The queue is flushed once all handlers for the current event have run.
     #[track_caller]
-    pub fn send_to<E: TargetedEvent + 'static>(&mut self, target: EntityId, event: E) {
+    pub fn send_to<E: TargetedEvent + 'a>(&self, target: EntityId, event: E) {
         // The event type and event set are all compile time known, so the compiler
         // should be able to optimize this away.
-        let event_idx = T::find_index::<E>(self.state).unwrap_or_else(|| {
+        let event_idx = ES::find_index::<E>(self.state).unwrap_or_else(|| {
             panic!(
                 "targeted event `{}` is not in the `EventSet` of this `Sender`",
                 any::type_name::<E>()
             )
         });
 
+        let ptr = self.alloc_layout(Layout::new::<E>());
+
+        unsafe { ptr::write::<E>(ptr.as_ptr().cast(), event) };
+
         unsafe {
             self.world
-                .send_targeted(target, event, TargetedEventIdx(event_idx))
-        }
+                .queue_targeted(target, ptr, TargetedEventIdx(event_idx))
+        };
     }
 
     /// Queue the creation of a new entity.
@@ -764,7 +698,7 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// Panics if `Spawn` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn spawn(&mut self) -> EntityId {
+    pub fn spawn(&self) -> EntityId {
         let id = unsafe { self.world.queue_spawn() };
         self.send(Spawn(id));
         id
@@ -786,7 +720,7 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// Panics if `Insert<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn insert<C: Component>(&mut self, target: EntityId, component: C) {
+    pub fn insert<C: Component>(&self, target: EntityId, component: C) {
         self.send_to(target, Insert(component))
     }
 
@@ -806,7 +740,7 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// Panics if `Remove<C>` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn remove<C: Component>(&mut self, target: EntityId) {
+    pub fn remove<C: Component>(&self, target: EntityId) {
         self.send_to(target, Remove::<C>)
     }
 
@@ -825,8 +759,67 @@ impl<T: EventSet> Sender<'_, T> {
     ///
     /// Panics if `Despawn` is not in the [`EventSet`] of this sender.
     #[track_caller]
-    pub fn despawn(&mut self, target: EntityId) {
+    pub fn despawn(&self, target: EntityId) {
         self.send_to(target, Despawn)
+    }
+
+    /// Allocate an object into the bump allocator and return an exclusive
+    /// reference to it.
+    #[inline]
+    pub fn alloc<T>(&self, value: T) -> &'a mut T {
+        let ptr = self.alloc_layout(Layout::new::<T>()).cast::<T>().as_ptr();
+
+        unsafe { ptr::write(ptr, value) };
+
+        unsafe { &mut *ptr }
+    }
+
+    /// Allocate a slice into the bump allocator and return an exclusive
+    /// reference to it.
+    ///
+    /// The elements of the slice are initialized using the supplied closure.
+    /// The closure argument is the position in the slice.
+    #[inline]
+    pub fn alloc_slice<T, F>(&self, len: usize, mut f: F) -> &'a mut [T]
+    where
+        F: FnMut(usize) -> T,
+    {
+        let layout = Layout::array::<T>(len).expect("invalid slice length");
+        let dst = self.alloc_layout(layout).cast::<T>();
+
+        unsafe {
+            for i in 0..len {
+                ptr::write(dst.as_ptr().add(i), f(i));
+            }
+
+            let result = slice::from_raw_parts_mut(dst.as_ptr(), len);
+            debug_assert_eq!(Layout::for_value(result), layout);
+            result
+        }
+    }
+
+    /// Copies the given string into the bump allocator and returns an exclusive
+    /// reference to it.
+    #[inline]
+    pub fn alloc_str(&self, str: &str) -> &'a mut str {
+        unsafe {
+            let ptr = self
+                .alloc_layout(Layout::from_size_align_unchecked(str.len(), 1))
+                .as_ptr();
+
+            ptr::copy_nonoverlapping(str.as_ptr(), ptr, str.len());
+            let slice = slice::from_raw_parts_mut(ptr, str.len());
+            str::from_utf8_unchecked_mut(slice)
+        }
+    }
+
+    /// Allocate space for an object in the bump allocator with the given
+    /// [`Layout`].
+    ///
+    /// The returned pointer points to uninitialized memory.
+    #[inline]
+    pub fn alloc_layout(&self, layout: Layout) -> NonNull<u8> {
+        unsafe { self.world.alloc_layout(layout) }
     }
 }
 
@@ -1152,7 +1145,7 @@ mod tests {
         #[derive(Component)]
         struct C(String);
 
-        world.add_handler(|r: Receiver<E, EntityId>, mut s: Sender<Remove<C>>| {
+        world.add_handler(|r: Receiver<E, EntityId>, s: Sender<Remove<C>>| {
             s.remove::<C>(r.query);
         });
 
@@ -1178,12 +1171,12 @@ mod tests {
         #[derive(Component)]
         struct Result(Vec<i32>);
 
-        fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
+        fn get_a_send_b(_: Receiver<A>, sender: Sender<B>) {
             sender.send(B(0));
             sender.send(B(3));
         }
 
-        fn get_b_send_c(r: Receiver<B>, mut sender: Sender<C>, res: Single<&mut Result>) {
+        fn get_b_send_c(r: Receiver<B>, sender: Sender<C>, res: Single<&mut Result>) {
             res.0 .0.push(r.event.0);
             sender.send(C(r.event.0 + 1));
             sender.send(C(r.event.0 + 2));
@@ -1232,7 +1225,7 @@ mod tests {
 
         entities.shuffle(&mut rand::thread_rng());
 
-        world.add_handler(move |_: Receiver<E>, mut s: Sender<Despawn>| {
+        world.add_handler(move |_: Receiver<E>, s: Sender<Despawn>| {
             for &e in &entities {
                 s.despawn(e);
             }
@@ -1264,5 +1257,94 @@ mod tests {
         world.add_handler(|r: Receiver<A>| println!("{r:?}"));
 
         world.send(A(&mut buf));
+    }
+
+    #[test]
+    #[should_panic]
+    fn global_event_not_in_event_set() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A;
+
+        #[derive(GlobalEvent)]
+        struct B;
+
+        world.add_handler(|_: Receiver<A>, s: Sender<B>| {
+            s.send(A);
+        });
+
+        world.send(A);
+    }
+
+    #[test]
+    #[should_panic]
+    fn targeted_event_not_in_event_set() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A;
+
+        #[derive(TargetedEvent)]
+        struct B;
+
+        world.add_handler(|_: Receiver<A>, s: Sender<A>| {
+            s.send_to(EntityId::NULL, B);
+        });
+
+        world.send(A);
+    }
+
+    #[test]
+    fn send_event_from_sender_with_lifetime() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A;
+
+        #[derive(GlobalEvent)]
+        struct B<'a> {
+            slice: &'a [i32],
+            string: &'a str,
+            array: &'a [u64; 4],
+        }
+
+        fn get_a_send_b(_: Receiver<A>, s: Sender<B>) {
+            s.send(B {
+                slice: s.alloc_slice(5, |i| i as i32 + 1),
+                string: s.alloc_str("pineapple"),
+                array: s.alloc([10, 20, 30, 40]),
+            });
+        }
+
+        fn get_b(r: Receiver<B>) {
+            assert_eq!(r.event.slice, &[1, 2, 3, 4, 5]);
+            assert_eq!(r.event.string, "pineapple");
+            assert_eq!(r.event.array, &[10, 20, 30, 40]);
+        }
+
+        world.add_handler(get_a_send_b);
+        world.add_handler(get_b);
+        world.send(A);
+    }
+
+    #[test]
+    fn more_than_one_sender() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A(#[allow(dead_code)] u32);
+
+        #[derive(GlobalEvent)]
+        struct B(#[allow(dead_code)] u32);
+
+        fn send_b_x2(_: Receiver<A>, s1: Sender<B>, s2: Sender<B>) {
+            s1.send(B(123));
+            s2.send(B(456));
+        }
+
+        world.add_handler(send_b_x2);
+
+        world.send(A(123));
     }
 }

@@ -306,7 +306,6 @@ pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) targeted_event_component_access: ComponentAccess,
     pub(crate) sent_untargeted_events: BitSet<GlobalEventIdx>,
     pub(crate) sent_targeted_events: BitSet<TargetedEventIdx>,
-    pub(crate) event_queue_access: Access,
     pub(crate) component_access: ComponentAccess,
     pub(crate) archetype_filter: ComponentAccess,
     pub(crate) referenced_components: BitSet<ComponentIdx>,
@@ -386,11 +385,6 @@ impl HandlerInfo {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
 
-    /// Gets this handler's [`Access`] to the event queue.
-    pub fn event_queue_access(&self) -> Access {
-        unsafe { (*AliasedBox::as_ptr(&self.0)).event_queue_access }
-    }
-
     /// Gets the expression describing this handler's access
     pub fn component_access(&self) -> &ComponentAccess {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).component_access }
@@ -442,7 +436,6 @@ impl fmt::Debug for HandlerInfo {
             .field("targeted_event_component_access", &self.targeted_event_component_access())
             .field("sent_global_events", &self.sent_global_events())
             .field("sent_targeted_events", &self.sent_targeted_events())
-            .field("event_queue_access", &self.event_queue_access())
             .field("component_access", &self.component_access())
             .field("archetype_filter", &self.archetype_filter())
             .field("referenced_components", &self.referenced_components())

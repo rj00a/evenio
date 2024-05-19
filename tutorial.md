@@ -214,7 +214,7 @@ struct B;
 #[derive(GlobalEvent)]
 struct C;
 
-world.add_handler(|_: Receiver<A>, mut sender: Sender<(B, C)>| {
+world.add_handler(|_: Receiver<A>, sender: Sender<(B, C)>| {
     sender.send(B);
     sender.send(C);
     println!("sent B and C!");
@@ -250,13 +250,13 @@ struct B(i32);
 #[derive(GlobalEvent, Debug)]
 struct C(i32);
 
-fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
+fn get_a_send_b(_: Receiver<A>, sender: Sender<B>) {
     sender.send(B(0));
     sender.send(B(3));
     println!("got A, sending B twice!");
 }
 
-fn get_b_send_c(r: Receiver<B>, mut sender: Sender<C>) {
+fn get_b_send_c(r: Receiver<B>, sender: Sender<C>) {
     sender.send(C(r.event.0 + 1));
     sender.send(C(r.event.0 + 2));
     println!("got {:?}, sending C twice!", r.event);
@@ -370,7 +370,7 @@ struct InitMonster {
 
 fn init_monster_handler(
     r: Receiver<InitMonster>,
-    mut s: Sender<(Insert<Health>, Insert<Position>, Insert<Monster>)>
+    s: Sender<(Insert<Health>, Insert<Position>, Insert<Monster>)>
 ) {
     let InitMonster {
         entity,

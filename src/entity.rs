@@ -267,14 +267,14 @@ mod tests {
             b: EntityId,
         }
 
-        world.add_handler(|_: Receiver<E1>, mut s: Sender<(Despawn, E2)>| {
+        world.add_handler(|_: Receiver<E1>, s: Sender<(Despawn, E2)>| {
             let a = s.spawn();
             let b = s.spawn();
             s.despawn(b);
             s.send(E2 { a, b });
         });
 
-        world.add_handler(|r: Receiver<E2>, mut s: Sender<()>| {
+        world.add_handler(|r: Receiver<E2>, s: Sender<()>| {
             let c = s.spawn();
             assert_ne!(r.event.a, c);
             assert_ne!(r.event.b, c);
