@@ -315,6 +315,9 @@ pub trait Component: 'static {
     ///
     /// Immutable components disallow mutable references, which can be used to
     /// ensure components are only modified via events.
+    ///
+    /// [`Mutable`]: crate::mutability::Mutable
+    /// [`Immutable`]: crate::mutability::Immutable
     type Mutability: MutabilityMarker;
 }
 

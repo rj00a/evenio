@@ -21,7 +21,7 @@ use crate::world::World;
 /// Types that can be fetched from an entity.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch05_fetching).
+/// chapter](crate::tutorial#fetching).
 ///
 /// # Deriving
 ///

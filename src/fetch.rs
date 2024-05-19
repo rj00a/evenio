@@ -213,7 +213,7 @@ impl<Q: Query> fmt::Debug for FetcherState<Q> {
 /// [`Query`].
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch05_fetching).
+/// chapter](crate::tutorial#fetching).
 pub struct Fetcher<'a, Q: Query> {
     state: &'a mut FetcherState<Q>,
     world: UnsafeWorldCell<'a>,

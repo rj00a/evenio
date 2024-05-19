@@ -96,21 +96,21 @@ impl GlobalEvents {
         }
     }
 
-    /// Gets the [`EventInfo`] of the given event. Returns `None` if the ID is
-    /// invalid.
+    /// Gets the [`GlobalEventInfo`] of the given event. Returns `None` if the
+    /// ID is invalid.
     pub fn get(&self, id: GlobalEventId) -> Option<&GlobalEventInfo> {
         self.infos.get(id.0)
     }
 
-    /// Gets the [`EventInfo`] for an event using its [`EventIdx`]. Returns
-    /// `None` if the index is invalid.
+    /// Gets the [`GlobalEventInfo`] for an event using its [`GlobalEventIdx`].
+    /// Returns `None` if the index is invalid.
     #[inline]
     pub fn get_by_index(&self, idx: GlobalEventIdx) -> Option<&GlobalEventInfo> {
         Some(self.infos.get_by_index(idx.0)?.1)
     }
 
-    /// Gets the [`EventInfo`] for an event using its [`TypeId`]. Returns `None`
-    /// if the `TypeId` does not map to an event.
+    /// Gets the [`GlobalEventInfo`] for an event using its [`TypeId`]. Returns
+    /// `None` if the `TypeId` does not map to an event.
     pub fn get_by_type_id(&self, type_id: TypeId) -> Option<&GlobalEventInfo> {
         let idx = *self.by_type_id.get(&type_id)?;
         Some(unsafe { self.get(idx).unwrap_unchecked() })
@@ -251,6 +251,17 @@ impl GlobalEventInfo {
     }
 }
 
+/// Lightweight identifier for a global event type.
+///
+/// Event identifiers are implemented using an [index] and a generation count.
+/// The generation count ensures that IDs from despawned events are not reused
+/// by new events.
+///
+/// An event identifier is only meaningful in the [`World`] it was created
+/// from. Attempting to use an event ID in a different world will have
+/// unexpected results.
+///
+/// [index]: GlobalEventIdx
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash, Debug)]
 pub struct GlobalEventId(Key);
 
@@ -279,6 +290,7 @@ impl GlobalEventId {
     }
 }
 
+/// A [`GlobalEventId`] with the generation count stripped out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct GlobalEventIdx(pub u32);
 

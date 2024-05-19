@@ -418,7 +418,7 @@ where
 /// A [`HandlerParam`] which listens for events of type `E`.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch01_handlers_and_events#handlers-and-events).
+/// chapter](crate::tutorial#handlers-and-events).
 ///
 /// # Examples
 ///
@@ -551,7 +551,7 @@ where
 /// `Receiver` if mutable access is not needed.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch02_event_mutation).
+/// chapter](crate::tutorial#event-mutation).
 pub struct ReceiverMut<'a, E: Event, Q: ReceiverQuery + 'static = NullReceiverQuery> {
     /// A mutable reference to the received event.
     pub event: EventMut<'a, E>,
@@ -702,7 +702,7 @@ mod null_receiver_query {
 /// A [`HandlerParam`] for sending events from the set `T`.
 ///
 /// For more information, see the relevant [tutorial
-/// chapter](crate::tutorial::ch03_sending_events_from_handlers).
+/// chapter](crate::tutorial#sending-events-from-handlers).
 #[derive(Clone, Copy)]
 pub struct Sender<'a, T: EventSet> {
     state: &'a T::Indices,
@@ -891,10 +891,14 @@ pub unsafe trait EventSet {
     /// The set of event indices.
     type Indices: 'static;
 
+    /// Create a new set of events.
     fn new_indices(world: &mut World) -> Self::Indices;
 
+    /// Find the event `F` in the set of events. Returns the event index.
     fn find_index<F: Event>(indices: &Self::Indices) -> Option<u32>;
 
+    /// Run a function on every element of the set, passing in the event index
+    /// and a boolean indicating if the event is targeted or not.
     fn for_each_index<F: FnMut(bool, u32)>(indices: &Self::Indices, f: F);
 }
 
@@ -1091,8 +1095,8 @@ unsafe impl Event for Spawn {
     }
 }
 
-/// An [`Event`] which removes an entity from the [`World`] when sent. All
-/// components of the target entity are dropped.
+/// A [`TargetedEvent`] which removes an entity from the [`World`] when sent.
+/// All components of the target entity are dropped.
 ///
 /// Any handler which listens for `Despawn` will run before the entity is
 /// removed. `Despawn` has no effect if the target entity does not exist or the
@@ -1109,11 +1113,11 @@ unsafe impl Event for Spawn {
 ///
 /// assert!(world.entities().contains(id));
 ///
-/// world.add_handler(|r: Receiver<Despawn, ()>| {
-///     println!("{:?} is about to despawn!", r.event.0);
+/// world.add_handler(|r: Receiver<Despawn, EntityId>| {
+///     println!("{:?} is about to despawn!", r.query);
 /// });
 ///
-/// world.send(Despawn(id));
+/// world.send_to(id, Despawn);
 ///
 /// assert!(!world.entities().contains(id));
 /// ```

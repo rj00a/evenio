@@ -41,7 +41,7 @@ Also note that `World`s are not [`Send`] or [`Sync`] because they are allowed to
 
 # Handlers and Events
 
-[`Hander`]s are callbacks that run in response to events.
+[`Handler`]s are callbacks that run in response to events.
 
 To get started, let's create a "hello world" handler that runs in response to our custom `Message` event.
 
@@ -60,7 +60,7 @@ world.add_handler(my_handler);
 world.send(Message("Hello, World!"));
 
 fn my_handler(r: Receiver<Message>) {
-    println!("The message is: \"{}\"", r.event);
+    println!("The message is: \"{}\"", r.event.0);
 }
 ```
 
@@ -87,8 +87,6 @@ When multiple handlers listen for the same event, we'll need to consider the ord
 
 Handler order is first determined by the handler's [`HandlerPriority`]. This is a enum with three states: `High`, `Medium`, and `Low`. `Medium` is the default.
 If handlers have the same priority, then we fall back on the order the handlers were added to the `World` to decide the order.
-
-[`HandlerPriority`]: crate::handler::HandlerPriority
 
 ```rust
 use evenio::prelude::*;
@@ -139,7 +137,7 @@ We can achieve this by using the [`ReceiverMut`] handler parameter. `ReceiverMut
 #
 # let mut world = World::new();
 #
-#[derive(Event)]
+#[derive(GlobalEvent)]
 struct MyEvent(i32);
 
 world.add_handler(|mut r: ReceiverMut<MyEvent>| {
@@ -161,8 +159,6 @@ Event is now: 52
 ```
 
 You should prefer using `Receiver` whenever possible, and only use `ReceiverMut` when mutable access to the event is needed.
-
-[`ReceiverMut`]: crate::event::ReceiverMut
 
 ## Event Ownership
 
@@ -247,11 +243,11 @@ The next event in the queue begins broadcasting once all handlers for the curren
 ```rust
 use evenio::prelude::*;
 
-#[derive(Event)]
+#[derive(GlobalEvent)]
 struct A;
-#[derive(Event, Debug)]
+#[derive(GlobalEvent, Debug)]
 struct B(i32);
-#[derive(Event, Debug)]
+#[derive(GlobalEvent, Debug)]
 struct C(i32);
 
 fn get_a_send_b(_: Receiver<A>, mut sender: Sender<B>) {
@@ -291,10 +287,6 @@ got B(3), sending C twice!
 got C(4)!
 got C(5)!
 ```
-
-[`World::send`]: crate::world::World::send
-[`Sender`]: crate::event::Sender
-[`Sender::send`]: crate::event::Sender::send
 
 # Entities and Components
 
@@ -354,8 +346,6 @@ We can visualize our data using a table where the rows are entities and columns 
 | 1         | 20     | (100, 100) |        | ✅      |
 | 2         |        | (42, 42)   |        |         |
 
-[`EntityId`]: crate::entity::EntityId
-
 ## Bundling Components
 
 If our game has lots of monsters with lots of components, we might grow tired of inserting the components individually.
@@ -372,7 +362,7 @@ To fix this, we can create a new event and handler to do the inserting for us.
 # struct Player;
 # #[derive(Component)]
 # struct Monster;
-#[derive(Event, Clone, Copy)]
+#[derive(GlobalEvent, Clone, Copy)]
 struct InitMonster {
     entity: EntityId,
     pos: [f32; 2],
@@ -406,8 +396,6 @@ assert!(world.get::<Monster>(entity).is_some());
 
 Whenever we insert a component on an entity, what we're actually doing is sending the special [`Insert`] event for that component.
 Because of this, we have to specify the correct `Insert` events in the handler's `Sender` above.
-
-[`Insert`]: crate::event::Insert
 
 ## Cleanup
 
@@ -445,9 +433,6 @@ world.despawn(e);
 assert!(!world.entities().contains(e));
 ```
 
-[`Despawn`]: crate::event::Despawn
-[`Remove`]: crate::event
-
 ## Performance Considerations
 
 Internally, all entities with the same set of components are organized into groups called _archetypes_.
@@ -458,7 +443,7 @@ If components are being rapidly added and removed, consider using a `bool` or an
 
 # Fetching
 
-In the previous chapter, we've seen how to create entities and add components to them.
+In the previous section, we've seen how to create entities and add components to them.
 But components aren't very useful unless we have some way to access them from within handlers.
 
 This is where the [`Fetcher`] handler parameter comes in.
@@ -467,7 +452,7 @@ This is where the [`Fetcher`] handler parameter comes in.
 ```rust
 # use evenio::prelude::*;
 # let mut world = World::new();
-#[derive(Event)]
+#[derive(GlobalEvent)]
 struct E;
 
 #[derive(Component, Debug)]
@@ -531,10 +516,6 @@ In the previous example, we used the `&A` query to match entities with the `A` c
 | `With<Q>`           | Matches if `Q` matches. Returns nothing and does not access the result of `Q`.                    |
 | `Not<Q>`            | Matches if `Q` does not match. Returns nothing.                                                   |
 
-[`Fetcher`]: crate::fetch::Fetcher
-[`Query`]: crate::query::Query
-[`EntityId`]: crate::entity::EntityId
-
 ## Derived Queries
 
 `Query` can be derived on structs so long as every field is a `Query`.
@@ -578,7 +559,7 @@ Consider:
 
 ```should_panic
 # use evenio::prelude::*;
-# #[derive(Event)] struct E;
+# #[derive(GlobalEvent)] struct E;
 # #[derive(Component)] struct A;
 # let mut world = World::new();
 // Panics!
@@ -619,7 +600,7 @@ To create our global variable, we
 ```rust
 # use evenio::prelude::*;
 # let mut world = World::new();
-# #[derive(Event)] struct E;
+# #[derive(GlobalEvent)] struct E;
 #[derive(Component)]
 struct MyGlobalData {
     foo: i32,
@@ -640,10 +621,6 @@ For handling the situation where `Single` fails, see [`TrySingle`].
 
 For global data scoped to a single handler, see [`Local`].
 
-[`Single`]: crate::fetch::Single
-[`TrySingle`]: crate::fetch::TrySingle
-[`Local`]: crate::handler::Local
-
 # Targeted Events
 
 Events in `evenio` come in two flavors: _global_ and _targeted_.
@@ -659,10 +636,8 @@ Events without the `#[event(target)]` attribute are untargeted.
 
 ```rust
 # use evenio::prelude::*;
-#[derive(Event)]
+#[derive(TargetedEvent)]
 struct MyTargetedEvent {
-    #[event(target)] // Works on tuple struct fields as well.
-    target: EntityId,
     data: i32,
 }
 ```
@@ -673,10 +648,8 @@ Otherwise, the handler is not run.
 
 ```rust
 # use evenio::prelude::*;
-# #[derive(Event)]
+#[derive(TargetedEvent)]
 # struct MyTargetedEvent {
-#     #[event(target)]
-#     target: EntityId,
 #     data: i32,
 # }
 # let mut world = World::new();
@@ -698,18 +671,10 @@ let e = world.spawn();
 world.insert(e, Health(20));
 world.insert(e, Stamina(100));
 
-world.send(MyTargetedEvent {
-    target: e,
-    data: 10,
-});
+world.send_to(e, MyTargetedEvent { data: 10 });
 
 assert_eq!(world.get::<Health>(e).unwrap().0, 30);
 ```
-
-[`Query`]: crate::query::Query
-[`Insert`]: crate::event::Insert
-[`Remove`]: crate::event::Remove
-[`Despawn`]: crate::event::Despawn
 
 # Immutable Components
 
@@ -794,7 +759,7 @@ Doing so will prevent users from mutating or consuming the event.
 ```compile_fail
 # use evenio::prelude::*;
 # let mut world = World::new();
-#[derive(Event)]
+#[derive(GlobalEvent)]
 #[event(immutable)]
 struct MyEvent;
 
