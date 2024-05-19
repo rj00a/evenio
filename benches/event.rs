@@ -27,7 +27,7 @@ fn send_many_global_events(bencher: Bencher) {
     world.add_handler(get_b_send_c);
     world.add_handler(get_c_send_d);
 
-    fn get_a_send_b(r: Receiver<A>, mut s: Sender<B>) {
+    fn get_a_send_b(r: Receiver<A>, s: Sender<B>) {
         s.send(B(r.event.0));
         s.send(B(r.event.0));
         s.send(B(r.event.0));
@@ -35,7 +35,7 @@ fn send_many_global_events(bencher: Bencher) {
         s.send(B(r.event.0));
     }
 
-    fn get_b_send_c(r: Receiver<B>, mut s: Sender<C>) {
+    fn get_b_send_c(r: Receiver<B>, s: Sender<C>) {
         s.send(C(r.event.0));
         s.send(C(r.event.0));
         s.send(C(r.event.0));
@@ -43,7 +43,7 @@ fn send_many_global_events(bencher: Bencher) {
         s.send(C(r.event.0));
     }
 
-    fn get_c_send_d(r: Receiver<C>, mut s: Sender<D>) {
+    fn get_c_send_d(r: Receiver<C>, s: Sender<D>) {
         s.send(D(r.event.0));
         s.send(D(r.event.0));
         s.send(D(r.event.0));
@@ -83,7 +83,7 @@ fn send_many_targeted_events(bencher: Bencher) {
     world.add_handler(get_b_send_c);
     world.add_handler(get_c_send_d);
 
-    fn get_a_send_b(r: Receiver<A, (EntityId, &A)>, mut s: Sender<B>) {
+    fn get_a_send_b(r: Receiver<A, (EntityId, &A)>, s: Sender<B>) {
         s.send_to(r.query.0, B(r.query.1 .0));
         s.send_to(r.query.0, B(r.query.1 .0));
         s.send_to(r.query.0, B(r.query.1 .0));
@@ -91,7 +91,7 @@ fn send_many_targeted_events(bencher: Bencher) {
         s.send_to(r.query.0, B(r.query.1 .0));
     }
 
-    fn get_b_send_c(r: Receiver<B, (EntityId, &B)>, mut s: Sender<C>) {
+    fn get_b_send_c(r: Receiver<B, (EntityId, &B)>, s: Sender<C>) {
         s.send_to(r.query.0, C(r.query.1 .0));
         s.send_to(r.query.0, C(r.query.1 .0));
         s.send_to(r.query.0, C(r.query.1 .0));
@@ -99,7 +99,7 @@ fn send_many_targeted_events(bencher: Bencher) {
         s.send_to(r.query.0, C(r.query.1 .0));
     }
 
-    fn get_c_send_d(r: Receiver<C, (EntityId, &C)>, mut s: Sender<D>) {
+    fn get_c_send_d(r: Receiver<C, (EntityId, &C)>, s: Sender<D>) {
         s.send_to(r.query.0, D(r.query.1 .0));
         s.send_to(r.query.0, D(r.query.1 .0));
         s.send_to(r.query.0, D(r.query.1 .0));
