@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+- `Sender` now has allocation methods and can send events with data borrowed from the allocator.
+- `Sender` is now entirely internally mutable and all methods take `&self`.
+- Changed API of `UnsafeWorldCell`.
+
 ## 0.6.0 - 2024-05-18
 
 - Removed `Send + Sync` requirements from all data in the `World`, including components, handlers, and events. `World` is now `!Send + !Sync`.

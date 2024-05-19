@@ -1424,9 +1424,9 @@ mod tests {
 
         world.send(Data(123));
 
-        let ptr1 = world.bump.alloc(1u8) as *const u8;
+        let ptr1 = world.bump.alloc(1_u8) as *const u8;
         world.bump.reset();
-        let ptr2 = world.bump.alloc(1u8) as *const u8;
+        let ptr2 = world.bump.alloc(1_u8) as *const u8;
 
         assert_eq!(ptr1, ptr2);
     }
