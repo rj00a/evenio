@@ -1000,7 +1000,7 @@ impl World {
                     // Drop all events remaining in the event queue.
                     // This must be done here instead of the World's destructor because events
                     // could contain borrowed data.
-                    for item in self.world.event_queue.iter() {
+                    for item in &self.world.event_queue {
                         let drop = match item.meta {
                             EventMeta::Global { idx } => unsafe {
                                 self.world
