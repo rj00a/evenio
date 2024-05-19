@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 0.6.0 - 2024-05-18
 
 - Removed `Send + Sync` requirements from all data in the `World`, including components, handlers, and events. `World` is now `!Send + !Sync`.
 - Added `Deref` and `DerefMut` impls for `Single`, `TrySingle`, `Has<Q>`.
