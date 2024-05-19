@@ -35,12 +35,17 @@ impl<T: ?Sized> UnwindSafe for Ignore<T> {}
 
 impl<T: ?Sized> RefUnwindSafe for Ignore<T> {}
 
-#[test]
-fn enum_with_ignored_variant_is_zero_sized() {
-    enum Test {
-        _A,
-        _B(Ignore<u64>),
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    assert_eq!(core::mem::size_of::<Test>(), 0);
+    #[test]
+    fn enum_with_ignored_variant_is_zero_sized() {
+        enum Test {
+            _A,
+            _B(Ignore<u64>),
+        }
+
+        assert_eq!(core::mem::size_of::<Test>(), 0);
+    }
 }

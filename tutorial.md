@@ -3,7 +3,7 @@
 Entity Component System (often shortened to 'ECS') is a programming design pattern in which the structure of the application is broken up into **Entities**, **Components**, and **Systems**.
 - **Entities** are the "things" in the application, such as a player, UI widget, scene, etc.
   Entities are identified with simple index-based [`EntityId`] handles.
-- **Components** represent the capabilities that an entity posesses. Entities are described as a set of components. For instance, an asteroid entity flying through space might have a `Position` and `Velocity` component to describe its flight path over time. In `evenio`, components are Rust data types.
+- **Components** represent the capabilities that an entity possesses. Entities are described as a set of components. For instance, an asteroid entity flying through space might have a `Position` and `Velocity` component to describe its flight path over time. In `evenio`, components are Rust data types.
 - **Systems** are procedures which act on all entities with certain combinations of components. A physics system might need an entity's `Position`, `Velocity`, and `Mass` components in order to calculate the object's next position. This typically means you have a list of systems that run in sequence (or parallel) every frame or time step of your application.
 
 ECS helps solve a number of problems that often arise in traditional object-oriented software designs. Different "types" of entities are able to share components, subsuming the functionality of inheritance. Additionally, ECS can be very efficient due to the way that components are organized in memory.
@@ -14,7 +14,7 @@ ECS is especially useful in Rust because it can, in some sense, ergonomically si
 
 Interactive applications are largely event driven. When the player attacks a monster, reduce its health. When an egg hits the ground, break it open. When the "play" button is clicked, start the game. Reifying events in code is a useful design tool because it gives downstream code something to hook into and subsequently change the behavior of the program. In other words, extensibility.
 
-However, many prior Rust ECS libraries have trouble expressing the control flow that events require. Some frameworks will suggest writing events to a temporary buffer and then handling those events in a later system. This is a "pull" style of event propagation in which event consumers must reguarly poll the buffer for work. This works well in some cases, but runs into some problems:
+However, many prior Rust ECS libraries have trouble expressing the control flow that events require. Some frameworks will suggest writing events to a temporary buffer and then handling those events in a later system. This is a "pull" style of event propagation in which event consumers must regularly poll the buffer for work. This works well in some cases, but runs into some problems:
 - Creates system ordering considerations. Consider what happens if an event is written to the buffer _after_ the event handling systems run. The event might not be handled until the next frame, or never.
 - Funneling a sequence of events into separate event buffers loses the order between buffers. This is a problem when handling a stream of incoming network packets, for instance.
 - Systems waste time polling the event buffer every frame even when there are no events available.
