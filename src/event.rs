@@ -1265,4 +1265,40 @@ mod tests {
 
         world.send(A(&mut buf));
     }
+
+    #[test]
+    #[should_panic]
+    fn global_event_not_in_event_set() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A;
+
+        #[derive(GlobalEvent)]
+        struct B;
+
+        world.add_handler(|_: Receiver<A>, mut s: Sender<B>| {
+            s.send(A);
+        });
+
+        world.send(A);
+    }
+
+    #[test]
+    #[should_panic]
+    fn targeted_event_not_in_event_set() {
+        let mut world = World::new();
+
+        #[derive(GlobalEvent)]
+        struct A;
+
+        #[derive(TargetedEvent)]
+        struct B;
+
+        world.add_handler(|_: Receiver<A>, mut s: Sender<A>| {
+            s.send_to(EntityId::NULL, B);
+        });
+
+        world.send(A);
+    }
 }
