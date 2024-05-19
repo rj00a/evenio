@@ -4,8 +4,6 @@ mod global;
 mod targeted;
 
 use alloc::borrow::Cow;
-#[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
 use core::alloc::Layout;
 use core::any::TypeId;
 use core::marker::PhantomData;
