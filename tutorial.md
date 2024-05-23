@@ -627,9 +627,9 @@ Events in `evenio` come in two flavors: _global_ and _targeted_.
 - Global events will simply be received by all handlers listening for the event. Use `.send(...)` to send a global event.
 - Targeted events are directed at a particular entity. Use `.send_to(...)` to choose the entity to send the event to. Only handlers whose filter matches the target entity will receive the event.
 
-The advantage of targeted events is efficiency. Only the handlers whose chosen query matches the target entity will run. Other handlers won't event be considered.
+The advantage of targeted events is efficiency. Only the handlers whose chosen query matches the target entity will run. Other handlers won't even be considered.
 
-To crate a targeted event, use the [`TargetedEvent`] derive macro.
+To create a targeted event, use the [`TargetedEvent`] derive macro.
 
 ```rust
 # use evenio::prelude::*;
