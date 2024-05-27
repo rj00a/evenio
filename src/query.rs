@@ -62,9 +62,9 @@ use crate::world::World;
 /// Implementors must ensure that [`Query::init`] correctly registers the data
 /// accessed in [`Query::get`].
 pub unsafe trait Query {
-    /// The item returned by this query. This is usually the same type as
-    /// `Self`, but with a modified lifetime.
-    type Item<'a>;
+    /// The item returned by this query. This must be the same type as `Self`,
+    /// but with a modified lifetime.
+    type This<'a>;
     /// Per-archetype state, e.g. pointers to archetype columns.
     type ArchState: Send + Sync + fmt::Debug + 'static;
     /// Cached data for fetch initialization, e.g. component indices.
@@ -93,7 +93,7 @@ pub unsafe trait Query {
     ///   outlive the data it references.
     ///
     /// [`init`]: Self::init
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a>;
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a>;
 }
 
 /// Marker trait for queries which do not access data mutably.
@@ -109,7 +109,7 @@ pub unsafe trait Query {
 pub unsafe trait ReadOnlyQuery: Query {}
 
 unsafe impl<C: Component> Query for &'_ C {
-    type Item<'a> = &'a C;
+    type This<'a> = &'a C;
 
     type ArchState = ColumnPtr<C>;
 
@@ -134,7 +134,7 @@ unsafe impl<C: Component> Query for &'_ C {
         arch.column_of(*state).map(|c| ColumnPtr(c.data().cast()))
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         &*state.0.as_ptr().cast_const().add(row.0 as usize)
     }
 }
@@ -142,7 +142,7 @@ unsafe impl<C: Component> Query for &'_ C {
 unsafe impl<C: Component> ReadOnlyQuery for &'_ C {}
 
 unsafe impl<C: Component<Mutability = Mutable>> Query for &'_ mut C {
-    type Item<'a> = &'a mut C;
+    type This<'a> = &'a mut C;
 
     type ArchState = ColumnPtr<C>;
 
@@ -167,7 +167,7 @@ unsafe impl<C: Component<Mutability = Mutable>> Query for &'_ mut C {
         <&C>::new_arch_state(arch, state)
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         &mut *state.0.as_ptr().add(row.0 as usize)
     }
 }
@@ -176,7 +176,7 @@ macro_rules! impl_query_tuple {
     ($(($Q:ident, $q:ident)),*) => {
         #[allow(unused_variables, clippy::unused_unit)]
         unsafe impl<$($Q: Query),*> Query for ($($Q,)*) {
-            type Item<'a> = ($($Q::Item<'a>,)*);
+            type This<'a> = ($($Q::This<'a>,)*);
 
             type ArchState = ($($Q::ArchState,)*);
 
@@ -213,7 +213,7 @@ macro_rules! impl_query_tuple {
                 ))
             }
 
-            unsafe fn get<'a>(($($q,)*): &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+            unsafe fn get<'a>(($($q,)*): &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
                 (
                     $(
                         $Q::get($q, row),
@@ -231,7 +231,7 @@ all_tuples!(impl_query_tuple, 0, 12, Q, q);
 
 /// Returns the result of `Q` as `Some`, or `None` if `Q` does not match.
 unsafe impl<Q: Query> Query for Option<Q> {
-    type Item<'a> = Option<Q::Item<'a>>;
+    type This<'a> = Option<Q::This<'a>>;
 
     type ArchState = Option<Q::ArchState>;
 
@@ -253,7 +253,7 @@ unsafe impl<Q: Query> Query for Option<Q> {
         Some(Q::new_arch_state(arch, state))
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         state.as_ref().map(|f| Q::get(f, row))
     }
 }
@@ -309,7 +309,7 @@ where
     L: Query,
     R: Query,
 {
-    type Item<'a> = Or<L::Item<'a>, R::Item<'a>>;
+    type This<'a> = Or<L::This<'a>, R::This<'a>>;
 
     type ArchState = Or<L::ArchState, R::ArchState>;
 
@@ -346,7 +346,7 @@ where
         }
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         state.as_ref().map(|l| L::get(l, row), |r| R::get(r, row))
     }
 }
@@ -402,7 +402,7 @@ where
     L: Query,
     R: Query,
 {
-    type Item<'a> = Xor<L::Item<'a>, R::Item<'a>>;
+    type This<'a> = Xor<L::This<'a>, R::This<'a>>;
 
     type ArchState = Xor<L::ArchState, R::ArchState>;
 
@@ -440,7 +440,7 @@ where
         }
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         state.as_ref().map(|l| L::get(l, row), |r| R::get(r, row))
     }
 }
@@ -488,7 +488,7 @@ impl<Q: ?Sized> fmt::Debug for Not<Q> {
 }
 
 unsafe impl<Q: Query> Query for Not<Q> {
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     type ArchState = ();
 
@@ -514,7 +514,7 @@ unsafe impl<Q: Query> Query for Not<Q> {
         }
     }
 
-    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::This<'a> {
         Not
     }
 }
@@ -558,7 +558,7 @@ impl<Q> fmt::Debug for With<Q> {
 }
 
 unsafe impl<Q: Query> Query for With<Q> {
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     type ArchState = ();
 
@@ -583,7 +583,7 @@ unsafe impl<Q: Query> Query for With<Q> {
         Q::new_arch_state(arch, state).map(|_| ())
     }
 
-    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::This<'a> {
         With::new()
     }
 }
@@ -678,7 +678,7 @@ impl<Q> DerefMut for Has<Q> {
 }
 
 unsafe impl<Q: Query> Query for Has<Q> {
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     type ArchState = bool;
 
@@ -701,7 +701,7 @@ unsafe impl<Q: Query> Query for Has<Q> {
         Some(Q::new_arch_state(arch, state).is_some())
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, _row: ArchetypeRow) -> Self::This<'a> {
         Self::new(*state)
     }
 }
@@ -710,7 +710,7 @@ unsafe impl<Q: Query> ReadOnlyQuery for Has<Q> {}
 
 /// Returns the [`EntityId`] of the matched entity.
 unsafe impl Query for EntityId {
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     type ArchState = ColumnPtr<EntityId>;
 
@@ -731,7 +731,7 @@ unsafe impl Query for EntityId {
         })
     }
 
-    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(state: &Self::ArchState, row: ArchetypeRow) -> Self::This<'a> {
         *state.0.as_ptr().add(row.0 as usize)
     }
 }
@@ -740,7 +740,7 @@ unsafe impl ReadOnlyQuery for EntityId {}
 
 /// Like `()`, the `PhantomData<T>` query always succeeds.
 unsafe impl<T: ?Sized> Query for PhantomData<T> {
-    type Item<'a> = Self;
+    type This<'a> = Self;
 
     type ArchState = ();
 
@@ -759,7 +759,7 @@ unsafe impl<T: ?Sized> Query for PhantomData<T> {
         Some(())
     }
 
-    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::Item<'a> {
+    unsafe fn get<'a>(_state: &Self::ArchState, _row: ArchetypeRow) -> Self::This<'a> {
         Self
     }
 }

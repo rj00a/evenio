@@ -50,7 +50,9 @@ pub mod prelude {
         Despawn, EventMut, GlobalEvent, GlobalEventId, Insert, Receiver, ReceiverMut, Remove,
         Sender, Spawn, TargetedEvent, TargetedEventId,
     };
-    pub use crate::fetch::{Fetcher, GetError, Single, SingleError, TrySingle};
+    pub use crate::fetch::{
+        Fetcher, GetError, Single, SingleError, TrySingle,
+    };
     pub use crate::handler::{Handler, HandlerId, HandlerParam, IntoHandler};
     pub use crate::query::{Has, Not, Or, Query, ReadOnlyQuery, With, Xor};
     pub use crate::world::World;
