@@ -44,7 +44,7 @@ impl<Q: Query> FetcherState<Q> {
         &self,
         entities: &Entities,
         entity: EntityId,
-    ) -> Result<Q::Item<'_>, GetError> {
+    ) -> Result<Q::This<'_>, GetError> {
         let Some(loc) = entities.get(entity) else {
             return Err(GetError::NoSuchEntity);
         };
@@ -64,7 +64,7 @@ impl<Q: Query> FetcherState<Q> {
         &mut self,
         entities: &Entities,
         array: [EntityId; N],
-    ) -> Result<[Q::Item<'_>; N], GetManyMutError> {
+    ) -> Result<[Q::This<'_>; N], GetManyMutError> {
         // Check for overlapping entity ids.
         for i in 0..N {
             for j in 0..i {
@@ -74,13 +74,13 @@ impl<Q: Query> FetcherState<Q> {
             }
         }
 
-        let mut res: [MaybeUninit<Q::Item<'_>>; N] = [(); N].map(|()| MaybeUninit::uninit());
+        let mut res: [MaybeUninit<Q::This<'_>>; N] = [(); N].map(|()| MaybeUninit::uninit());
 
         for i in 0..N {
             match self.get_unchecked(entities, array[i]) {
                 Ok(item) => res[i] = MaybeUninit::new(item),
                 Err(e) => {
-                    if mem::needs_drop::<Q::Item<'_>>() {
+                    if mem::needs_drop::<Q::This<'_>>() {
                         for item in res.iter_mut().take(i) {
                             item.assume_init_drop();
                         }
@@ -92,13 +92,13 @@ impl<Q: Query> FetcherState<Q> {
         }
 
         Ok(mem::transmute_copy::<
-            [MaybeUninit<Q::Item<'_>>; N],
-            [Q::Item<'_>; N],
+            [MaybeUninit<Q::This<'_>>; N],
+            [Q::This<'_>; N],
         >(&res))
     }
 
     #[inline]
-    pub(crate) unsafe fn get_by_location_mut(&mut self, loc: EntityLocation) -> Q::Item<'_> {
+    pub(crate) unsafe fn get_by_location_mut(&mut self, loc: EntityLocation) -> Q::This<'_> {
         // SAFETY: Caller ensures location is valid.
         let state = self.map.get(loc.archetype).unwrap_unchecked();
         Q::get(state, loc.row)
@@ -189,14 +189,14 @@ impl<Q: Query> FetcherState<Q> {
 unsafe impl<'a, Q> Send for Fetcher<'a, Q>
 where
     Q: Query,
-    Q::Item<'a>: Send,
+    Q::This<'a>: Send,
 {
 }
 
 unsafe impl<'a, Q> Sync for Fetcher<'a, Q>
 where
     Q: Query,
-    Q::Item<'a>: Sync,
+    Q::This<'a>: Sync,
 {
 }
 
@@ -225,7 +225,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     /// If the entity doesn't exist or doesn't match the query, then a
     /// [`GetError`] is returned.
     #[inline]
-    pub fn get(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError>
+    pub fn get(&self, entity: EntityId) -> Result<Q::This<'_>, GetError>
     where
         Q: ReadOnlyQuery,
     {
@@ -245,7 +245,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     ///
     /// You must ensure that all entities that co-occur are disjoint if they
     /// contain any mutable references.
-    pub unsafe fn get_unchecked(&self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
+    pub unsafe fn get_unchecked(&self, entity: EntityId) -> Result<Q::This<'_>, GetError> {
         self.state.get_unchecked(self.world.entities(), entity)
     }
 
@@ -254,7 +254,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     /// If the entity doesn't exist or doesn't match the query, then a
     /// [`GetError`] is returned.
     #[inline]
-    pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::Item<'_>, GetError> {
+    pub fn get_mut(&mut self, entity: EntityId) -> Result<Q::This<'_>, GetError> {
         unsafe { self.state.get_unchecked(self.world.entities(), entity) }
     }
 
@@ -275,7 +275,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
     pub fn get_many_mut<const N: usize>(
         &mut self,
         entities: [EntityId; N],
-    ) -> Result<[Q::Item<'_>; N], GetManyMutError> {
+    ) -> Result<[Q::This<'_>; N], GetManyMutError> {
         unsafe { self.state.get_many_mut(self.world.entities(), entities) }
     }
 
@@ -294,7 +294,7 @@ impl<'a, Q: Query> Fetcher<'a, Q> {
 }
 
 impl<'a, Q: Query> IntoIterator for Fetcher<'a, Q> {
-    type Item = Q::Item<'a>;
+    type Item = Q::This<'a>;
 
     type IntoIter = Iter<'a, Q>;
 
@@ -304,7 +304,7 @@ impl<'a, Q: Query> IntoIterator for Fetcher<'a, Q> {
 }
 
 impl<'a, Q: ReadOnlyQuery> IntoIterator for &'a Fetcher<'_, Q> {
-    type Item = Q::Item<'a>;
+    type Item = Q::This<'a>;
 
     type IntoIter = Iter<'a, Q>;
 
@@ -314,7 +314,7 @@ impl<'a, Q: ReadOnlyQuery> IntoIterator for &'a Fetcher<'_, Q> {
 }
 
 impl<'a, Q: Query> IntoIterator for &'a mut Fetcher<'_, Q> {
-    type Item = Q::Item<'a>;
+    type Item = Q::This<'a>;
 
     type IntoIter = Iter<'a, Q>;
 
@@ -450,12 +450,12 @@ where
 /// world.send(E);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub struct Single<'a, Q: Query>(pub Q::Item<'a>);
+pub struct Single<Q>(pub Q);
 
-unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
+unsafe impl<Q: Query + 'static> HandlerParam for Single<Q> {
     type State = FetcherState<Q>;
 
-    type This<'a> = Single<'a, Q>;
+    type This<'a> = Single<Q::This<'a>>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -470,8 +470,8 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
         world: UnsafeWorldCell<'a>,
     ) -> Self::This<'a> {
         match TrySingle::get(state, info, event_ptr, target_location, world) {
-            TrySingle(Ok(item)) => Single(item),
-            TrySingle(Err(e)) => {
+            Ok(item) => Single(item),
+            Err(e) => {
                 panic!(
                     "failed to fetch exactly one entity matching the query `{}`: {e}",
                     any::type_name::<Q>()
@@ -489,31 +489,38 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<'_, Q> {
     }
 }
 
-impl<'a, Q: Query> Deref for Single<'a, Q> {
-    type Target = Q::Item<'a>;
+impl<'a, T> Deref for Single<&'a T> {
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<'a, Q: Query> DerefMut for Single<'a, Q> {
+impl<'a, T> Deref for Single<&'a mut T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a, T> DerefMut for Single<&'a mut T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        self.0
     }
 }
 
-/// Like [`Single`], but contains a `Result` instead of panicking on error.
+/// Like [`Single`], but yields a `Result` rather than panicking on error.
 ///
 /// This is useful if you need to explicitly handle the situation where the
 /// query does not match exactly one entity.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct TrySingle<'a, Q: Query>(pub Result<Q::Item<'a>, SingleError>);
+pub type TrySingle<Q> = Result<Q, SingleError>;
 
-unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
+unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<Q> {
     type State = FetcherState<Q>;
 
-    type This<'a> = TrySingle<'a, Q>;
+    type This<'a> = Result<Q::This<'a>, SingleError>;
 
     fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self::State, InitError> {
         FetcherState::init(world, config)
@@ -529,14 +536,14 @@ unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
         let mut it = state.iter_mut(world.archetypes());
 
         let Some(item) = it.next() else {
-            return TrySingle(Err(SingleError::QueryDoesNotMatch));
+            return Err(SingleError::QueryDoesNotMatch);
         };
 
         if it.next().is_some() {
-            return TrySingle(Err(SingleError::MoreThanOneMatch));
+            return Err(SingleError::MoreThanOneMatch);
         }
 
-        TrySingle(Ok(item))
+        Ok(item)
     }
 
     fn refresh_archetype(state: &mut Self::State, arch: &Archetype) {
@@ -548,22 +555,8 @@ unsafe impl<Q: Query + 'static> HandlerParam for TrySingle<'_, Q> {
     }
 }
 
-impl<'a, Q: Query> Deref for TrySingle<'a, Q> {
-    type Target = Result<Q::Item<'a>, SingleError>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'a, Q: Query> DerefMut for TrySingle<'a, Q> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 /// Error raised when fetching exactly one entity matching a query fails.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum SingleError {
     /// Query does not match any entities
     QueryDoesNotMatch,
@@ -608,7 +601,7 @@ pub struct Iter<'a, Q: Query> {
 }
 
 impl<'a, Q: Query> Iterator for Iter<'a, Q> {
-    type Item = Q::Item<'a>;
+    type Item = Q::This<'a>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -697,28 +690,28 @@ impl<Q: Query> fmt::Debug for Iter<'_, Q> {
 unsafe impl<'a, Q> Send for Iter<'_, Q>
 where
     Q: Query,
-    Q::Item<'a>: Send,
+    Q::This<'a>: Send,
 {
 }
 
 unsafe impl<'a, Q> Sync for Iter<'a, Q>
 where
     Q: Query,
-    Q::Item<'a>: Sync,
+    Q::This<'a>: Sync,
 {
 }
 
 impl<'a, Q> UnwindSafe for Iter<'a, Q>
 where
     Q: Query,
-    Q::Item<'a>: UnwindSafe,
+    Q::This<'a>: UnwindSafe,
 {
 }
 
 impl<'a, Q> RefUnwindSafe for Iter<'a, Q>
 where
     Q: Query,
-    Q::Item<'a>: RefUnwindSafe,
+    Q::This<'a>: RefUnwindSafe,
 {
 }
 
@@ -766,9 +759,9 @@ mod rayon_impl {
     impl<'a, Q> ParallelIterator for ParIter<'a, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn drive_unindexed<C>(self, consumer: C) -> C::Result
         where
@@ -784,7 +777,7 @@ mod rayon_impl {
                         unsafe { self.archetypes.get(index).unwrap_unchecked() }.entity_count();
 
                     (0..entity_count).into_par_iter().map(|row| {
-                        let item: Q::Item<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
+                        let item: Q::This<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
                         item
                     })
                 })
@@ -796,11 +789,11 @@ mod rayon_impl {
     impl<'a, Q> IntoParallelIterator for Fetcher<'a, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter_mut(self.world.archetypes()) }
@@ -811,11 +804,11 @@ mod rayon_impl {
     impl<'a, Q> IntoParallelIterator for &'a Fetcher<'_, Q>
     where
         Q: ReadOnlyQuery,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter(self.world.archetypes()) }
@@ -826,11 +819,11 @@ mod rayon_impl {
     impl<'a, Q: Query> IntoParallelIterator for &'a mut Fetcher<'_, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter_mut(self.world.archetypes()) }
@@ -1134,9 +1127,9 @@ mod tests {
 
         world.add_handler(
             |_: Receiver<E1>, s1: TrySingle<&C1>, s2: TrySingle<&C2>, s3: TrySingle<&C3>| {
-                assert_eq!(s1.0, Err(SingleError::QueryDoesNotMatch));
-                assert_eq!(s2.0, Ok(&C2(123)));
-                assert_eq!(s3.0, Err(SingleError::MoreThanOneMatch));
+                assert_eq!(s1, Err(SingleError::QueryDoesNotMatch));
+                assert_eq!(s2, Ok(&C2(123)));
+                assert_eq!(s3, Err(SingleError::MoreThanOneMatch));
             },
         );
 

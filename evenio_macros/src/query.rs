@@ -43,12 +43,12 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                 }
 
                 where_clause.predicates.push(
-                    parse_quote!(#ty: for<'__a> ::evenio::query::Query<Item<'__a> = #replaced_ty>),
+                    parse_quote!(#ty: for<'__a> ::evenio::query::Query<This<'__a> = #replaced_ty>),
                 );
 
                 ro_where_clause
                     .predicates
-                    .push(parse_quote!(#ty: for<'__a> ::evenio::query::ReadOnlyQuery<Item<'__a> = #replaced_ty>));
+                    .push(parse_quote!(#ty: for<'__a> ::evenio::query::ReadOnlyQuery<This<'__a> = #replaced_ty>));
             }
 
             get_body = match &struct_.fields {
@@ -106,15 +106,15 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let mut item: Type = parse_quote!(#name #ty_generics);
+    let mut this: Type = parse_quote!(#name #ty_generics);
     for life in &lifetimes {
-        replace_lifetime(&mut item, &life.lifetime.ident, &parse_quote!(__a));
+        replace_lifetime(&mut this, &life.lifetime.ident, &parse_quote!(__a));
     }
 
     Ok(quote! {
         #[automatically_derived]
         unsafe impl #impl_generics ::evenio::query::Query for #name #ty_generics #where_clause {
-            type Item<'__a> = #item;
+            type This<'__a> = #this;
 
             type ArchState = <#tuple_ty as ::evenio::query::Query>::ArchState;
 
@@ -136,7 +136,7 @@ pub(crate) fn derive_query(input: TokenStream) -> Result<TokenStream> {
                 <#tuple_ty as ::evenio::query::Query>::new_arch_state(arch, state)
             }
 
-            unsafe fn get<'__a>(state: &Self::ArchState, row: ::evenio::archetype::ArchetypeRow) -> Self::Item<'__a> {
+            unsafe fn get<'__a>(state: &Self::ArchState, row: ::evenio::archetype::ArchetypeRow) -> Self::This<'__a> {
                 #get_body
             }
         }

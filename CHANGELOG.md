@@ -6,6 +6,7 @@
 - `Sender` is now entirely internally mutable and all methods take `&self`.
 - Changed API of `UnsafeWorldCell`.
 - Deriving `GlobalEvent` or `TargetedEvent` on a type with generic type params now succeeds (with caveats).
+- Improved ergonomics of `Single` and `TrySingle`. `Single` no longer has a lifetime param, `Deref` impls are improved, and `TrySingle` is an alias for `Result`.
 
 ## 0.6.0 - 2024-05-18
 

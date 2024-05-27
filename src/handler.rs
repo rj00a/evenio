@@ -1017,7 +1017,7 @@ impl Default for MaybeInvalidAccess {
 /// data accessed by [`HandlerParam::get`].
 pub unsafe trait HandlerParam {
     /// Persistent data stored in the handler.
-    type State: 'static;
+    type State;
 
     /// The type produced by this handler param. This must be the type
     /// of `Self` but with the lifetime of `'a`.

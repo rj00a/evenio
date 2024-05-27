@@ -463,7 +463,7 @@ where
     E: TargetedEvent,
     E::This<'a>: fmt::Debug,
     Q: Query,
-    Q::Item<'a>: fmt::Debug,
+    Q::This<'a>: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Receiver")
@@ -584,7 +584,7 @@ where
     E: TargetedEvent,
     E::This<'a>: fmt::Debug,
     Q: Query,
-    Q::Item<'a>: fmt::Debug,
+    Q::This<'a>: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Receiver")
@@ -612,7 +612,7 @@ impl ReceiverQuery for NullReceiverQuery {
 }
 
 impl<Q: Query> ReceiverQuery for Q {
-    type Item<'a> = Q::Item<'a>;
+    type Item<'a> = Q::This<'a>;
 }
 
 mod null_receiver_query {
