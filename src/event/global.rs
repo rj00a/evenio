@@ -21,7 +21,7 @@ use crate::world::{UnsafeWorldCell, World};
 /// `Event<EventIdx = GlobalEventIdx>`. Use the derive macro to create the
 /// appropriate implementation of [`Event`].
 ///
-/// Note that this trait is intended to be mutually exclusive with
+/// This trait is intended to be mutually exclusive with
 /// [`TargetedEvent`](super::TargetedEvent).
 ///
 /// # Deriving
@@ -33,6 +33,17 @@ use crate::world::{UnsafeWorldCell, World};
 /// struct MyEvent {
 ///     example_data: i32,
 /// }
+/// ```
+///
+/// Due to language limitations, types with generic type params will
+/// have a `T: 'static` bound in the generated impl.
+///
+/// ```
+/// use evenio::prelude::*;
+///
+/// // `T: 'static` is required for this to impl `Event`.
+/// #[derive(GlobalEvent)]
+/// struct TypeWithGeneric<T>(T);
 /// ```
 pub trait GlobalEvent: Event<EventIdx = GlobalEventIdx> {}
 impl<E: Event<EventIdx = GlobalEventIdx>> GlobalEvent for E {}

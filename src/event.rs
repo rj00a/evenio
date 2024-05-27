@@ -1347,4 +1347,33 @@ mod tests {
 
         world.send(A(123));
     }
+
+    #[allow(unused)]
+    mod derive_event {
+        use core::marker::PhantomData;
+
+        use super::*;
+
+        #[derive(GlobalEvent)]
+        struct StructWithLifetime_<'a> {
+            _ignore: &'a (),
+        }
+
+        #[derive(TargetedEvent)]
+        struct StructWithLifetime<'a> {
+            _ignore: &'a (),
+        }
+
+        #[derive(GlobalEvent)]
+        struct StructWithGenericType_<T>(T);
+
+        #[derive(TargetedEvent)]
+        struct StructWithGenericType<T>(T);
+
+        #[derive(GlobalEvent)]
+        struct StructWithBoth_<'a, T>(PhantomData<(fn() -> T, &'a ())>);
+
+        #[derive(TargetedEvent)]
+        struct StructWithBoth<'a, T>(PhantomData<(fn() -> T, &'a ())>);
+    }
 }
