@@ -5,6 +5,7 @@
 - `Sender` now has allocation methods and can send events with data borrowed from the allocator.
 - `Sender` is now entirely internally mutable and all methods take `&self`.
 - Changed API of `UnsafeWorldCell`.
+- Deriving `GlobalEvent` or `TargetedEvent` on a type with generic type params now succeeds (with caveats).
 
 ## 0.6.0 - 2024-05-18
 

@@ -5,7 +5,11 @@ use syn::{parse2, parse_quote, DeriveInput, Result, Type};
 use crate::util::{parse_attr_immutable, replace_lifetime};
 
 pub(crate) fn derive_event(input: TokenStream, is_targeted: bool) -> Result<TokenStream> {
-    let input = parse2::<DeriveInput>(input)?;
+    let mut input = parse2::<DeriveInput>(input)?;
+
+    for ty in input.generics.type_params_mut() {
+        ty.bounds.push(parse_quote!('static));
+    }
 
     let mutability_type: Type = if parse_attr_immutable("event", &input.attrs)? {
         parse_quote!(::evenio::mutability::Immutable)
