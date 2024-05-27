@@ -1348,7 +1348,7 @@ mod tests {
         world.send(A(123));
     }
 
-    #[allow(unused)]
+    #[allow(unused, clippy::type_complexity)]
     mod derive_event {
         use core::marker::PhantomData;
 
