@@ -489,10 +489,7 @@ unsafe impl<Q: Query + 'static> HandlerParam for Single<Q> {
     }
 }
 
-impl<'a, T> Deref for Single<&'a T>
-where
-    &'a T: for<'b> Query<This<'b> = &'b T>,
-{
+impl<'a, T> Deref for Single<&'a T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -500,10 +497,7 @@ where
     }
 }
 
-impl<'a, T> Deref for Single<&'a mut T>
-where
-    &'a mut T: for<'b> Query<This<'b> = &'b mut T>,
-{
+impl<'a, T> Deref for Single<&'a mut T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -511,10 +505,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for Single<&'a mut T>
-where
-    &'a mut T: for<'b> Query<This<'b> = &'b mut T>,
-{
+impl<'a, T> DerefMut for Single<&'a mut T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0
     }
