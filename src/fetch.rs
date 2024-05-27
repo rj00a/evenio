@@ -759,9 +759,9 @@ mod rayon_impl {
     impl<'a, Q> ParallelIterator for ParIter<'a, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn drive_unindexed<C>(self, consumer: C) -> C::Result
         where
@@ -777,7 +777,7 @@ mod rayon_impl {
                         unsafe { self.archetypes.get(index).unwrap_unchecked() }.entity_count();
 
                     (0..entity_count).into_par_iter().map(|row| {
-                        let item: Q::Item<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
+                        let item: Q::This<'a> = unsafe { Q::get(state, ArchetypeRow(row)) };
                         item
                     })
                 })
@@ -789,11 +789,11 @@ mod rayon_impl {
     impl<'a, Q> IntoParallelIterator for Fetcher<'a, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter_mut(self.world.archetypes()) }
@@ -804,11 +804,11 @@ mod rayon_impl {
     impl<'a, Q> IntoParallelIterator for &'a Fetcher<'_, Q>
     where
         Q: ReadOnlyQuery,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter(self.world.archetypes()) }
@@ -819,11 +819,11 @@ mod rayon_impl {
     impl<'a, Q: Query> IntoParallelIterator for &'a mut Fetcher<'_, Q>
     where
         Q: Query,
-        Q::Item<'a>: Send,
+        Q::This<'a>: Send,
     {
         type Iter = ParIter<'a, Q>;
 
-        type Item = Q::Item<'a>;
+        type Item = Q::This<'a>;
 
         fn into_par_iter(self) -> Self::Iter {
             unsafe { self.state.par_iter_mut(self.world.archetypes()) }
