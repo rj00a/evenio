@@ -1181,14 +1181,14 @@ mod tests {
             sender.send(B(3));
         }
 
-        fn get_b_send_c(r: Receiver<B>, sender: Sender<C>, res: Single<&mut Result>) {
-            res.0 .0.push(r.event.0);
+        fn get_b_send_c(r: Receiver<B>, sender: Sender<C>, mut res: Single<&mut Result>) {
+            res.0.push(r.event.0);
             sender.send(C(r.event.0 + 1));
             sender.send(C(r.event.0 + 2));
         }
 
-        fn get_c(r: Receiver<C>, res: Single<&mut Result>) {
-            res.0 .0.push(r.event.0);
+        fn get_c(r: Receiver<C>, mut res: Single<&mut Result>) {
+            res.0.push(r.event.0);
         }
 
         let mut world = World::new();

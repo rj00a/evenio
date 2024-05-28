@@ -884,9 +884,9 @@ mod tests {
                 let matching_entity = world.spawn();
                 world.insert(matching_entity, Matching(matching));
 
-                world.add_handler(move |_: Receiver<E>, f: Fetcher<(EntityId, $query)>, matching: Single<&mut Matching>| {
+                world.add_handler(move |_: Receiver<E>, f: Fetcher<(EntityId, $query)>, mut matching: Single<&mut Matching>| {
                     for (e, _) in f {
-                        if e != matching_entity && !matching.0.0.shift_remove(&e) {
+                        if e != matching_entity && !matching.0.shift_remove(&e) {
                             panic!("matched entity unexpectedly {e:?}");
                         }
                     }
