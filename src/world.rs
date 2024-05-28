@@ -942,7 +942,7 @@ impl World {
 
     /// Send all queued events to handlers. The event queue will be empty after
     /// this call.
-    fn flush_event_queue(&mut self) {
+    pub fn flush_event_queue(&mut self) {
         'next_event: while let Some(item) = self.event_queue.pop() {
             struct EventDropper<'a> {
                 event: NonNull<u8>,
