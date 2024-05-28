@@ -661,6 +661,7 @@ impl<'a, ES: EventSet> Sender<'a, ES> {
         unsafe { self.world.queue_global(ptr, GlobalEventIdx(event_idx)) };
     }
 
+    /// Grab the state of the sender; the [`EventSet`] indices.
     pub fn state(&self) -> &ES::Indices {
         self.state
     }
