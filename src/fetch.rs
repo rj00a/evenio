@@ -433,16 +433,14 @@ where
 /// # #[derive(GlobalEvent)] struct E;
 /// use evenio::prelude::*;
 ///
-/// #[derive(Component)]
+/// #[derive(Component, Debug)]
 /// struct MyComponent(i32);
 ///
 /// let mut world = World::new();
 ///
-/// world.add_handler(
-///     |_: Receiver<E>, Single(MyComponent(data)): Single<&MyComponent>| {
-///         println!("The data is: {data}");
-///     },
-/// );
+/// world.add_handler(|_: Receiver<E>, data: Single<&MyComponent>| {
+///     println!("The data is: {data:?}");
+/// });
 ///
 /// let e = world.spawn();
 /// world.insert(e, MyComponent(123));
@@ -450,7 +448,28 @@ where
 /// world.send(E);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
-pub struct Single<Q>(pub Q);
+pub struct Single<Q>(Q);
+
+impl<Q> Single<Q> {
+    /// Create a new instance of `Single`.
+    pub const fn new(q: Q) -> Self {
+        Self(q)
+    }
+
+    /// Consumes the `Single` and returns the inner value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use evenio::fetch::Single;
+    ///
+    /// let single = Single::new("bananas");
+    /// assert_eq!(Single::into_inner(single), "bananas");
+    /// ```
+    pub fn into_inner(this: Self) -> Q {
+        this.0
+    }
+}
 
 unsafe impl<Q: Query + 'static> HandlerParam for Single<Q> {
     type State = FetcherState<Q>;
@@ -508,6 +527,30 @@ impl<'a, T> Deref for Single<&'a mut T> {
 impl<'a, T> DerefMut for Single<&'a mut T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0
+    }
+}
+
+impl<'a, T> AsRef<T> for Single<&'a T> {
+    fn as_ref(&self) -> &T {
+        self.0
+    }
+}
+
+impl<'a, T> AsRef<T> for Single<&'a mut T> {
+    fn as_ref(&self) -> &T {
+        self.0
+    }
+}
+
+impl<'a, T> AsMut<T> for Single<&'a mut T> {
+    fn as_mut(&mut self) -> &mut T {
+        self.0
+    }
+}
+
+impl<T> From<T> for Single<T> {
+    fn from(value: T) -> Self {
+        Self(value)
     }
 }
 

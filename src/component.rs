@@ -425,8 +425,8 @@ mod tests {
         let c1 = world.add_component::<A>();
         let e1 = world.spawn();
         world.insert(e1, A("hello".into()));
-        let s1 = world.add_handler(|_: Receiver<E>, Single(A(a)): Single<&mut A>| {
-            a.push_str("hello");
+        let s1 = world.add_handler(|_: Receiver<E>, mut a: Single<&mut A>| {
+            a.0.push_str("hello");
         });
         world.send(E);
 
@@ -443,8 +443,8 @@ mod tests {
         let e2 = world.spawn();
         assert!(world.entities().contains(e2));
         world.insert(e2, B(vec![]));
-        let s2 = world.add_handler(|_: Receiver<E>, Single(B(b)): Single<&mut B>| {
-            b.push("hello".into());
+        let s2 = world.add_handler(|_: Receiver<E>, mut b: Single<&mut B>| {
+            b.0.push("hello".into());
         });
         world.send(E);
         assert_eq!(world.get::<B>(e2), Some(&B(vec!["hello".into()])));
