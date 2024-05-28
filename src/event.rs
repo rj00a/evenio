@@ -661,6 +661,10 @@ impl<'a, ES: EventSet> Sender<'a, ES> {
         unsafe { self.world.queue_global(ptr, GlobalEventIdx(event_idx)) };
     }
 
+    pub fn state(&self) -> &ES::Indices {
+        self.state
+    }
+
     /// Add a [`TargetedEvent`] to the queue of events to send.
     ///
     /// The queue is flushed once all handlers for the current event have run.
