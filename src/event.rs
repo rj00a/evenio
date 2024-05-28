@@ -666,6 +666,11 @@ impl<'a, ES: EventSet> Sender<'a, ES> {
         self.state
     }
 
+    /// Grab the world cell.
+    pub fn world(&self) -> &UnsafeWorldCell<'a> {
+        &self.world
+    }
+
     /// Add a [`TargetedEvent`] to the queue of events to send.
     ///
     /// The queue is flushed once all handlers for the current event have run.
