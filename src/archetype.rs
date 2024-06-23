@@ -769,12 +769,11 @@ impl Archetype {
     /// Would the columns of this archetype reallocate if an entity were added
     /// to it?
     fn push_would_reallocate(&self) -> bool {
-        // All columns should have the same capacity and length, so we only need to look
-        // at one of them. The `Vec` holding the Entity IDs might have a different
-        // reallocation strategy, so check that too.
+        // The `Vec` holding the Entity IDs might have a different reallocation
+        // strategy, so check that too.
         self.columns()
-            .first()
-            .map_or(false, |col| col.data.len() == col.data.capacity())
+            .iter()
+            .any(|col| col.data.len() == col.data.capacity())
             || self.entity_ids.capacity() == self.entity_ids.len()
     }
 }
