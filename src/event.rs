@@ -959,7 +959,7 @@ macro_rules! impl_event_set_tuple {
     };
 }
 
-all_tuples!(impl_event_set_tuple, 0, 15, E, e);
+all_tuples!(impl_event_set_tuple, 0, 64, E, e);
 
 /// A [`TargetedEvent`] which adds component `C` on an entity when sent. If the
 /// entity already has the component, then the component is replaced.
