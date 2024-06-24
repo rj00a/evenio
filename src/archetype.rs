@@ -862,7 +862,7 @@ impl Archetype {
 
 impl Drop for Archetype {
     fn drop(&mut self) {
-        let columns = unsafe {
+        let mut columns = unsafe {
             Box::from_raw(slice::from_raw_parts_mut(
                 self.columns.as_ptr(),
                 self.component_indices.len(),
@@ -872,7 +872,7 @@ impl Drop for Archetype {
         let len = self.entity_ids.len();
         let cap = self.entity_ids.capacity();
 
-        for col in columns {
+        for col in columns.iter_mut() {
             let cap_layout = unsafe {
                 Layout::from_size_align_unchecked(
                     cap * col.component_layout.size(),
