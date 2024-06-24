@@ -1,9 +1,11 @@
 //! [`Archetype`] and related items.
 
+use alloc::alloc::{alloc, dealloc, realloc};
 use alloc::collections::btree_map::Entry as BTreeEntry;
 use alloc::collections::{BTreeMap, BTreeSet};
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec, vec::Vec};
+use core::alloc::Layout;
 use core::cmp::Ordering;
 use core::ops::Index;
 use core::panic::{RefUnwindSafe, UnwindSafe};
@@ -15,8 +17,8 @@ use slab::Slab;
 
 use crate::aliased_box::AliasedBox;
 use crate::assume_unchecked;
-use crate::blob_vec::BlobVec;
 use crate::component::{ComponentIdx, ComponentInfo, Components};
+use crate::drop::DropFn;
 use crate::entity::{Entities, EntityId, EntityLocation};
 use crate::event::{EventId, EventPtr, TargetedEventIdx};
 use crate::handler::{
@@ -95,7 +97,7 @@ impl Archetypes {
     pub(crate) fn spawn(&mut self, id: EntityId) -> EntityLocation {
         let empty = self.empty_mut();
 
-        let rellocated = empty.push_would_reallocate();
+        let rellocated = unsafe { empty.reserve_one() };
 
         let row = ArchetypeRow(empty.entity_count());
         empty.entity_ids.push(id);
@@ -367,7 +369,7 @@ impl Archetypes {
             for (comp_idx, comp_ptr) in new_components {
                 let col = arch.column_of_mut(comp_idx).unwrap_unchecked();
 
-                col.data.assign(src.row.0 as usize, comp_ptr);
+                col.assign(src.row.0 as usize, comp_ptr);
             }
 
             return src.row;
@@ -376,11 +378,11 @@ impl Archetypes {
         let (src_arch, dst_arch) = self
             .archetypes
             .get2_mut(src.archetype.0 as usize, dst.0 as usize)
-            .unwrap();
+            .unwrap_unchecked();
 
         let dst_row = ArchetypeRow(dst_arch.entity_ids.len() as u32);
 
-        let dst_arch_reallocated = dst_arch.push_would_reallocate();
+        let dst_arch_reallocated = dst_arch.reserve_one();
 
         let mut src_idx = 0;
         let mut dst_idx = 0;
@@ -398,16 +400,19 @@ impl Archetypes {
                     match src_comp_idx.cmp(&dst_comp_idx) {
                         Ordering::Less => {
                             let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
-                            src_col.data.swap_remove(src.row.0 as usize);
+                            src_col.swap_remove(src_arch.entity_ids.len(), src.row.0 as usize);
                             src_idx += 1;
                         }
                         Ordering::Equal => {
                             let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
                             let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
 
-                            src_col
-                                .data
-                                .transfer_elem(&mut dst_col.data, src.row.0 as usize);
+                            src_col.transfer_elem(
+                                src_arch.entity_ids.len(),
+                                dst_col,
+                                dst_arch.entity_ids.len(),
+                                src.row.0 as usize,
+                            );
 
                             src_idx += 1;
                             dst_idx += 1;
@@ -423,10 +428,15 @@ impl Archetypes {
 
                             debug_assert_eq!(component_idx, dst_comp_idx);
 
+                            let dst_ptr = dst_col
+                                .data
+                                .as_ptr()
+                                .add(dst_col.component_layout.size() * dst_arch.entity_ids.len());
+
                             ptr::copy_nonoverlapping(
                                 component_ptr,
-                                dst_col.data.push().as_ptr(),
-                                dst_col.data.elem_layout().size(),
+                                dst_ptr,
+                                dst_col.component_layout.size(),
                             );
 
                             dst_idx += 1;
@@ -435,7 +445,7 @@ impl Archetypes {
                 }
                 (true, false) => {
                     let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
-                    src_col.data.swap_remove(src.row.0 as usize);
+                    src_col.swap_remove(src_arch.entity_ids.len(), src.row.0 as usize);
                     src_idx += 1;
                 }
                 (false, true) => {
@@ -447,10 +457,15 @@ impl Archetypes {
 
                     debug_assert_eq!(component_idx, dst_comp_idx);
 
+                    let dst_ptr = dst_col
+                        .data
+                        .as_ptr()
+                        .add(dst_col.component_layout.size() * dst_arch.entity_ids.len());
+
                     ptr::copy_nonoverlapping(
                         component_ptr,
-                        dst_col.data.push().as_ptr(),
-                        dst_col.data.elem_layout().size(),
+                        dst_ptr,
+                        dst_col.component_layout.size(),
                     );
 
                     dst_idx += 1;
@@ -496,8 +511,10 @@ impl Archetypes {
                 .unwrap_unchecked()
         };
 
+        let initial_len = arch.entity_ids.len();
+
         for col in arch.columns_mut() {
-            unsafe { col.data.swap_remove(loc.row.0 as usize) };
+            unsafe { col.swap_remove(initial_len, loc.row.0 as usize) };
         }
 
         unsafe {
@@ -661,7 +678,9 @@ impl Archetype {
                 info.member_of.insert(arch_idx);
 
                 Column {
-                    data: unsafe { BlobVec::new(info.layout(), info.drop()) },
+                    component_layout: info.layout(),
+                    data: NonNull::dangling(),
+                    drop: info.drop(),
                 }
             })
             .collect();
@@ -766,31 +785,115 @@ impl Archetype {
         Some(unsafe { &mut *self.columns.as_ptr().add(idx) })
     }
 
-    /// Would the columns of this archetype reallocate if an entity were added
-    /// to it?
-    fn push_would_reallocate(&self) -> bool {
-        // The `Vec` holding the Entity IDs might have a different reallocation
-        // strategy, so check that too.
-        self.columns()
-            .iter()
-            .any(|col| col.data.len() == col.data.capacity())
-            || self.entity_ids.capacity() == self.entity_ids.len()
+    /// Reserve space for at least one additional entity in this archetype. Has
+    /// no effect if there is already sufficient capacity. Returns a boolean
+    /// indicating if a reallocation occurred.
+    unsafe fn reserve_one(&mut self) -> bool {
+        let old_cap = self.entity_ids.capacity();
+        // Piggyback off the entity ID Vec's len and cap.
+        self.entity_ids.reserve(1);
+        let new_cap = self.entity_ids.capacity();
+
+        #[cold]
+        fn capacity_overflow() -> ! {
+            panic!("capacity overflow in archetype column")
+        }
+
+        if old_cap == new_cap {
+            // No reallocation occurred.
+            return false;
+        }
+
+        struct AbortOnPanic;
+
+        impl Drop for AbortOnPanic {
+            #[cold]
+            fn drop(&mut self) {
+                // A panic while another panic is happening will abort.
+                panic!("column allocation failure");
+            }
+        }
+
+        // If column reallocation panics for any reason, the columns will be left in an
+        // inconsistent state. We have no choice but to abort here.
+        let guard = AbortOnPanic;
+
+        // Reallocate all columns.
+        for col in self.columns_mut() {
+            if col.component_layout.size() == 0 {
+                // Skip zero-sized types.
+                continue;
+            }
+
+            let Some(new_cap_in_bytes) = new_cap.checked_mul(col.component_layout.size()) else {
+                capacity_overflow()
+            };
+
+            if new_cap_in_bytes > isize::MAX as usize {
+                capacity_overflow()
+            }
+
+            let new_cap_layout =
+                Layout::from_size_align_unchecked(new_cap_in_bytes, col.component_layout.align());
+
+            let ptr = if old_cap == 0 {
+                alloc(new_cap_layout)
+            } else {
+                // Previous layout must have been valid.
+                let old_cap_layout = Layout::from_size_align_unchecked(
+                    old_cap * col.component_layout.size(),
+                    col.component_layout.align(),
+                );
+
+                realloc(col.data.as_ptr(), old_cap_layout, new_cap_in_bytes)
+            };
+
+            match NonNull::new(ptr) {
+                Some(ptr) => col.data = ptr,
+                None => alloc::alloc::handle_alloc_error(new_cap_layout),
+            }
+        }
+
+        mem::forget(guard);
+
+        true
     }
 }
 
 impl Drop for Archetype {
     fn drop(&mut self) {
-        // Free the array of columns by constructing a `Box<[Column]>` and immediately
-        // dropping it.
-        //
-        // SAFETY: The columns pointer originated from a
-        // `Box<[Column]>` with the length of `component_indices`.
-        let _ = unsafe {
+        let mut columns = unsafe {
             Box::from_raw(slice::from_raw_parts_mut(
                 self.columns.as_ptr(),
                 self.component_indices.len(),
             ))
         };
+
+        let len = self.entity_ids.len();
+        let cap = self.entity_ids.capacity();
+
+        for col in columns.iter_mut() {
+            let cap_layout = unsafe {
+                Layout::from_size_align_unchecked(
+                    cap * col.component_layout.size(),
+                    col.component_layout.align(),
+                )
+            };
+            if cap_layout.size() > 0 {
+                // Drop components.
+                if let Some(drop) = col.drop {
+                    for i in 0..len {
+                        unsafe {
+                            let ptr = col.data.as_ptr().add(i * col.component_layout.size());
+                            drop(NonNull::new_unchecked(ptr));
+                        };
+                    }
+                }
+
+                // Free backing buffer.
+                unsafe { dealloc(col.data.as_ptr(), cap_layout) };
+            }
+        }
     }
 }
 
@@ -821,15 +924,90 @@ impl fmt::Debug for Archetype {
 /// All of the component data for a single component type in an [`Archetype`].
 #[derive(Debug)]
 pub struct Column {
-    /// Component data in this column.
-    data: BlobVec,
+    /// Layout of a single element.
+    component_layout: Layout,
+    /// Pointer to beginning of allocated buffer.
+    data: NonNull<u8>,
+    /// The component drop function.
+    drop: DropFn,
 }
 
 impl Column {
     /// Returns a pointer to the beginning of the buffer holding the component
     /// data, or a dangling pointer if the the buffer is empty.
     pub fn data(&self) -> NonNull<u8> {
-        self.data.as_ptr()
+        self.data
+    }
+
+    unsafe fn assign(&mut self, idx: usize, elem: *const u8) {
+        let ptr = self.data.as_ptr().add(idx * self.component_layout.size());
+
+        if let Some(drop) = self.drop {
+            drop(NonNull::new_unchecked(ptr));
+        }
+
+        ptr::copy_nonoverlapping(elem, ptr, self.component_layout.size());
+    }
+
+    unsafe fn swap_remove(&mut self, len: usize, idx: usize) {
+        debug_assert!(idx < len, "index out of bounds");
+
+        let src = self
+            .data
+            .as_ptr()
+            .add(self.component_layout.size() * (len - 1));
+
+        let dst = self.data.as_ptr().add(self.component_layout.size() * idx);
+
+        if let Some(drop) = self.drop {
+            drop(NonNull::new_unchecked(dst));
+        }
+
+        if src != dst {
+            ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
+        }
+    }
+
+    unsafe fn swap_remove_no_drop(&mut self, len: usize, idx: usize) {
+        debug_assert!(idx < len, "index out of bounds");
+
+        let src = self
+            .data
+            .as_ptr()
+            .add(self.component_layout.size() * (len - 1));
+
+        let dst = self.data.as_ptr().add(self.component_layout.size() * idx);
+
+        if src != dst {
+            ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
+        }
+    }
+
+    unsafe fn transfer_elem(
+        &mut self,
+        self_len: usize,
+        other: &mut Self,
+        other_len: usize,
+        src_idx: usize,
+    ) {
+        debug_assert_eq!(
+            self.component_layout, other.component_layout,
+            "component layouts must be the same"
+        );
+        debug_assert!(src_idx < self_len, "index out of bounds");
+
+        let src = self
+            .data
+            .as_ptr()
+            .add(src_idx * self.component_layout.size());
+
+        let dst = other
+            .data
+            .as_ptr()
+            .add(other_len * other.component_layout.size());
+
+        ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
+        self.swap_remove_no_drop(self_len, src_idx);
     }
 }
 
@@ -868,5 +1046,19 @@ mod tests {
         world.insert(e, C("goodbye".into()));
 
         assert_eq!(world.get::<C>(e).unwrap().0, "goodbye");
+    }
+
+    #[test]
+    fn zst_components() {
+        #[derive(Component)]
+        struct Zst;
+
+        let mut world = World::new();
+
+        let e1 = world.spawn();
+        world.insert(e1, Zst);
+
+        let e2 = world.spawn();
+        world.insert(e2, Zst);
     }
 }
