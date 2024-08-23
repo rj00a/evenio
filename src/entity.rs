@@ -29,6 +29,7 @@ pub struct Entities {
 }
 
 impl Entities {
+    /// Constructs an empty `Entities` instance.
     pub(crate) fn new() -> Self {
         Self {
             locs: SlotMap::new(),
@@ -41,6 +42,8 @@ impl Entities {
         self.locs.get(id.0).copied()
     }
 
+    /// Returns a mutable reference to the [`EntityLocation`] of the given
+    /// entity. Returns `None` if the ID is invalid.
     pub(crate) fn get_mut(&mut self, id: EntityId) -> Option<&mut EntityLocation> {
         self.locs.get_mut(id.0)
     }
@@ -51,11 +54,13 @@ impl Entities {
         self.locs.get_by_index(idx.0).map(|(_, v)| *v)
     }
 
-    /// Does the given entity exist in the world?
+    /// Returns `true` if the given entity exists in the world.
     pub fn contains(&self, id: EntityId) -> bool {
         self.get(id).is_some()
     }
 
+    /// Adds an entity using a function that constructs its location using its
+    /// id, and returns the added entity's id.
     fn add_with(&mut self, f: impl FnOnce(EntityId) -> EntityLocation) -> EntityId {
         if let Some(k) = self.locs.insert_with(|k| f(EntityId(k))) {
             EntityId(k)
@@ -64,6 +69,8 @@ impl Entities {
         }
     }
 
+    /// Tries to remove an entity by its id. Returns the location of the removed
+    /// entity, or `None` if the id was invalid and no entity was removed.
     pub(crate) fn remove(&mut self, id: EntityId) -> Option<EntityLocation> {
         self.locs.remove(id.0)
     }
@@ -197,6 +204,7 @@ pub(crate) struct ReservedEntities {
 }
 
 impl ReservedEntities {
+    /// Constructs an empty `ReservedEntities` queue.
     pub(crate) fn new() -> Self {
         Self {
             iter: NextKeyIter::new(),
@@ -204,6 +212,7 @@ impl ReservedEntities {
         }
     }
 
+    /// Reserves one entity to be spawned and returns its future id.
     pub(crate) fn reserve(&mut self, entities: &Entities) -> EntityId {
         if let Some(k) = self.iter.next(&entities.locs) {
             self.count += 1;
@@ -213,6 +222,8 @@ impl ReservedEntities {
         }
     }
 
+    /// Drains the queue and spawns all its reserved entities using the provided
+    /// function that constructs their locations using their ids.
     pub(crate) fn spawn_all(
         &mut self,
         entities: &mut Entities,
@@ -226,6 +237,8 @@ impl ReservedEntities {
         self.count = 0;
     }
 
+    /// Refreshes the internal state of the queue after a change to the world's
+    /// entities.
     pub(crate) fn refresh(&mut self, entities: &Entities) {
         debug_assert_eq!(self.count, 0);
         self.iter = entities.locs.next_key_iter();

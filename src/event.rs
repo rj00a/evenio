@@ -128,6 +128,8 @@ pub struct EventDescriptor {
 }
 
 impl EventDescriptor {
+    /// Constructs and initializes an `EventDescriptor` for the given type in a
+    /// world.
     pub(crate) fn new<E: Event>(world: &mut World) -> Self {
         Self {
             name: any::type_name::<E>().into(),
@@ -222,6 +224,7 @@ pub struct EventPtr<'a> {
 }
 
 impl<'a> EventPtr<'a> {
+    /// Constructs a new event pointer.
     pub(crate) fn new(event: NonNull<u8>, ownership_flag: NonNull<bool>) -> Self {
         Self {
             event,
@@ -236,7 +239,7 @@ impl<'a> EventPtr<'a> {
         let is_owned = unsafe { *self.ownership_flag.as_ptr() };
         debug_assert!(
             !is_owned,
-            "`as_ptr` cannot be called after the event has been marked as owned"
+            "`as_ptr` must not be called after the event has been marked as owned"
         );
 
         self.event
@@ -248,7 +251,8 @@ impl<'a> EventPtr<'a> {
     /// # Safety
     ///
     /// - Must have permission to access the event mutably.
-    /// - Once the event is set as owned, [`as_ptr`] cannot be called.
+    /// - Once the event is set as owned, [`as_ptr`] must not be called and any
+    ///   pointer acquired through `as_ptr` may not be used anymore.
     ///
     /// [`as_ptr`]: Self::as_ptr
     pub unsafe fn set_owned(self) {
@@ -266,6 +270,7 @@ pub struct EventMut<'a, E: Event> {
 }
 
 impl<'a, E: Event> EventMut<'a, E> {
+    /// Constructs a new `EventMut` which wraps the given event pointer.
     fn new(ptr: EventPtr<'a>) -> Self {
         Self {
             ptr,

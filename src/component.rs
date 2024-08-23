@@ -42,6 +42,7 @@ pub struct Components {
 }
 
 impl Components {
+    /// Constructs an empty `Components` instance.
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
@@ -49,10 +50,22 @@ impl Components {
         }
     }
 
+    /// Tries to add a component with the given descriptor. If the descriptor
+    /// has a type id and a component with that type id already exists, returns
+    /// its id and `false`. Otherwise, add a component with the given descriptor
+    /// and returns its id and `true`.
+    // TODO: Should this be marked unsafe and have the same safety requirements
+    //  as its caller, `World::add_component_with_descriptor`?
     pub(crate) fn add(&mut self, desc: ComponentDescriptor) -> (ComponentId, bool) {
+        // If the descriptor has a type id, look it up in our `by_type_id` map.
         if let Some(type_id) = desc.type_id {
             return match self.by_type_id.entry(type_id) {
                 Entry::Vacant(v) => {
+                    // No component with this type id already exists. Create a
+                    // `ComponentInfo` for the new component, insert it into the
+                    // `by_type_id` and `infos` maps and return the component's
+                    // id.
+
                     let Some(k) = self.infos.insert_with(|k| ComponentInfo {
                         name: desc.name,
                         id: ComponentId(k),
@@ -69,10 +82,17 @@ impl Components {
 
                     (*v.insert(ComponentId(k)), true)
                 }
-                Entry::Occupied(o) => (*o.get(), false),
+                Entry::Occupied(entry) => {
+                    // A component with this type id already exists, return its
+                    // id.
+                    (*entry.get(), false)
+                }
             };
         }
 
+        // The descriptor has no type id to look up. Create a `ComponentInfo`
+        // for the new component, insert it into the `infos` map and return the
+        // new component's id.
         let Some(k) = self.infos.insert_with(|k| ComponentInfo {
             name: desc.name,
             id: ComponentId(k),
@@ -90,6 +110,9 @@ impl Components {
         (ComponentId(k), true)
     }
 
+    /// Tries to remove a component by its id. Returns the component info of the
+    /// removed component, or `None` if the id was invalid and no component was
+    /// removed.
     pub(crate) fn remove(&mut self, component_id: ComponentId) -> Option<ComponentInfo> {
         let info = self.infos.remove(component_id.0)?;
 
@@ -112,6 +135,8 @@ impl Components {
         self.infos.get_by_index(idx.0).map(|(_, v)| v)
     }
 
+    /// Returns a mutable reference to the [`ComponentInfo`] for a component
+    /// by its [`ComponentIdx`]. Returns `None` if the index is invalid.
     pub(crate) fn get_by_index_mut(&mut self, idx: ComponentIdx) -> Option<&mut ComponentInfo> {
         self.infos.get_by_index_mut(idx.0).map(|(_, v)| v)
     }
@@ -123,7 +148,7 @@ impl Components {
         Some(unsafe { self.get(id).unwrap_unchecked() })
     }
 
-    /// Does the given component exist in the world?
+    /// Returns `true` if the given component exists in the world.
     pub fn contains(&self, id: ComponentId) -> bool {
         self.get(id).is_some()
     }

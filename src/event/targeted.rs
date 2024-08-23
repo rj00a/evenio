@@ -68,6 +68,7 @@ pub struct TargetedEvents {
 }
 
 impl TargetedEvents {
+    /// Constructs an empty `TargetedEvents` instance.
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
@@ -75,7 +76,15 @@ impl TargetedEvents {
         }
     }
 
+    /// Tries to add an event with the given descriptor. If the descriptor has a
+    /// type id and an event with that type id already exists, returns its id
+    /// and `false`. Otherwise, add an event with the given descriptor and
+    /// returns its id and `true`.
+    // TODO: Should this be marked unsafe and have the same safety requirements
+    //  as its caller, `World::add_targeted_event_with_descriptor`?
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (TargetedEventId, bool) {
+        // Construct a `TargetedEventInfo` for this event. The id field will be
+        // filled in when the info is inserted into our `infos` map.
         let mut info = TargetedEventInfo {
             id: TargetedEventId::NULL,
             name: desc.name,
@@ -90,6 +99,7 @@ impl TargetedEvents {
             TargetedEventId(
                 self.infos
                     .insert_with(|id| {
+                        // Fill in the id field with the info's key in the map.
                         info.id = TargetedEventId(id);
                         info
                     })
@@ -99,10 +109,22 @@ impl TargetedEvents {
 
         if let Some(type_id) = desc.type_id {
             match self.by_type_id.entry(type_id) {
-                Entry::Vacant(v) => (*v.insert(insert()), true),
-                Entry::Occupied(o) => (*o.get(), false),
+                Entry::Vacant(v) => {
+                    // No event with this type id already exists. Call `insert`
+                    // to insert the event info constructed above into our
+                    // `infos` map and insert the resulting event id into the
+                    // vacant `by_type_id` map entry. Finally, return the id.
+                    (*v.insert(insert()), true)
+                }
+                Entry::Occupied(entry) => {
+                    // An event with this type id already exists, return its id.
+                    (*entry.get(), false)
+                }
             }
         } else {
+            // The descriptor has no type id to look up. Call `insert` to insert
+            // the event info constructed above into our `infos` map and return
+            // the resulting event id.
             (insert(), true)
         }
     }
@@ -132,6 +154,9 @@ impl TargetedEvents {
         self.get(id).is_some()
     }
 
+    /// Tries to remove an event by its id. Returns the event info of the
+    /// removed event, or `None` if the id was invalid and no event was
+    /// removed.
     pub(crate) fn remove(&mut self, id: TargetedEventId) -> Option<TargetedEventInfo> {
         let info = self.infos.remove(id.0)?;
 

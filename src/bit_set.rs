@@ -44,6 +44,9 @@ impl<T> BitSet<T> {
         self.blocks.clear();
     }
 
+    /// Grows the bit set to the given block index (if necessary) and returns a
+    /// mutable reference to the block at that index. If the block index is
+    /// already in bounds, this method will not modify `self.blocks`.
     #[inline]
     #[track_caller]
     fn grow_to_block(&mut self, block_idx: usize) -> &mut Block {
@@ -279,7 +282,7 @@ impl<'a, T: SparseIndex> Iterator for Iter<'a, T> {
             self.block_idx += 1;
         }
 
-        // Index of least significant bit in the block.
+        // Index of the least significant bit in the block.
         let zeros = self.bits.trailing_zeros() as usize;
 
         // Clear the least significant bit.

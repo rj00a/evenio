@@ -68,6 +68,7 @@ pub struct GlobalEvents {
 }
 
 impl GlobalEvents {
+    /// Constructs an empty `GlobalEvents` instance.
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
@@ -75,7 +76,15 @@ impl GlobalEvents {
         }
     }
 
+    /// Tries to add an event with the given descriptor. If the descriptor has a
+    /// type id and an event with that type id already exists, returns its id
+    /// and `false`. Otherwise, add an event with the given descriptor and
+    /// returns its id and `true`.
+    // TODO: Should this be marked unsafe and have the same safety requirements
+    //  as its caller, `World::add_global_event_with_descriptor`?
     pub(crate) fn add(&mut self, desc: EventDescriptor) -> (GlobalEventId, bool) {
+        // Construct a `GlobalEventInfo` for this event. The id field will be
+        // filled in when the info is inserted into our `infos` map.
         let mut info = GlobalEventInfo {
             id: GlobalEventId::NULL,
             name: desc.name,
@@ -90,6 +99,7 @@ impl GlobalEvents {
             GlobalEventId(
                 self.infos
                     .insert_with(|id| {
+                        // Fill in the id field with the info's key in the map.
                         info.id = GlobalEventId(id);
                         info
                     })
@@ -97,12 +107,25 @@ impl GlobalEvents {
             )
         };
 
+        // If the descriptor has a type id, look it up in our `by_type_id` map.
         if let Some(type_id) = desc.type_id {
             match self.by_type_id.entry(type_id) {
-                Entry::Vacant(v) => (*v.insert(insert()), true),
-                Entry::Occupied(o) => (*o.get(), false),
+                Entry::Vacant(v) => {
+                    // No event with this type id already exists. Call `insert`
+                    // to insert the event info constructed above into our
+                    // `infos` map and insert the resulting event id into the
+                    // vacant `by_type_id` map entry. Finally, return the id.
+                    (*v.insert(insert()), true)
+                }
+                Entry::Occupied(entry) => {
+                    // An event with this type id already exists, return its id.
+                    (*entry.get(), false)
+                }
             }
         } else {
+            // The descriptor has no type id to look up. Call `insert` to insert
+            // the event info constructed above into our `infos` map and return
+            // the resulting event id.
             (insert(), true)
         }
     }
@@ -132,6 +155,9 @@ impl GlobalEvents {
         self.get(id).is_some()
     }
 
+    /// Tries to remove an event by its id. Returns the event info of the
+    /// removed event, or `None` if the id was invalid and no event was
+    /// removed.
     pub(crate) fn remove(&mut self, id: GlobalEventId) -> Option<GlobalEventInfo> {
         let info = self.infos.remove(id.0)?;
 

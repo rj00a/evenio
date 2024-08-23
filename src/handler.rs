@@ -56,6 +56,7 @@ pub struct Handlers {
 }
 
 impl Handlers {
+    /// Constructs an empty `Handlers` instance.
     pub(crate) fn new() -> Self {
         Self {
             infos: SlotMap::new(),
@@ -66,21 +67,29 @@ impl Handlers {
         }
     }
 
+    /// Adds a handler with the given info and returns its id. Panics if the
+    /// info has a type id and a handler with that type id already exists.
     pub(crate) fn add(&mut self, info: HandlerInfo) -> HandlerId {
         let ptr = info.ptr();
 
+        // Insert a pointer to the info into our `by_type_id` map if it has a
+        // type id. Panic if a handler with that type id already exists.
         if let Some(type_id) = info.type_id() {
             assert!(self.by_type_id.insert(type_id, ptr).is_none());
         }
 
+        // Insert the info into our `infos` map.
         let Some(k) = self.infos.insert_with(|k| {
             let id = HandlerId(k);
 
             let inner = unsafe { &mut *ptr.0.as_ptr() };
 
+            // Fill in the info's `id` and `order` fields.
             inner.id = id;
             inner.order = self.insert_counter;
 
+            // If the handler receives a global event, add the handler to the
+            // event's handler list.
             if let EventId::Global(id) = info.received_event() {
                 let idx = id.index().0 as usize;
 
@@ -97,6 +106,8 @@ impl Handlers {
             panic!("too many handlers")
         };
 
+        // Insert a pointer to the info into our `by_insert_order` map and
+        // increment the insert counter.
         self.by_insert_order.insert(self.insert_counter, ptr);
         self.insert_counter += 1;
 
@@ -105,6 +116,9 @@ impl Handlers {
         HandlerId(k)
     }
 
+    /// Tries to remove a handler by its id. Returns the handler info of the
+    /// removed handler, or `None` if the id was invalid and no handler was
+    /// removed.
     pub(crate) fn remove(&mut self, id: HandlerId) -> Option<HandlerInfo> {
         let info = self.infos.remove(id.0)?;
 
@@ -124,6 +138,7 @@ impl Handlers {
         Some(info)
     }
 
+    /// Adds a handler list for the given global event.
     pub(crate) fn register_event(&mut self, event_idx: GlobalEventIdx) {
         let idx = event_idx.0 as usize;
         if idx >= self.by_global_event.len() {
@@ -132,6 +147,7 @@ impl Handlers {
         }
     }
 
+    /// Returns the handler list for the given global event, if present.
     pub(crate) fn get_global_list(&self, idx: GlobalEventIdx) -> Option<&HandlerList> {
         self.by_global_event.get(idx.0 as usize)
     }
@@ -142,6 +158,8 @@ impl Handlers {
         self.infos.get(id.0)
     }
 
+    /// Returns a mutable reference to the [`HandlerInfo`] of the given handler.
+    /// Returns `None` if the ID is invalid.
     pub(crate) fn get_mut(&mut self, id: HandlerId) -> Option<&mut HandlerInfo> {
         self.infos.get_mut(id.0)
     }
@@ -253,7 +271,8 @@ impl HandlerInfoPtr {
     /// - Pointer must be valid.
     /// - Aliasing rules must be followed.
     pub(crate) unsafe fn as_info(&self) -> &HandlerInfo {
-        // SAFETY: Both `` and `Ptr` have non-null pointer layout.
+        // SAFETY: Both `HandlerInfo` and `HandlerInfoPtr` have non-null pointer
+        // layout.
         &*(self as *const Self as *const HandlerInfo)
     }
 
@@ -262,7 +281,8 @@ impl HandlerInfoPtr {
     /// - Pointer must be valid.
     /// - Aliasing rules must be followed.
     pub(crate) unsafe fn as_info_mut(&mut self) -> &mut HandlerInfo {
-        // SAFETY: Both `` and `Ptr` have non-null pointer layout.
+        // SAFETY: Both `HandlerInfo` and `HandlerInfoPtr` have non-null pointer
+        // layout.
         &mut *(self as *mut Self as *mut HandlerInfo)
     }
 }
@@ -295,7 +315,7 @@ impl Hash for HandlerInfoPtr {
     }
 }
 
-// This is generic over `S` so that we can do an unsizing coercion.
+// This is generic over `H` so that we can do an unsizing coercion.
 pub(crate) struct HandlerInfoInner<H: ?Sized = dyn Handler> {
     pub(crate) name: Cow<'static, str>,
     pub(crate) id: HandlerId,
@@ -341,6 +361,8 @@ impl HandlerInfo {
         unsafe { (*AliasedBox::as_ptr(&self.0)).type_id }
     }
 
+    /// Gets the order of this handler. Can be used to compare when handlers
+    /// were registered.
     pub(crate) fn order(&self) -> u64 {
         unsafe { (*AliasedBox::as_ptr(&self.0)).order }
     }
@@ -370,6 +392,8 @@ impl HandlerInfo {
         self.sent_global_events_bitset().iter()
     }
 
+    /// Returns a bit set containing the indices of the global events that this
+    /// handler sends.
     pub(crate) fn sent_global_events_bitset(&self) -> &BitSet<GlobalEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_untargeted_events }
     }
@@ -381,6 +405,8 @@ impl HandlerInfo {
         self.sent_targeted_events_bitset().iter()
     }
 
+    /// Returns a bit set containing the indices of the targeted events that
+    /// this handler sends.
     pub(crate) fn sent_targeted_events_bitset(&self) -> &BitSet<TargetedEventIdx> {
         unsafe { &(*AliasedBox::as_ptr(&self.0)).sent_targeted_events }
     }
@@ -415,10 +441,12 @@ impl HandlerInfo {
         unsafe { (*AliasedBox::as_ptr(&self.0)).priority }
     }
 
+    /// Returns a pointer to this handler info.
     pub(crate) fn ptr(&self) -> HandlerInfoPtr {
         HandlerInfoPtr(AliasedBox::as_non_null(&self.0))
     }
 
+    /// Returns a mutable reference to the inner handler.
     pub(crate) fn handler_mut(&mut self) -> &mut dyn Handler {
         unsafe { &mut (*AliasedBox::as_mut_ptr(&mut self.0)).handler }
     }
@@ -445,6 +473,8 @@ impl fmt::Debug for HandlerInfo {
     }
 }
 
+/// A list of handlers that listen to an event, ordered by priority and
+/// insertion order.
 #[derive(Debug, Default)]
 pub(crate) struct HandlerList {
     before: u32,
@@ -455,6 +485,7 @@ pub(crate) struct HandlerList {
 unsafe impl Sync for HandlerList {}
 
 impl HandlerList {
+    /// Constructs an empty handler list.
     pub(crate) const fn new() -> HandlerList {
         Self {
             before: 0,
@@ -463,6 +494,7 @@ impl HandlerList {
         }
     }
 
+    /// Inserts a handler with the given priority into the list.
     pub(crate) fn insert(&mut self, ptr: HandlerInfoPtr, priority: HandlerPriority) {
         assert!(self.entries.len() < u32::MAX as usize);
 
@@ -482,6 +514,8 @@ impl HandlerList {
         }
     }
 
+    /// Tries to remove the given handler from the list. Returns `true` on
+    /// success, and `false` if no handler was removed.
     pub(crate) fn remove(&mut self, ptr: HandlerInfoPtr) -> bool {
         if let Some(idx) = self.entries.iter().position(|&p| p == ptr) {
             self.entries.remove(idx);
@@ -502,6 +536,7 @@ impl HandlerList {
         }
     }
 
+    /// Returns a slice containing the handler info pointers in proper order.
     pub(crate) fn slice(&self) -> &[HandlerInfoPtr] {
         &self.entries
     }
@@ -747,7 +782,7 @@ impl<H: Handler> Handler for LowPriority<H> {
 
 /// A callback function that listens for events.
 ///
-/// handlers are added to a world using the [`World::add_handler`] method.
+/// Handlers are added to a world using the [`World::add_handler`] method.
 ///
 /// For more information about handlers, see the [tutorial](crate::tutorial).
 pub trait Handler: 'static {
@@ -877,7 +912,7 @@ impl HandlerConfig {
         };
     }
 
-    /// Sets the [`Access`]
+    /// Sets the [`Access`].
     pub fn set_received_event_access(&mut self, access: Access) {
         self.received_event_access = match self.received_event_access {
             MaybeInvalidAccess::Ok(old_access) => access

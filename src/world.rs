@@ -316,6 +316,14 @@ impl World {
         Some(unsafe { &mut *col.data().as_ptr().cast::<C>().add(loc.row.0 as usize) })
     }
 
+    /// Adds a new handler to the world, returns its [`HandlerId`], and sends
+    /// the [`AddHandler`] event to signal its creation.
+    ///
+    /// If the handler already exists (as determined by [`Handler::type_id`])
+    /// then the `HandlerId` of the existing handler is returned and no
+    /// event is sent.
+    ///
+    /// Returns an error if the configuration of the handler is invalid.
     pub(crate) fn try_add_handler<H: IntoHandler<M>, M>(
         &mut self,
         handler: H,
@@ -1205,7 +1213,7 @@ impl Default for World {
     }
 }
 
-/// Reference to a [`World`] where all methods take `&self` and aliasing rules
+/// Reference to a [`World`] where all methods take `self` and aliasing rules
 /// are not checked. It is the caller's responsibility to ensure that Rust's
 /// aliasing rules are not violated.
 #[derive(Clone, Copy, Debug)]
@@ -1323,7 +1331,7 @@ impl<'a> UnsafeWorldCell<'a> {
     ///
     /// # Safety
     ///
-    /// Must have permission the access the entire world immutably.
+    /// Must have permission the access the entire world mutably.
     pub unsafe fn world_mut(self) -> &'a mut World {
         &mut *self.world.as_ptr()
     }

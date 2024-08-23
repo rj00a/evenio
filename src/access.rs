@@ -10,7 +10,7 @@ use crate::component::ComponentIdx;
 use crate::map::IndexSet;
 
 /// Describes how a particular piece of data is accessed. Used to prevent
-/// aliased mutabliity.
+/// aliased mutability.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
 pub enum Access {
     /// Cannot read or write to the data.
@@ -51,8 +51,8 @@ impl Access {
         }
     }
 
-    /// Shorthand for `self.join(other).is_some()`. See [`join`] for more
-    /// information.
+    /// Returns `true` if `self` is compatible with `other`. Shorthand for
+    /// `self.join(other).is_some()`. See [`join`] for more information.
     ///
     /// [`join`]: Self::join
     ///
@@ -276,17 +276,20 @@ impl ComponentAccess {
         res
     }
 
-    pub(crate) fn matches_archetype<F>(&self, mut f: F) -> bool
+    /// Returns `true` if this component access matches an archetype. Depends
+    /// only on which component indices are part of the archetype, which is
+    /// queried via the `archetype_has_component` function.
+    pub(crate) fn matches_archetype<F>(&self, mut archetype_has_component: F) -> bool
     where
         F: FnMut(ComponentIdx) -> bool,
     {
         self.cases.iter().any(|case| {
             case.iter().all(|&(idx, access)| match access {
-                CaseAccess::With => f(idx),
-                CaseAccess::Read => f(idx),
-                CaseAccess::ReadWrite => f(idx),
-                CaseAccess::Not => !f(idx),
-                CaseAccess::Conflict => f(idx),
+                CaseAccess::With => archetype_has_component(idx),
+                CaseAccess::Read => archetype_has_component(idx),
+                CaseAccess::ReadWrite => archetype_has_component(idx),
+                CaseAccess::Not => !archetype_has_component(idx),
+                CaseAccess::Conflict => archetype_has_component(idx),
             })
         })
     }

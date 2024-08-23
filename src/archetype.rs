@@ -46,11 +46,14 @@ use crate::world::UnsafeWorldCell;
 /// ```
 #[derive(Debug)]
 pub struct Archetypes {
+    /// Always contains the empty archetype at index 0.
     archetypes: Slab<Archetype>,
     by_components: HashMap<AliasedBox<[ComponentIdx]>, ArchetypeIdx>,
 }
 
 impl Archetypes {
+    /// Constructs a new `Archetypes` instance, which contains only the empty
+    /// archetype.
     pub(crate) fn new() -> Self {
         let mut map = HashMap::with_hasher(RandomState::new());
         map.insert(vec![].into_boxed_slice().into(), ArchetypeIdx::EMPTY);
@@ -97,17 +100,24 @@ impl Archetypes {
     pub(crate) fn spawn(&mut self, id: EntityId) -> EntityLocation {
         let empty = self.empty_mut();
 
-        let rellocated = unsafe { empty.reserve_one() };
+        // Reserve space for the spawned entity.
+        let reallocated = unsafe { empty.reserve_one() };
 
+        // Add the entity to the empty archetype. This does not involve adding
+        // components, as the empty archetype does not have columns. Only the
+        // spawned entity's id needs to be stored.
         let row = ArchetypeRow(empty.entity_count());
         empty.entity_ids.push(id);
 
-        if empty.entity_count() == 1 || rellocated {
+        // If the archetype was empty or has been reallocated, notify the
+        // listening handlers of this change.
+        if empty.entity_count() == 1 || reallocated {
             for mut ptr in empty.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().refresh_archetype(empty) };
             }
         }
 
+        // Construct the entity's location.
         EntityLocation {
             archetype: ArchetypeIdx::EMPTY,
             row,
@@ -124,6 +134,7 @@ impl Archetypes {
         self.archetypes.len()
     }
 
+    /// Registers an event handler for all archetypes.
     pub(crate) fn register_handler(&mut self, info: &mut HandlerInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
         for (_, arch) in &mut self.archetypes {
@@ -131,9 +142,11 @@ impl Archetypes {
         }
     }
 
+    /// Removes an event handler from all archetypes.
     pub(crate) fn remove_handler(&mut self, info: &HandlerInfo) {
         // TODO: use a `Component -> Vec<Archetype>` index to make this faster?
         for (_, arch) in &mut self.archetypes {
+            // TODO: remove_handler method for Archetype for this?
             arch.refresh_listeners.remove(&info.ptr());
 
             if let EventId::Targeted(id) = info.received_event() {
@@ -144,23 +157,32 @@ impl Archetypes {
         }
     }
 
+    /// Removes a component. This removes all archetypes that have this
+    /// component and calls `removed_entity_callback` on all their entities.
     pub(crate) fn remove_component<F>(
         &mut self,
         info: &mut ComponentInfo,
         components: &mut Components,
-        mut f: F,
+        mut removed_entity_callback: F,
     ) where
         F: FnMut(EntityId),
     {
         let removed_component_id = info.id();
 
+        // Iterate over all archetypes that have the removed component as one of
+        // their columns.
         for arch_idx in info.member_of.drain(..) {
+            // Remove the archetype.
             let mut arch = self.archetypes.remove(arch_idx.0 as usize);
 
+            // Notify all handlers listening for updates affecting the archetype
+            // that it was removed.
             for mut ptr in arch.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().remove_archetype(&arch) };
             }
 
+            // Remove the archetype from the `member_of` lists of its
+            // components.
             for &comp_idx in arch.component_indices() {
                 if comp_idx != removed_component_id.index() {
                     let info = unsafe { components.get_by_index_mut(comp_idx).unwrap_unchecked() };
@@ -168,14 +190,23 @@ impl Archetypes {
                 }
             }
 
+            // FIXME: This line drops the component indices slice. However,
+            //  `Archetype::new` requires that this slice outlives the
+            //  archetype. This conflicts with the archetype still being in
+            //  scope and used for the remainder of this loop body.
+            //  (note referenced below in `traverse_insert` and
+            //  `traverse_remove`)
             // NOTE: Using plain `.remove()` here makes Miri sad.
             self.by_components.remove_entry(arch.component_indices());
 
+            // Call the removed entity callback for each entity id in the
+            // archetype.
             for &entity_id in arch.entity_ids() {
-                f(entity_id);
+                removed_entity_callback(entity_id);
             }
 
-            // Remove all references to the removed archetype.
+            // Remove all references to the removed archetype that the other
+            // archetypes still hold.
 
             for (comp_idx, arch_idx) in mem::take(&mut arch.insert_components) {
                 let other_arch = unsafe {
@@ -204,6 +235,11 @@ impl Archetypes {
     ///
     /// If the archetype with the added component does not exist, then it is
     /// created. Otherwise, the existing archetype is returned.
+    ///
+    /// # Safety
+    ///
+    /// - `src_arch_idx` must be valid
+    /// - `component_idx` must be valid
     pub(crate) unsafe fn traverse_insert(
         &mut self,
         src_arch_idx: ArchetypeIdx,
@@ -215,62 +251,98 @@ impl Archetypes {
 
         let next_arch_idx = self.archetypes.vacant_key();
 
+        // Get a mutable reference to the source archetype by index.
+        // SAFETY: Caller guaranteed that the index is valid.
         let src_arch = unsafe {
             self.archetypes
                 .get_mut(src_arch_idx.0 as usize)
                 .unwrap_unchecked()
         };
 
+        // Look up the archetype with the inserted component. If it exists,
+        // return it, otherwise we probably need to create it.
         match src_arch.insert_components.entry(component_idx) {
             BTreeEntry::Vacant(vacant_insert_components) => {
+                // Binary search for the inserted component's index in the
+                // source archetype's component indices. If the search succeeds,
+                // the source archetype already has the component, so we return
+                // it. If it fails, the `binary_search` function tells us where
+                // to insert the new component index such that the slice remains
+                // sorted.
                 let Err(idx) = src_arch
                     .component_indices
                     .as_ref()
                     .binary_search(&component_idx)
                 else {
-                    // Archetype already has this component.
+                    // Source archetype already has this component.
                     return src_arch_idx;
                 };
 
+                // Clone the source component indices slice and insert the new
+                // component index at the correct position.
                 let mut new_components = Vec::with_capacity(src_arch.component_indices.len() + 1);
                 new_components.extend(src_arch.component_indices.as_ref().iter().copied());
                 new_components.insert(idx, component_idx);
 
+                // Look up if we have an archetype for the new component
+                // indices. If we do, insert it into the source archetype's
+                // `insert_components` map and return it. If we don't, create
+                // it.
                 match self
                     .by_components
                     .entry(new_components.into_boxed_slice().into())
                 {
                     Entry::Vacant(vacant_by_components) => {
+                        // Check for overflow of archetype indices.
                         assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
+                        // Construct the new archetype.
+                        // SAFETY:
+                        // - Component indices slice is in sorted order, as we created it by cloning
+                        //   a sorted slice and inserting a component index in the correct position
+                        //   that maintains the sorted order (see above).
+                        // - Similar rationale for validity of the indices: the source component
+                        //   indices slice was valid, and we only added an index that the caller of
+                        //   this function guaranteed to be valid.
+                        // - We only drop the component indices slice after dropping the archetype
+                        //   (or so we should; see FIXME note in `remove_component` above).
                         let mut new_arch = Archetype::new(
                             arch_id,
                             vacant_by_components.key().as_ref().into(),
                             components,
                         );
 
+                        // Insert a backlink to the source archetype.
                         new_arch
                             .remove_components
                             .insert(component_idx, src_arch_idx);
 
+                        // Register all event handlers for the new archetype.
                         for info in handlers.iter_mut() {
                             new_arch.register_handler(info);
                         }
 
+                        // Insert the archetype into the vacant entries and
+                        // our archetype list.
                         vacant_by_components.insert(arch_id);
-
                         vacant_insert_components.insert(arch_id);
-
                         self.archetypes.insert(new_arch);
 
                         arch_id
                     }
-                    Entry::Occupied(o) => *vacant_insert_components.insert(*o.get()),
+                    Entry::Occupied(entry) => {
+                        // The archetype already exists, insert it into the
+                        // map and return it.
+                        *vacant_insert_components.insert(*entry.get())
+                    }
                 }
             }
-            BTreeEntry::Occupied(o) => *o.get(),
+            BTreeEntry::Occupied(entry) => {
+                // The archetype already exists, return it.
+                *entry.get()
+            }
         }
     }
 
@@ -279,6 +351,11 @@ impl Archetypes {
     ///
     /// If the archetype with the removed component does not exist, then it is
     /// created. Otherwise, the existing archetype is returned.
+    ///
+    /// # Safety
+    ///
+    /// - `src_arch_idx` must be valid
+    /// - `component_idx` must be valid
     pub(crate) unsafe fn traverse_remove(
         &mut self,
         src_arch_idx: ArchetypeIdx,
@@ -288,14 +365,29 @@ impl Archetypes {
     ) -> ArchetypeIdx {
         let next_arch_idx = self.archetypes.vacant_key();
 
+        // Get a mutable reference to the source archetype by index.
+        // SAFETY: Caller guaranteed that the index is valid.
         let src_arch = unsafe {
             self.archetypes
                 .get_mut(src_arch_idx.0 as usize)
                 .unwrap_unchecked()
         };
 
+        // Look up the archetype without the removed component. If it exists,
+        // return it, otherwise we probably need to create it.
         match src_arch.remove_components.entry(component_idx) {
             BTreeEntry::Vacant(vacant_remove_components) => {
+                // Binary search for the removed component's index in the
+                // source archetype's component indices. If the search fails,
+                // the source archetype already lacks the component, so we
+                // return it.
+                // NOTE: If the binary search succeeds, we know exactly the
+                // position of the component index to remove. This leads to no
+                // performance opportunities with the iterator approach to
+                // cloning the indices slice that is used below, but may be
+                // helpful when switching to a direct memory-level copy of the
+                // slice into a Vec, from which the respective component index
+                // could then be removed in a targeted way.
                 if src_arch
                     .component_indices
                     .as_ref()
@@ -306,6 +398,8 @@ impl Archetypes {
                     return src_arch_idx;
                 }
 
+                // Clone the source component indices slice while filtering out
+                // the removed component index.
                 let new_components: Box<[ComponentIdx]> = src_arch
                     .component_indices
                     .as_ref()
@@ -314,43 +408,69 @@ impl Archetypes {
                     .filter(|&c| c != component_idx)
                     .collect();
 
+                // Look up if we have an archetype for the new component
+                // indices. If we do, insert it into the source archetype's
+                // `remove_components` map and return it. If we don't, create
+                // it.
                 match self.by_components.entry(new_components.into()) {
                     Entry::Vacant(vacant_by_components) => {
+                        // Check for overflow of archetype indices.
                         assert!(next_arch_idx < u32::MAX as usize, "too many archetypes");
 
                         let arch_id = ArchetypeIdx(next_arch_idx as u32);
 
+                        // Construct the new archetype.
+                        // SAFETY:
+                        // - Component indices slice is in sorted order, as we created it by cloning
+                        //   a sorted slice and filtering out a single component index.
+                        // - Similar rationale for validity of the indices: the source component
+                        //   indices slice was valid, and we then only removed an index.
+                        // - We only drop the component indices slice after dropping the archetype
+                        //   (or so we should; see FIXME note in `remove_component` above).
                         let mut new_arch = Archetype::new(
                             arch_id,
                             vacant_by_components.key().as_ref().into(),
                             components,
                         );
 
+                        // Insert a backlink to the source archetype.
                         new_arch
                             .insert_components
                             .insert(component_idx, src_arch_idx);
 
+                        // Register all event handlers for the new archetype.
                         for info in handlers.iter_mut() {
                             new_arch.register_handler(info);
                         }
 
+                        // Insert the archetype into the vacant entries and
+                        // our archetype list.
                         vacant_by_components.insert(arch_id);
-
                         vacant_remove_components.insert(arch_id);
-
                         self.archetypes.insert(new_arch);
 
                         arch_id
                     }
-                    Entry::Occupied(o) => *vacant_remove_components.insert(*o.get()),
+                    Entry::Occupied(entry) => {
+                        // The archetype already exists, insert it into the
+                        // map and return it.
+                        *vacant_remove_components.insert(*entry.get())
+                    }
                 }
             }
-            BTreeEntry::Occupied(o) => *o.get(),
+            BTreeEntry::Occupied(entry) => {
+                // The archetype already exists, return it.
+                *entry.get()
+            }
         }
     }
 
     /// Move an entity from one archetype to another. Returns the entity's row
     /// in the new archetype.
+    // TODO: Document safety requirements
+    // NOTE: As of now, this function is never called with more than one new
+    // component. Still, its implementation seems to already support bulk
+    // insertion / removal of components.
     pub(crate) unsafe fn move_entity(
         &mut self,
         src: EntityLocation,
@@ -360,6 +480,8 @@ impl Archetypes {
     ) -> ArchetypeRow {
         let mut new_components = new_components.into_iter();
 
+        // If the source and destination archetypes are equal, the entity does
+        // not need to be moved. Instead, we reassign the components.
         if src.archetype == dst {
             let arch = self
                 .archetypes
@@ -369,6 +491,8 @@ impl Archetypes {
             for (comp_idx, comp_ptr) in new_components {
                 let col = arch.column_of_mut(comp_idx).unwrap_unchecked();
 
+                // Replace the old component with the new component of the same
+                // type.
                 col.assign(src.row.0 as usize, comp_ptr);
             }
 
@@ -382,31 +506,141 @@ impl Archetypes {
 
         let dst_row = ArchetypeRow(dst_arch.entity_ids.len() as u32);
 
+        // Reserve space for the moved entity in the destination archetype.
         let dst_arch_reallocated = dst_arch.reserve_one();
 
+        // Update components of each component index:
+        // - If the source has a column for the index, but the destination does not,
+        //   remove the moved entity's component from that column.
+        // - If both the source and the destination have a column for the index,
+        //   transfer the moved entity's component from the source column to the
+        //   destination column.
+        // - If the source does not have a column for the index, but the destination
+        //   does, insert a new component from the `new_components` iterator into the
+        //   destination column.
+        //
+        // The algorithm used to achieve this for every relevant component index
+        // uses a loop, in which two indices, `src_idx` and `dst_idx` are
+        // gradually incremented. These are indices into simultaneously the
+        // `component_indices` and `columns` slices of the source and
+        // destination archetypes, respectively. To differentiate them from the
+        // actual component indices, we will call them column indices.
+        //
+        // It might be best to explain the algorithm with an exemplary
+        // walkthrough:
+        // The world contains three components: A, B and C, with component
+        // indices 0, 1 and 2. We are moving an entity from the archetype 'AB'
+        // (with columns for A and B components) to the archetype 'BC'. We need
+        // to (1) remove A, (2) move B and (3) insert C.
+        //
+        // But first, this is what our archetypes look like:
+        //
+        // src_arch: 'AB'
+        // | src_idx | src_comp_idx |
+        // |    0    |     0 (A)    |
+        // |    1    |     1 (B)    |
+        //
+        // dst_arch: 'BC'
+        // | dst_idx | dst_comp_idx |
+        // |    0    |     1 (B)    |
+        // |    1    |     2 (C)    |
+        //
+        // We start with `src_idx` and `dst_idx` both at zero. The corresponding
+        // component indices are those of A and B (cf. the first rows of the
+        // tables above).
+        //
+        // The `component_indices` slices are guaranteed to be sorted and free
+        // from duplicate elements, which has useful implications for us. For
+        // some column index `i` and component index `x` at `i`, we know for
+        // every component index `y` appearing after it in the slice that `y` is
+        // greater than `x`. This means that if we have another component index
+        // `z` which we know to be less than `x`, we know that it will not
+        // appear at any point in the slice at or after `x`.
+        //
+        // We can use this property here. We can see that the component index of
+        // A is less than that of B. This means that the component index of A
+        // does not appear anywhere in the component indices of the destination
+        // archetype, so we have to remove component A.
+        //
+        // Whew, goal number 1 achieved!
+        //
+        // With this, we have finished processing `src_idx` zero, but not
+        // `dst_idx` zero - we have neither transferred nor inserted a component
+        // into the B-column of the destination archetype. Therefore, we will
+        // increment `src_idx`, but not `dst_idx`.
+        //
+        // In the next iteration of the loop, we have `src_idx` at one and
+        // `dst_idx` at zero, corresponding to the component indices of B and,
+        // well, B (cf. the tables above).
+        //
+        // We have found a pair of matching columns, so we will transfer the
+        // component B from the source over to the destination.
+        //
+        // Goal number 2 done!
+        //
+        // With this transfer operation, we have completed concluded all work we
+        // need to do with `src_idx` one and `dst_idx` zero, so we increment
+        // both and move to the next iteration.
+        //
+        // We now have `src_idx` at two and `dst_idx` at one. This means that
+        // `src_idx` is out of bounds, so we have no source column to remove or
+        // transfer components from. The only other option is to insert a new
+        // component, C, into the remaining column of the destination archetype.
+        //
+        // With that, we have finally achieved all of our goals.
+        //
+        // Since `src_idx` is already out of bounds, there is no use in
+        // incrementing it; we are, however, finished with processing `dst_idx`
+        // one, so we increment that. This leaves us with both column indices
+        // out of bounds in the next iteration, so we break the loop.
+
+        // Both column indices start at zero.
         let mut src_idx = 0;
         let mut dst_idx = 0;
 
         loop {
+            // Check if the column indices are in bounds.
             let src_in_bounds = src_idx < src_arch.component_indices.len();
             let dst_in_bounds = dst_idx < dst_arch.component_indices.len();
 
             match (src_in_bounds, dst_in_bounds) {
                 (true, true) => {
-                    let src_comp_idx = *src_arch.component_indices.as_ref().get_unchecked(src_idx);
+                    // Both column indices are in bounds. Compare the
+                    // corresponding component indices to find out if they
+                    // match, if there is a source column with no matching
+                    // destination column or if there is a destination column
+                    // with no matching source column.
 
+                    let src_comp_idx = *src_arch.component_indices.as_ref().get_unchecked(src_idx);
                     let dst_comp_idx = *dst_arch.component_indices.as_ref().get_unchecked(dst_idx);
 
                     match src_comp_idx.cmp(&dst_comp_idx) {
                         Ordering::Less => {
+                            // The source component index is less than the
+                            // destination component index, so we will not
+                            // encounter a matching destination column to
+                            // transfer a component to. Remove the entity's
+                            // component from the source column.
+
+                            // Remove the old component from the source column.
                             let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
                             src_col.swap_remove(src_arch.entity_ids.len(), src.row.0 as usize);
+
+                            // Increment the source column index only, as we
+                            // haven't handled the destination column at the
+                            // current destination column index yet.
                             src_idx += 1;
                         }
                         Ordering::Equal => {
+                            // The source archetype has a component index that
+                            // the destination archetype also has. This means we
+                            // can transfer the old component at that component
+                            // index from the source to the destination.
+
                             let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
                             let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
 
+                            // Transfer the component.
                             src_col.transfer_elem(
                                 src_arch.entity_ids.len(),
                                 dst_col,
@@ -414,10 +648,20 @@ impl Archetypes {
                                 src.row.0 as usize,
                             );
 
+                            // Increment both column indices, as the transfer
+                            // operation handled both the source and the
+                            // destination columns at their respective current
+                            // indices.
                             src_idx += 1;
                             dst_idx += 1;
                         }
                         Ordering::Greater => {
+                            // The destination component index is less than the
+                            // source component index, so we will not encounter
+                            // a matching source column to transfer a component
+                            // from. Add a new component to the destination
+                            // column from the `new_components` iterator.
+
                             let (component_idx, component_ptr) =
                                 new_components.next().unwrap_unchecked();
 
@@ -433,22 +677,41 @@ impl Archetypes {
                                 .as_ptr()
                                 .add(dst_col.component_layout.size() * dst_arch.entity_ids.len());
 
+                            // Insert the new component into the destination
+                            // column.
                             ptr::copy_nonoverlapping(
                                 component_ptr,
                                 dst_ptr,
                                 dst_col.component_layout.size(),
                             );
 
+                            // Increment the destination column index only, as
+                            // we haven't handled the source column at the
+                            // current source column index yet.
                             dst_idx += 1;
                         }
                     }
                 }
                 (true, false) => {
+                    // The destination column index is out of bounds, so we will
+                    // not encounter a destination column to transfer a
+                    // component to. Remove the entity's component from the
+                    // source column.
+
+                    // Remove the old component from the source column.
                     let src_col = &mut *src_arch.columns.as_ptr().add(src_idx);
                     src_col.swap_remove(src_arch.entity_ids.len(), src.row.0 as usize);
+
+                    // Increment the source column index only, as the
+                    // destination column index is already out of bounds.
                     src_idx += 1;
                 }
                 (false, true) => {
+                    // The source column index is out of bounds, so we will not
+                    // encounter a source column to transfer a component from.
+                    // Add a new component to the destination column from the
+                    // `new_components` iterator.
+
                     let (component_idx, component_ptr) = new_components.next().unwrap_unchecked();
 
                     let dst_col = &mut *dst_arch.columns.as_ptr().add(dst_idx);
@@ -462,38 +725,53 @@ impl Archetypes {
                         .as_ptr()
                         .add(dst_col.component_layout.size() * dst_arch.entity_ids.len());
 
+                    // Insert the new component into the destination column.
                     ptr::copy_nonoverlapping(
                         component_ptr,
                         dst_ptr,
                         dst_col.component_layout.size(),
                     );
 
+                    // Increment the destination column index only, as the
+                    // source column index is already out of bounds.
                     dst_idx += 1;
                 }
-                (false, false) => break,
+                (false, false) => {
+                    // Both column indices are out of bounds. Break the loop.
+                    break;
+                }
             }
         }
 
         debug_assert!(new_components.next().is_none());
 
+        // Transfer the entity id.
         let entity_id = src_arch.entity_ids.swap_remove(src.row.0 as usize);
         dst_arch.entity_ids.push(entity_id);
 
+        // Update the location of the moved entity.
         *unsafe { entities.get_mut(entity_id).unwrap_unchecked() } = EntityLocation {
             archetype: dst,
             row: dst_row,
         };
 
+        // Update the location of the entity that was moved by the swap remove
+        // operation in the source archetype.
         if let Some(&swapped_entity_id) = src_arch.entity_ids.get(src.row.0 as usize) {
             unsafe { entities.get_mut(swapped_entity_id).unwrap_unchecked() }.row = src.row;
         }
 
+        // If the source archetype no longer has any entities, notify all
+        // handlers listening for updates affecting the archetype of this
+        // change.
         if src_arch.entity_ids.is_empty() {
             for mut ptr in src_arch.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().remove_archetype(src_arch) };
             }
         }
 
+        // If the destination archetype was empty before or has been
+        // reallocated, notify the listening handlers of this change.
         if dst_arch_reallocated || dst_arch.entity_count() == 1 {
             for mut ptr in dst_arch.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().refresh_archetype(dst_arch) };
@@ -503,8 +781,13 @@ impl Archetypes {
         dst_row
     }
 
+    /// Remove an entity from its archetype.
+    ///
+    /// # Safety
+    ///
     /// Entity location must be valid.
     pub(crate) unsafe fn remove_entity(&mut self, loc: EntityLocation, entities: &mut Entities) {
+        // Get a mutable reference to the entity's archetype.
         let arch = unsafe {
             self.archetypes
                 .get_mut(loc.archetype.0 as usize)
@@ -513,25 +796,37 @@ impl Archetypes {
 
         let initial_len = arch.entity_ids.len();
 
+        // Remove the entity's components.
         for col in arch.columns_mut() {
             unsafe { col.swap_remove(initial_len, loc.row.0 as usize) };
         }
 
+        // Eliminate the bounds check in `swap_remove`.
+        // SAFETY: Caller guaranteed that the location is valid.
         unsafe {
             assume_unchecked((loc.row.0 as usize) < arch.entity_ids.len());
         };
 
+        // Remove the entity id from the archetype.
         let id = arch.entity_ids.swap_remove(loc.row.0 as usize);
 
+        // Remove the entity location.
         let removed_loc = unsafe { entities.remove(id).unwrap_unchecked() };
 
         debug_assert_eq!(loc, removed_loc);
 
+        // Update the location of the previously last entity that was moved into
+        // the place of the removed entity by the swap-remove operation, unless
+        // the last entity in the archetype was removed, in which case this is
+        // not necessary.
         if (loc.row.0 as usize) < arch.entity_ids.len() {
             let displaced = *unsafe { arch.entity_ids.get_unchecked(loc.row.0 as usize) };
             unsafe { entities.get_mut(displaced).unwrap_unchecked() }.row = loc.row;
         }
 
+        // If the removed entity's archetype no longer has any entities, notify
+        // all handlers listening for updates affecting the archetype of this
+        // change.
         if arch.entity_count() == 0 {
             for mut ptr in arch.refresh_listeners.iter().copied() {
                 unsafe { ptr.as_info_mut().handler_mut().remove_archetype(arch) };
@@ -614,7 +909,7 @@ impl ArchetypeRow {
 
 /// A container for all entities with a particular set of components.
 ///
-/// Each component has a corresponding columnm of contiguous data in
+/// Each component has a corresponding column of contiguous data in
 /// this archetype. Each row in is then a separate entity.
 ///
 /// For instance, an archetype with component set `{A, B, C}` might look like:
@@ -646,6 +941,7 @@ pub struct Archetype {
 }
 
 impl Archetype {
+    /// Constructs an empty archetype.
     fn empty() -> Self {
         Self {
             index: ArchetypeIdx::EMPTY,
@@ -659,6 +955,8 @@ impl Archetype {
         }
     }
 
+    /// Constructs a new archetype.
+    ///
     /// # Safety
     ///
     /// - Component indices slice must be in sorted order.
@@ -669,14 +967,19 @@ impl Archetype {
         component_indices: NonNull<[ComponentIdx]>,
         components: &mut Components,
     ) -> Self {
+        // Create a column for each component and register this archetype in the
+        // component infos.
         let columns: Box<[Column]> = component_indices
             .as_ref()
             .iter()
             .map(|&idx| {
+                // SAFETY: Caller guaranteed the component indices are valid.
                 let info = unsafe { components.get_by_index_mut(idx).unwrap_unchecked() };
 
+                // Register this archetype.
                 info.member_of.insert(arch_idx);
 
+                // Construct the column.
                 Column {
                     component_layout: info.layout(),
                     data: NonNull::dangling(),
@@ -700,11 +1003,16 @@ impl Archetype {
         }
     }
 
+    /// Registers an event handler for this archetype.
     fn register_handler(&mut self, info: &mut HandlerInfo) {
+        // TODO: Self::has_component method
+
+        // Tell the handler about this archetype and future updates to it.
         if info
             .archetype_filter()
             .matches_archetype(|idx| self.column_of(idx).is_some())
         {
+            // Don't call `refresh_archetype` if this archetype is empty.
             if self.entity_count() > 0 {
                 info.handler_mut().refresh_archetype(self);
             }
@@ -712,11 +1020,15 @@ impl Archetype {
             self.refresh_listeners.insert(info.ptr());
         }
 
+        // If the handler is targeted, and its component access matches this
+        // archetype, insert it into our handler list for the event index.
         if let (Some(expr), EventId::Targeted(event_id)) = (
             info.targeted_event_component_access(),
             info.received_event(),
         ) {
             if expr.matches_archetype(|idx| self.column_of(idx).is_some()) {
+                // Insert the handler into the existing list if present, or
+                // make a new list and insert the handler into that.
                 if let Some(list) = self.event_listeners.get_mut(event_id.index()) {
                     list.insert(info.ptr(), info.priority());
                 } else {
@@ -729,6 +1041,8 @@ impl Archetype {
         }
     }
 
+    /// Returns the list of targeted event listeners for this archetype and
+    /// event index.
     pub(crate) fn handler_list_for(&self, idx: TargetedEventIdx) -> Option<&HandlerList> {
         self.event_listeners.get(idx)
     }
@@ -788,10 +1102,13 @@ impl Archetype {
     /// Reserve space for at least one additional entity in this archetype. Has
     /// no effect if there is already sufficient capacity. Returns a boolean
     /// indicating if a reallocation occurred.
+    // TODO: Does not actually need to be marked unsafe: does not depend on
+    //  guarantees made by caller.
     unsafe fn reserve_one(&mut self) -> bool {
         let old_cap = self.entity_ids.capacity();
         // Piggyback off the entity ID Vec's len and cap.
         self.entity_ids.reserve(1);
+        // Non-zero because we just reserved space for one element.
         let new_cap = self.entity_ids.capacity();
 
         #[cold]
@@ -804,6 +1121,8 @@ impl Archetype {
             return false;
         }
 
+        /// Scope guard that aborts the process when a panic is triggered while
+        /// it is in scope.
         struct AbortOnPanic;
 
         impl Drop for AbortOnPanic {
@@ -825,6 +1144,7 @@ impl Archetype {
                 continue;
             }
 
+            // Non-zero: checked product of two non-zero values.
             let Some(new_cap_in_bytes) = new_cap.checked_mul(col.component_layout.size()) else {
                 capacity_overflow()
             };
@@ -833,18 +1153,26 @@ impl Archetype {
                 capacity_overflow()
             }
 
+            // SAFETY: Alignment requirements checked when
+            // `col.component_layout` was constructed. Size requirements were
+            // just checked (under the assumption that the size is a multiple of
+            // the alignment).
             let new_cap_layout =
                 Layout::from_size_align_unchecked(new_cap_in_bytes, col.component_layout.align());
 
             let ptr = if old_cap == 0 {
+                // SAFETY: We checked size > 0 above.
                 alloc(new_cap_layout)
             } else {
-                // Previous layout must have been valid.
+                // SAFETY: Previous layout must have been valid.
                 let old_cap_layout = Layout::from_size_align_unchecked(
                     old_cap * col.component_layout.size(),
                     col.component_layout.align(),
                 );
 
+                // SAFETY: `old_cap_layout` is the layout used for the last
+                // allocation, from which `col.data.as_ptr()` was returned.
+                // `new_cap_in_bytes` was checked to be in bounds (see above).
                 realloc(col.data.as_ptr(), old_cap_layout, new_cap_in_bytes)
             };
 
@@ -854,6 +1182,7 @@ impl Archetype {
             }
         }
 
+        // Forget the scope guard to avoid a spurious panic.
         mem::forget(guard);
 
         true
@@ -934,55 +1263,107 @@ pub struct Column {
 
 impl Column {
     /// Returns a pointer to the beginning of the buffer holding the component
-    /// data, or a dangling pointer if the the buffer is empty.
+    /// data, or a dangling pointer if the buffer is empty.
     pub fn data(&self) -> NonNull<u8> {
         self.data
     }
 
+    /// Overwrites the element at `idx` with the data at `elem`, which this
+    /// method takes ownership of.
+    ///
+    /// # Safety
+    ///
+    /// - `idx` must be in bounds
+    /// - `elem` must point to a component of the correct type
+    /// - `elem` must not alias `&mut self`
     unsafe fn assign(&mut self, idx: usize, elem: *const u8) {
+        // Obtain raw pointer to the overwritten element using pointer
+        // arithmetic. SAFETY: Caller guaranteed `idx` is in bounds.
         let ptr = self.data.as_ptr().add(idx * self.component_layout.size());
 
+        // Call drop function on the overwritten element, if it exists.
         if let Some(drop) = self.drop {
             drop(NonNull::new_unchecked(ptr));
         }
 
+        // Copy the passed element into the buffer to overwrite the old element.
         ptr::copy_nonoverlapping(elem, ptr, self.component_layout.size());
     }
 
+    /// Removes the element at `idx` and immediately moves the last element (at
+    /// index `len - 1`) into the empty space.
+    ///
+    /// # Safety
+    ///
+    /// - `idx` must be in bounds
+    /// - `len` must be correct
     unsafe fn swap_remove(&mut self, len: usize, idx: usize) {
         debug_assert!(idx < len, "index out of bounds");
 
+        // Obtain raw pointer to the last element using pointer arithmetic.
+        // SAFETY: Caller guaranteed `len` is correct, meaning `len - 1` is in
+        // bounds.
         let src = self
             .data
             .as_ptr()
             .add(self.component_layout.size() * (len - 1));
 
+        // Obtain raw pointer to the removed element using pointer arithmetic.
+        // SAFETY: Caller guaranteed `idx` is in bounds.
         let dst = self.data.as_ptr().add(self.component_layout.size() * idx);
 
+        // Call drop function on the overwritten element, if it exists.
         if let Some(drop) = self.drop {
             drop(NonNull::new_unchecked(dst));
         }
 
+        // Copy the last element into the buffer to overwrite the removed
+        // element, unless the two elements are equal. This means that the last
+        // element of the column was removed, and nothing more needs to be done.
         if src != dst {
             ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
         }
     }
 
+    /// Moves the last element (at index `len - 1`) to `idx`, without dropping
+    /// the element at `idx`.
+    ///
+    /// # Safety
+    ///
+    /// - `idx` must be in bounds
+    /// - `len` must be correct
     unsafe fn swap_remove_no_drop(&mut self, len: usize, idx: usize) {
         debug_assert!(idx < len, "index out of bounds");
 
+        // Obtain raw pointer to the last element using pointer arithmetic.
+        // SAFETY: Caller guaranteed `len` is correct, meaning `len - 1` is in
+        // bounds.
         let src = self
             .data
             .as_ptr()
             .add(self.component_layout.size() * (len - 1));
 
+        // Obtain raw pointer to the removed element using pointer arithmetic.
+        // SAFETY: Caller guaranteed `idx` is in bounds.
         let dst = self.data.as_ptr().add(self.component_layout.size() * idx);
 
+        // Copy the last element into the buffer to overwrite the removed
+        // element, unless the two elements are equal. This means that the last
+        // element of the column was removed, and nothing more needs to be done.
         if src != dst {
             ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
         }
     }
 
+    /// Moves the element at `src_idx` from `self` to `other`.
+    ///
+    /// # Safety
+    ///
+    /// - `self` and `other` must store components of the same type
+    /// - `self_len` and `other_len` must be correct
+    /// - `src_idx` must be in bounds of `self`
+    /// - `other` must have space allocated for the element to be moved to index
+    ///   `other_len`
     unsafe fn transfer_elem(
         &mut self,
         self_len: usize,
@@ -996,17 +1377,26 @@ impl Column {
         );
         debug_assert!(src_idx < self_len, "index out of bounds");
 
+        // Obtain raw pointer to the moved element using pointer arithmetic.
+        // SAFETY: Caller guaranteed `src_idx` is in bounds.
         let src = self
             .data
             .as_ptr()
             .add(src_idx * self.component_layout.size());
 
+        // Obtain raw pointer to the move destination using pointer arithmetic.
+        // SAFETY: Caller guaranteed `other_len` is part of `other`'s
+        // allocation.
         let dst = other
             .data
             .as_ptr()
             .add(other_len * other.component_layout.size());
 
+        // Copy the element.
         ptr::copy_nonoverlapping(src, dst, self.component_layout.size());
+
+        // Remove the moved element from our buffer without dropping it, because
+        // it is now owned by `other`.
         self.swap_remove_no_drop(self_len, src_idx);
     }
 }
@@ -1060,5 +1450,32 @@ mod tests {
 
         let e2 = world.spawn();
         world.insert(e2, Zst);
+    }
+
+    #[test]
+    fn move_entity() {
+        #[derive(Component)]
+        struct A;
+
+        #[derive(Component)]
+        struct B;
+
+        #[derive(Component)]
+        struct C;
+
+        let mut world = World::new();
+
+        let a = world.spawn();
+        world.insert(a, A);
+
+        let b = world.spawn();
+        world.insert(b, B);
+
+        let ab = world.spawn();
+        world.insert(ab, A);
+        world.insert(ab, B);
+        world.insert(ab, C);
+
+        world.remove::<B>(ab);
     }
 }

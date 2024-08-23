@@ -19,11 +19,14 @@ use crate::world::{UnsafeWorldCell, World};
 /// Internal state for a [`Fetcher`].
 #[doc(hidden)]
 pub struct FetcherState<Q: Query> {
+    /// Stores the query's per-archetype state.
     map: SparseMap<ArchetypeIdx, Q::ArchState>,
+    /// Stores the query's overall state.
     state: Q::State,
 }
 
 impl<Q: Query> FetcherState<Q> {
+    /// Constructs a new fetcher state from the given query state.
     pub(crate) fn new(state: Q::State) -> Self {
         Self {
             map: SparseMap::new(),
@@ -31,6 +34,8 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    /// Initializes the fetcher state with a world and handler config. This
+    /// also initializes the query.
     pub(crate) fn init(world: &mut World, config: &mut HandlerConfig) -> Result<Self, InitError> {
         let (ca, state) = Q::init(world, config)?;
 
@@ -39,6 +44,14 @@ impl<Q: Query> FetcherState<Q> {
         Ok(FetcherState::new(state))
     }
 
+    /// Execute the query for an entity. Returns the query's result or a
+    /// [`GetError`] if there is no entity with the given id or the query does
+    /// not match the entity's archetype.
+    ///
+    /// # Safety
+    ///
+    /// - The location of the passed entity must be valid.
+    /// - Must have permission to access the components that the query accesses.
     #[inline]
     pub(crate) unsafe fn get_unchecked(
         &self,
@@ -50,6 +63,7 @@ impl<Q: Query> FetcherState<Q> {
         };
 
         // Eliminate a branch in `SparseMap::get`.
+        // SAFETY: Caller guarantees the location is valid.
         assume_unchecked(loc.archetype != ArchetypeIdx::NULL);
 
         let Some(state) = self.map.get(loc.archetype) else {
@@ -59,6 +73,14 @@ impl<Q: Query> FetcherState<Q> {
         Ok(Q::get(state, loc.row))
     }
 
+    /// Execute the query for `N` entities at once. Returns the queries' results
+    /// or a [`GetManyMutError`] if any entity id is invalid or if there is any
+    /// entity whose archetype is not matched by the query.
+    ///
+    /// # Safety
+    ///
+    /// - The locations of the passed entities must be valid.
+    /// - Must have permission to access the components that the query accesses.
     #[inline]
     pub(crate) unsafe fn get_many_mut<const N: usize>(
         &mut self,
@@ -74,29 +96,46 @@ impl<Q: Query> FetcherState<Q> {
             }
         }
 
+        // Create an uninitialized array for the query results.
+        // TODO: optimize array creation like so:
+        //  `[const { MaybeUninit::<Q::This<'_>>::uninit() }; N]`
         let mut res: [MaybeUninit<Q::This<'_>>; N] = [(); N].map(|()| MaybeUninit::uninit());
 
         for i in 0..N {
+            // Execute the query for a single entity.
             match self.get_unchecked(entities, array[i]) {
-                Ok(item) => res[i] = MaybeUninit::new(item),
+                Ok(item) => {
+                    // Move the query result into the array.
+                    res[i] = MaybeUninit::new(item)
+                }
                 Err(e) => {
+                    // Drop all already collected query results.
                     if mem::needs_drop::<Q::This<'_>>() {
                         for item in res.iter_mut().take(i) {
                             item.assume_init_drop();
                         }
                     }
 
+                    // Propagate the error to the caller.
                     return Err(e.into());
                 }
             }
         }
 
+        // Return the collected results.
+        // SAFETY: Every element in the array has been initialized above.
         Ok(mem::transmute_copy::<
             [MaybeUninit<Q::This<'_>>; N],
             [Q::This<'_>; N],
         >(&res))
     }
 
+    /// Executes the query for an entity using its location.
+    ///
+    /// # Safety
+    ///
+    /// - The entity location must be valid.
+    /// - Must have permission to access the components that the query accesses.
     #[inline]
     pub(crate) unsafe fn get_by_location_mut(&mut self, loc: EntityLocation) -> Q::This<'_> {
         // SAFETY: Caller ensures location is valid.
@@ -104,6 +143,12 @@ impl<Q: Query> FetcherState<Q> {
         Q::get(state, loc.row)
     }
 
+    /// Returns an iterator over the results of this query for each entity in an
+    /// archetype that the query matches.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the components that the query accesses.
     #[inline]
     pub(crate) unsafe fn iter<'a>(&'a self, archetypes: &'a Archetypes) -> Iter<'a, Q>
     where
@@ -112,11 +157,23 @@ impl<Q: Query> FetcherState<Q> {
         self.iter_unchecked(archetypes)
     }
 
+    /// Returns an iterator over the results of this query for each entity in an
+    /// archetype that the query matches.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the components that the query accesses.
     #[inline]
     pub(crate) unsafe fn iter_mut<'a>(&'a mut self, archetypes: &'a Archetypes) -> Iter<'a, Q> {
         self.iter_unchecked(archetypes)
     }
 
+    /// Returns an iterator over the results of this query for each entity in an
+    /// archetype that the query matches.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the components that the query accesses.
     unsafe fn iter_unchecked<'a>(&'a self, archetypes: &'a Archetypes) -> Iter<'a, Q> {
         let indices = self.map.keys();
         let states = self.map.values();
@@ -146,6 +203,12 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    /// Returns a parallel iterator over the results of this query for each
+    /// entity in an archetype that the query matches.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the components that the query accesses.
     #[cfg(feature = "rayon")]
     pub(crate) unsafe fn par_iter<'a>(&'a self, archetypes: &'a Archetypes) -> ParIter<'a, Q>
     where
@@ -158,6 +221,12 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    /// Returns a parallel iterator over the results of this query for each
+    /// entity in an archetype that the query matches.
+    ///
+    /// # Safety
+    ///
+    /// Must have permission to access the components that the query accesses.
     #[cfg(feature = "rayon")]
     pub(crate) unsafe fn par_iter_mut<'a>(
         &'a mut self,
@@ -170,6 +239,7 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    /// Refreshes the query's archetype state for the given archetype.
     pub(crate) fn refresh_archetype(&mut self, arch: &Archetype) {
         debug_assert!(
             arch.entity_count() != 0,
@@ -181,6 +251,7 @@ impl<Q: Query> FetcherState<Q> {
         }
     }
 
+    /// Removes the query's archetype state for the given archetype.
     pub(crate) fn remove_archetype(&mut self, arch: &Archetype) {
         self.map.remove(arch.index());
     }
@@ -648,11 +719,15 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
+        // If we reached the end of the current archetype, move on to the next
+        // or return `None`.
         if self.row.0 == self.len {
             if self.state == self.state_last {
+                // There are no more archetypes to iterate through.
                 return None;
             }
 
+            // Move on to the next archetype.
             self.state = unsafe { NonNull::new_unchecked(self.state.as_ptr().add(1)) };
             self.index = unsafe { NonNull::new_unchecked(self.index.as_ptr().add(1)) };
 
@@ -666,9 +741,11 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
             unsafe { assume_unchecked(self.len > 0) };
         }
 
+        // Execute the query for the current entity.
         let state = unsafe { &*self.state.as_ptr().cast_const() };
         let item = unsafe { Q::get(state, self.row) };
 
+        // Move on to the next row (entity) in the archetype.
         self.row.0 += 1;
 
         Some(item)
@@ -682,21 +759,26 @@ impl<'a, Q: Query> Iterator for Iter<'a, Q> {
 
 impl<Q: Query> ExactSizeIterator for Iter<'_, Q> {
     fn len(&self) -> usize {
+        // The number of rows in the current archetype which we did not iterate
+        // over yet.
         let mut remaining = self.len - self.row.0;
 
         let mut index = self.index.as_ptr();
 
+        // The index of the last archetype we will iterate through.
         let index_last = unsafe {
             // TODO: use `.sub_ptr` when stabilized.
             index.add(self.state_last.as_ptr().offset_from(self.state.as_ptr()) as usize)
         };
 
+        // Add the number of rows of each remaining archetype to `remaining`.
         while index != index_last {
             index = unsafe { index.add(1) };
 
             remaining += unsafe { self.archetypes.get(*index).unwrap_unchecked() }.entity_count();
         }
 
+        // Return the total.
         remaining as usize
     }
 }
